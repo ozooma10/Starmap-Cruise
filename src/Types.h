@@ -7,8 +7,10 @@ namespace CFS
 {
     enum class BodyKind : std::uint8_t
     {
+        kOther = 0,
         kPlanet = 2,
         kMoon = 3,
+        kStation = 4,
     };
 
     struct GalaxyIdentity
@@ -24,6 +26,8 @@ namespace CFS
     {
         BodyKind kind{ BodyKind::kPlanet };
         std::uint32_t formID{ 0 };
+        std::uint32_t mapFormID{ 0 };
+        std::uint32_t mapType{ 0 };
         GalaxyIdentity galaxy;
         std::string localizedName;
         std::uint32_t menuGeneration{ 0 };

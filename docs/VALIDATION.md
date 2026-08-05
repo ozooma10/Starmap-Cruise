@@ -72,7 +72,13 @@ movie's public user-event method from the post-advance Scaleform pump instead.
 - [ ] Confirmed arrival clears the mark
 - [ ] Landing/docking/system change clears the mark
 - [x] Canceling the map changes nothing
-- [ ] Galaxy/surface/inspect, another system, POI/station, and on-foot maps stay vanilla
+- [ ] Galaxy/surface/inspect, another system, and on-foot maps stay vanilla
+- [ ] The Eye marker CELL `0001285A` resolves to station reference `00012894`,
+  receives native ship-target assignment, and reports `bIsCruiseTargetLock` on
+  that reference
+- [ ] A generic current-system non-planet marker with exactly one same-ID cockpit
+  target row dispatches and locks; an absent or ambiguous marker remains disabled
+  without consuming input or reporting a false lock
 - [ ] HUD movie rebuild, focus loss, load, and repeated map cycles are safe
 - [ ] Disabled eligibility reasons render and never consume input
 - [ ] Fixed cockpit target status renders independently of positional bearing
@@ -335,3 +341,44 @@ relaunched-game visual and input check:
 - [ ] Exit Cruise, immediately open the system map during its cooldown, and
   confirm only the tap action appears. Wait for availability to return and
   confirm the stacked `HOLD TO CRUISE` action appears and can engage normally.
+
+## 2026-08-05 station and non-planet destination support
+
+The first runtime attempt disproved the assumption that a station's Starmap ID
+is already present in the cockpit target feed. The Eye is exposed by the map as
+CELL `0001285A`, while its persistent ship reference is `00012894`:
+
+- [x] Preserved the exact-one `bIsInHighlightRadius` discriminator and nonzero-ID
+  requirement for every system-view destination.
+- [x] Left the planet/moon path unchanged: exact dossier id/type agreement, live
+  PNDT, parsed GNAM, and captured-current-system equality remain required.
+- [x] Static 1.16.244 plugin inspection established these map-cell to persistent
+  reference mappings: The Eye `0001285A -> 00012894`, Nova Galactic Staryard
+  `00219520 -> 00216F51`, and Deimos Staryard `00219DFF -> 003120D6`.
+- [x] Station ship bases are discovered across the active full/medium/light load
+  order by the vanilla `IsStarstation` keyword (`003402A3`). Only persistent CELL
+  children are indexed; deleted overrides and ambiguous results fail closed.
+- [x] A direct dynamic marker is accepted only when it is a live reference whose
+  live base is in that station-base set.
+- [x] A non-station marker remains eligible when its map ID matches exactly one
+  current cockpit target-feed row; that row supplies the course-addressable ID
+  without native station-target reassignment.
+- [x] Destination values keep the map ID/type separate from the resolved target
+  ID used by the HUD and course-lock readback.
+- [x] On map close, station selections call the byte-verified 1.16.244 native ship
+  target setter (Address Library ID `97892`) and require readback through the
+  current-target global (ID `883585`) before Cruise input or course dispatch.
+- [x] `Reticle_OnCruiseLockCourse` still dispatches only the resolved target ID;
+  `AutopilotLocked` still requires the low feed to report
+  `bIsCruiseTargetLock` on that same target ID.
+- [x] `xmake -j1 -y` passed with inherited CommonLibSF warnings only. Built and
+  deployed MO2 DLL SHA-256 match:
+  `CFAB64184FEDBBC1FFF4E75B1E0541F26FF9CC1E912AC27011FD71B4252CF9E5`.
+- [ ] Relaunch Starfield, select The Eye, and verify an enabled action plus log
+  evidence for map `0001285A`, target `00012894`, native assignment, dispatch,
+  and matching `bIsCruiseTargetLock` readback.
+- [ ] Repeat with Nova Galactic and Deimos Staryards.
+- [ ] Verify a generic non-planet marker with one exact current HUD row dispatches
+  and receives matching lock readback.
+- [ ] Confirm missing and ambiguous non-station markers remain disabled as
+  `TARGET IS NOT AVAILABLE TO CRUISE` or `TARGET IS AMBIGUOUS`.

@@ -9,10 +9,16 @@ GalaxyStarMapMenu movie
   StarMapMenuMarkersData ------------- unique bIsInHighlightRadius marker row
   StarmapSystemBodyInfoProvider ------ dossier PNDT candidates while browsing
                     |
-                    | exact marker/dossier id+type agreement
-                    | + live PNDT + parsed GNAM + current system
+                    | planets/moons: marker/dossier id+type agreement
+                    |   + live PNDT + parsed GNAM + current system
+                    | stations: marker live reference or CELL
+                    |   + active-load-order IsStarstation base
+                    |   + exactly one persistent live reference
+                    | other non-planets: exact current HUD target ID
                     v
-              BodyDestination value
+              BodyDestination value (map id/type + target id)
+                    |
+                    +---- station map close: native ship-target assignment
                     |
                     v
 SpaceshipHudMenu movie
@@ -27,10 +33,11 @@ SpaceshipHudMenu movie
                     +---- Reticle_OnCruiseLockCourse {uBodyID}
 ```
 
-The GNAM index is parsed in memory on a background thread from the full, medium,
-and light tiers of the game's active compiled-file collection. Tier-specific
-runtime form ids are validated as PNDT before entries are retained. No cache is
-read or written.
+The active load order is parsed in memory on a background thread. Planet records
+retain their PNDT/GNAM identity. Station bases are identified by the vanilla
+`IsStarstation` keyword; CELL persistent-child references are then indexed by
+cell and validated again as live references when selected. Full, medium, and
+light master mappings are respected. No cache is read or written.
 
 ## State machine
 
@@ -41,17 +48,23 @@ Idle -> MapSelection -> Marked -> AwaitingCruise -> AutopilotLocked
           +-> vanilla     | no Cruise    +-----------------+ interruption
 ```
 
-- `MapSelection` begins only after the exact selection gate passes: one
-  highlight-radius planet/moon marker, matching dossier id/type, live PNDT,
-  parsed GNAM, captured current system, active flight, and current session/movie
-  generation.
+- `MapSelection` begins only after the selection gate passes: one nonzero
+  highlight-radius marker, captured current system, active flight, and current
+  session/movie generation. Planet/moon markers additionally require matching
+  dossier id/type, a live PNDT, and parsed GNAM in that system. A station marker
+  must be a live station reference or a CELL resolving to exactly one persistent
+  live reference whose base carries `IsStarstation`. Another non-planet marker
+  must match exactly one row in the current cockpit target feed.
+- For a resolved station CELL/reference, map close assigns the reference as the
+  native ship target before any Cruise input or course event is issued. Exact
+  current-feed non-planets already have a course-addressable target ID.
 - `Marked` owns the process-local destination but not autopilot.
 - A quick release leaves the destination
   `Marked`. Completing the Starmap button's fill latches a stock HUD Cruise down
   edge after map close, independent of physical release. The HUD callback sends
   the up edge when Cruise becomes active, with a four-second safety release if
   activation never arrives. A later vanilla inactive-to-active Cruise transition moves
-  the destination to `AwaitingCruise` and queues its PNDT id.
+  the destination to `AwaitingCruise` and queues its target id.
 - If Cruise was already active when the map opened, the stacked control is
   replaced by a stock tap-only `BasicButton`. Its accepted tap queues the course
   request immediately; no hold action is exposed or accepted.
@@ -64,7 +77,7 @@ Idle -> MapSelection -> Marked -> AwaitingCruise -> AutopilotLocked
 - `AwaitingCruise` means a HUD course request is queued or awaiting low-feed
   confirmation.
 - `AutopilotLocked` is entered only when the low feed reports
-  `bIsCruiseTargetLock` on the same PNDT id.
+  `bIsCruiseTargetLock` on the same target id.
 
 The mark survives manual Cruise exits and interruptions. A lost Cruise lock
 starts a two-second arrival audit; the mark clears only when the prior lock and
@@ -96,7 +109,7 @@ clears it.
   the button keybox resolves the player's live binding; only the current one is
   enabled and visible. Native callback handling also normalizes any stale hold
   signal to tap while the tap-only variant owns the session.
-  The control is interactive only while the exact selection gate passes;
+  The control is interactive only while the selection gate passes;
   otherwise its disabled label exposes the current rejection reason. The binding
   is read from the version-gated engine `ControlMap` once at startup. This keeps
   the validated mapping-array scan off the map-open frame; an in-session control

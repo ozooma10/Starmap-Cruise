@@ -39,7 +39,6 @@ namespace CFS::Bridge
         constexpr std::int32_t kSystemView = 1;
         constexpr std::uint32_t kPlanetType = 2;
         constexpr std::uint32_t kMoonType = 3;
-        constexpr std::uint32_t kStationType = 4;
         constexpr double kArrivalDistanceLightSeconds = 0.05;
         constexpr std::uint32_t kNavigationColor = 0x66CCFF;
         constexpr std::uint32_t kCruiseColor = 0xF5A04E;
@@ -47,6 +46,8 @@ namespace CFS::Bridge
         constexpr const char* kCruiseMapActionHoldLabel = "HOLD TO CRUISE";
         constexpr const char* kCruiseMapUserEvent = "Cruise";
         constexpr REL::ID kControlMapSingletonPtr{ 938003 };
+        constexpr REL::ID kSetShipHudTarget{ 97892 };
+        constexpr REL::ID kCurrentShipHudTarget{ 883585 };
         constexpr std::size_t kControlMapSize = 0x3A0;
         constexpr std::size_t kControlMapContextSlotsOffset = 0x10;
         constexpr std::size_t kControlMapMappingStride = 0x28;
@@ -56,9 +57,14 @@ namespace CFS::Bridge
             0x48, 0x89, 0x5C, 0x24, 0x10, 0x55, 0x56, 0x57,
             0x48, 0x83, 0xEC, 0x40, 0x40, 0x32, 0xF6, 0x48,
         };
+        constexpr std::array<std::uint8_t, 6> kSetShipHudTarget116244Prefix{
+            0x48, 0x83, 0xEC, 0x48, 0x89, 0x0D,
+        };
 
         using IsInSpace_t = bool (*)(RE::TESObjectREFR*, bool);
+        using SetShipHudTarget_t = void (*)(std::uint32_t);
         std::atomic<IsInSpace_t> g_isInSpace{ nullptr };
+        std::atomic<SetShipHudTarget_t> g_setShipHudTarget{ nullptr };
 
         struct MovieState
         {
@@ -106,7 +112,6 @@ namespace CFS::Bridge
             kCurrentSystemUnavailable,
             kSelectBody,
             kAmbiguousTarget,
-            kStationUnsupported,
             kTargetTypeUnsupported,
             kTargetDataUpdating,
             kTargetNotIndexed,
@@ -209,6 +214,7 @@ namespace CFS::Bridge
         };
         std::mutex g_hudRowsMutex;
         std::vector<HudRow> g_hudRows;
+
         std::atomic<bool> g_hudLowDirty{ false };
 
         struct Bearing
@@ -248,6 +254,20 @@ namespace CFS::Bridge
         std::atomic<bool> g_inputInstalled{ false };
         std::atomic<std::int32_t> g_cruiseMapKey{ -1 };
         std::atomic<std::int32_t> g_cruiseMapModifier{ -1 };
+
+        const char* DestinationKindName(BodyKind a_kind)
+        {
+            switch (a_kind) {
+            case BodyKind::kPlanet:
+                return "planet";
+            case BodyKind::kMoon:
+                return "moon";
+            case BodyKind::kStation:
+                return "station";
+            default:
+                return "non-planet target";
+            }
+        }
 
         struct ControlMapArray
         {
@@ -509,6 +529,50 @@ namespace CFS::Bridge
             return true;
         }
 
+        bool ValidateShipTargetBinding()
+        {
+            REL::Relocation<std::uintptr_t> target{ kSetShipHudTarget };
+            const auto address = target.address();
+            const auto module = reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr));
+            if (!address || !module) {
+                REX::ERROR("[target] native ship-target binding unavailable; bridge disabled before hooks");
+                return false;
+            }
+
+            const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+            if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+                REX::ERROR("[target] Starfield module has no valid DOS header; bridge disabled");
+                return false;
+            }
+            const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(module + dos->e_lfanew);
+            if (nt->Signature != IMAGE_NT_SIGNATURE) {
+                REX::ERROR("[target] Starfield module has no valid NT header; bridge disabled");
+                return false;
+            }
+            const auto imageEnd = module + nt->OptionalHeader.SizeOfImage;
+            constexpr std::size_t kFingerprintSpan = 12;
+            if (address < module || address >= imageEnd ||
+                kFingerprintSpan > imageEnd - address) {
+                REX::ERROR("[target] Address Library ID 97892 resolved outside Starfield.exe: {:016X}; bridge disabled",
+                    address);
+                return false;
+            }
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(address);
+            if (std::memcmp(bytes, kSetShipHudTarget116244Prefix.data(),
+                    kSetShipHudTarget116244Prefix.size()) != 0 ||
+                bytes[10] != 0x85 || bytes[11] != 0xC9) {
+                REX::ERROR("[target] Address Library ID 97892 failed the Starfield 1.16.244 fingerprint at {:016X}; bridge disabled",
+                    address);
+                return false;
+            }
+
+            g_setShipHudTarget.store(reinterpret_cast<SetShipHudTarget_t>(address),
+                std::memory_order_release);
+            REX::INFO("[target] native ship-target setter validated: Address Library ID 97892, RVA=0x{:X}",
+                address - module);
+            return true;
+        }
+
         bool IsShipInSpace(RE::TESObjectREFR* a_ship)
         {
             const auto predicate = g_isInSpace.load(std::memory_order_acquire);
@@ -520,6 +584,85 @@ namespace CFS::Bridge
             const auto player = RE::PlayerCharacter::GetSingleton();
             const auto ship = player ? player->GetSpaceship() : nullptr;
             return IsShipInSpace(ship);
+        }
+
+        std::vector<BodyIndex::StationTarget> ResolveStationTargets(std::uint32_t a_mapFormID)
+        {
+            std::vector<BodyIndex::StationTarget> resolved;
+            const auto appendLive = [&resolved](BodyIndex::StationTarget a_candidate) {
+                const auto form = RE::TESForm::LookupByID(a_candidate.referenceFormID);
+                const auto reference = form ? form->As<RE::TESObjectREFR>() : nullptr;
+                const auto base = reference ? reference->GetBaseObject() : nullptr;
+                if (!base || !BodyIndex::IsStationBase(base->GetFormID()))
+                    return;
+                a_candidate.baseFormID = base->GetFormID();
+                resolved.push_back(std::move(a_candidate));
+            };
+
+            // Dynamic map markers may already be the live station reference.
+            if (const auto form = RE::TESForm::LookupByID(a_mapFormID)) {
+                if (const auto reference = form->As<RE::TESObjectREFR>()) {
+                    const auto base = reference->GetBaseObject();
+                    if (base && BodyIndex::IsStationBase(base->GetFormID())) {
+                        appendLive({
+                            .referenceFormID = a_mapFormID,
+                            .baseFormID = base->GetFormID(),
+                        });
+                    }
+                }
+            }
+            for (auto candidate : BodyIndex::StationTargets(a_mapFormID))
+                appendLive(std::move(candidate));
+
+            std::ranges::sort(resolved, {}, &BodyIndex::StationTarget::referenceFormID);
+            resolved.erase(std::unique(resolved.begin(), resolved.end(),
+                [](const BodyIndex::StationTarget& a_left,
+                    const BodyIndex::StationTarget& a_right) {
+                    return a_left.referenceFormID == a_right.referenceFormID;
+                }), resolved.end());
+            return resolved;
+        }
+
+        std::vector<HudRow> CurrentHudTargets(std::uint32_t a_formID)
+        {
+            std::vector<HudRow> matches;
+            std::lock_guard lock{ g_hudRowsMutex };
+            for (const auto& row : g_hudRows) {
+                if (row.id == a_formID)
+                    matches.push_back(row);
+            }
+            return matches;
+        }
+
+        bool AssignNativeShipTarget(const BodyDestination& a_destination)
+        {
+            if (a_destination.kind == BodyKind::kPlanet ||
+                a_destination.kind == BodyKind::kMoon)
+                return true;
+
+            const auto form = RE::TESForm::LookupByID(a_destination.formID);
+            const auto reference = form ? form->As<RE::TESObjectREFR>() : nullptr;
+            const auto base = reference ? reference->GetBaseObject() : nullptr;
+            const auto setter = g_setShipHudTarget.load(std::memory_order_acquire);
+            if (!setter || !base || !BodyIndex::IsStationBase(base->GetFormID())) {
+                REX::ERROR("[target] refusing native assignment for {:08X}: live starstation REFR validation failed",
+                    a_destination.formID);
+                return false;
+            }
+
+            setter(a_destination.formID);
+            REL::Relocation<std::uint32_t*> current{ kCurrentShipHudTarget };
+            std::uint32_t observed = 0;
+            if (!ReadMemory(current.address(), observed) || observed != a_destination.formID) {
+                REX::ERROR("[target] native assignment of {:08X} did not commit (observed {:08X})",
+                    a_destination.formID, observed);
+                return false;
+            }
+
+            REX::INFO("[target] native cockpit target assigned: map={:08X}/{} ref={:08X} base={:08X}",
+                a_destination.mapFormID, a_destination.mapType, a_destination.formID,
+                base->GetFormID());
+            return true;
         }
 
         std::optional<BodyDestination> Destination()
@@ -651,7 +794,7 @@ namespace CFS::Bridge
                     a_destination.formID, a_destination.localizedName,
                     a_destination.galaxy.system, a_destination.galaxy.parent,
                     a_destination.galaxy.planet,
-                    a_destination.kind == BodyKind::kMoon ? "moon" : "planet");
+                    DestinationKindName(a_destination.kind));
         }
 
         MapEligibility EvaluateMapSelection(MapSnapshot a_snapshot)
@@ -676,9 +819,6 @@ namespace CFS::Bridge
                     .detail = "not an active-flight system-view map session",
                 };
             }
-            if (!BodyIndex::Ready())
-                return unavailable(EligibilityCode::kTargetDataLoading,
-                    "CRUISE TARGET DATA LOADING", "PNDT/GNAM index is not ready");
             if (g_cruiseMapKey.load(std::memory_order_acquire) < 0)
                 return unavailable(EligibilityCode::kCruiseKeyUnbound,
                     "CRUISE KEY IS NOT BOUND", "Cruise has no keyboard binding");
@@ -688,26 +828,97 @@ namespace CFS::Bridge
                     "cockpit current system was not resolved before map open");
             if (a_snapshot.highlightedMarkerCount == 0)
                 return unavailable(EligibilityCode::kSelectBody,
-                    "HIGHLIGHT A PLANET OR MOON",
-                    "system view has no highlight-radius marker candidate");
+                    "HIGHLIGHT A DESTINATION",
+                    "system view has no highlight-radius target marker");
             if (a_snapshot.highlightedMarkerCount != 1)
                 return unavailable(EligibilityCode::kAmbiguousTarget,
                     "TARGET IS AMBIGUOUS",
                     std::format("system view has {} highlight-radius marker candidates",
                         a_snapshot.highlightedMarkerCount));
-            if (a_snapshot.markerBodyType == kStationType)
-                return unavailable(EligibilityCode::kStationUnsupported,
-                    "STATIONS ARE NOT SUPPORTED",
-                    std::format("highlight-radius marker {:08X} is station type {}",
-                        a_snapshot.markerBodyID, a_snapshot.markerBodyType));
-            if (a_snapshot.markerBodyID == 0 ||
-                (a_snapshot.markerBodyType != kPlanetType &&
-                    a_snapshot.markerBodyType != kMoonType)) {
+            if (a_snapshot.markerBodyID == 0) {
                 return unavailable(EligibilityCode::kTargetTypeUnsupported,
-                    "TARGET TYPE IS NOT SUPPORTED",
-                    std::format("highlight-radius marker is {:08X}/{}",
-                        a_snapshot.markerBodyID, a_snapshot.markerBodyType));
+                    "TARGET HAS NO CRUISE ID",
+                    std::format("highlight-radius marker has type {} but no id",
+                        a_snapshot.markerBodyType));
             }
+
+            const bool planetary = a_snapshot.markerBodyType == kPlanetType ||
+                a_snapshot.markerBodyType == kMoonType;
+            if (!BodyIndex::Ready())
+                return unavailable(EligibilityCode::kTargetDataLoading,
+                    "CRUISE TARGET DATA LOADING",
+                    "PNDT/GNAM and starstation reference index is not ready");
+            if (!planetary) {
+                const auto stationTargets = ResolveStationTargets(a_snapshot.markerBodyID);
+                if (stationTargets.size() > 1)
+                    return unavailable(EligibilityCode::kAmbiguousTarget,
+                        "STATION TARGET IS AMBIGUOUS",
+                        std::format("non-planet marker {:08X}/{} resolves to {} live starstation references",
+                            a_snapshot.markerBodyID, a_snapshot.markerBodyType,
+                            stationTargets.size()));
+
+                if (!stationTargets.empty()) {
+                    const auto& station = stationTargets.front();
+                    auto destination = BodyDestination{
+                        .kind = BodyKind::kStation,
+                        .formID = station.referenceFormID,
+                        .mapFormID = a_snapshot.markerBodyID,
+                        .mapType = a_snapshot.markerBodyType,
+                        .galaxy = { .system = a_snapshot.capturedSystem },
+                        .localizedName = a_snapshot.markerName.empty() ?
+                            std::format("STATION {:08X}", station.referenceFormID) :
+                            a_snapshot.markerName,
+                        .menuGeneration = a_snapshot.generation,
+                    };
+                    return {
+                        .code = EligibilityCode::kEligible,
+                        .show = true,
+                        .enabled = true,
+                        .label = kCruiseMapActionLabel,
+                        .detail = std::format("eligible station map={:08X}/{} ref={:08X} base={:08X} '{}'",
+                            destination.mapFormID, destination.mapType,
+                            destination.formID, station.baseFormID,
+                            destination.localizedName),
+                        .destination = std::move(destination),
+                    };
+                }
+
+                const auto hudTargets = CurrentHudTargets(a_snapshot.markerBodyID);
+                if (hudTargets.empty())
+                    return unavailable(EligibilityCode::kTargetNotIndexed,
+                        "TARGET IS NOT AVAILABLE TO CRUISE",
+                        std::format("non-planet marker {:08X}/{} has neither a station reference nor a current HUD target row",
+                            a_snapshot.markerBodyID, a_snapshot.markerBodyType));
+                if (hudTargets.size() != 1)
+                    return unavailable(EligibilityCode::kAmbiguousTarget,
+                        "TARGET IS AMBIGUOUS",
+                        std::format("non-planet marker {:08X}/{} matches {} current HUD target rows",
+                            a_snapshot.markerBodyID, a_snapshot.markerBodyType,
+                            hudTargets.size()));
+
+                const auto& hudTarget = hudTargets.front();
+                auto destination = BodyDestination{
+                    .kind = BodyKind::kOther,
+                    .formID = hudTarget.id,
+                    .mapFormID = a_snapshot.markerBodyID,
+                    .mapType = a_snapshot.markerBodyType,
+                    .galaxy = { .system = a_snapshot.capturedSystem },
+                    .localizedName = a_snapshot.markerName.empty() ?
+                        hudTarget.name : a_snapshot.markerName,
+                    .menuGeneration = a_snapshot.generation,
+                };
+                return {
+                    .code = EligibilityCode::kEligible,
+                    .show = true,
+                    .enabled = true,
+                    .label = kCruiseMapActionLabel,
+                    .detail = std::format("eligible current-feed non-planet map={:08X}/{} target={:08X} '{}'",
+                        destination.mapFormID, destination.mapType,
+                        destination.formID, destination.localizedName),
+                    .destination = std::move(destination),
+                };
+            }
+
             if (a_snapshot.dossierBodyID == 0 ||
                 (a_snapshot.dossierBodyType != kPlanetType &&
                     a_snapshot.dossierBodyType != kMoonType) ||
@@ -748,6 +959,8 @@ namespace CFS::Bridge
             auto destination = BodyDestination{
                 .kind = a_snapshot.dossierBodyType == kMoonType ? BodyKind::kMoon : BodyKind::kPlanet,
                 .formID = a_snapshot.dossierBodyID,
+                .mapFormID = a_snapshot.markerBodyID,
+                .mapType = a_snapshot.dossierBodyType,
                 .galaxy = body->galaxy,
                 .localizedName = a_snapshot.dossierName.empty() ?
                     a_snapshot.markerName : a_snapshot.dossierName,
@@ -759,7 +972,7 @@ namespace CFS::Bridge
                 .enabled = true,
                 .label = kCruiseMapActionLabel,
                 .detail = std::format("eligible {} {:08X} '{}'",
-                    destination.kind == BodyKind::kMoon ? "moon" : "planet",
+                    DestinationKindName(destination.kind),
                     destination.formID, destination.localizedName),
                 .destination = std::move(destination),
             };
@@ -918,10 +1131,12 @@ namespace CFS::Bridge
             const auto& selected = *eligibility.destination;
 
             const auto existing = Destination();
-            const bool same = existing && existing->formID == selected.formID;
+            const bool same = existing && existing->mapFormID == selected.mapFormID &&
+                existing->mapType == selected.mapType &&
+                existing->formID == selected.formID;
             if (same && a_action == MapAction::kTap) {
                 const bool courseMatches = g_confirmedCourseID.load(std::memory_order_acquire) == selected.formID;
-                ClearDestination("explicit same-body toggle");
+                ClearDestination("explicit same-target toggle");
                 if (courseMatches && g_cruiseActive.load(std::memory_order_acquire))
                     QueueCourse(selected.formID, true);
             } else if (!same) {
@@ -940,8 +1155,9 @@ namespace CFS::Bridge
             }
             g_selectionAcceptedThisOpen.store(true, std::memory_order_release);
             g_closeRequested.store(true, std::memory_order_release);
-            REX::INFO("[map] accepted {} {:08X}; requested normal menu hide",
-                a_action == MapAction::kHold ? "hold" : "tap", selected.formID);
+            REX::INFO("[map] accepted {} map={:08X}/{} target={:08X}; requested normal menu hide",
+                a_action == MapAction::kHold ? "hold" : "tap", selected.mapFormID,
+                selected.mapType, selected.formID);
         }
 
         class MapActionHandler : public RE::Scaleform::GFx::FunctionHandler
@@ -2252,6 +2468,14 @@ namespace CFS::Bridge
                         std::lock_guard lock{ g_mapMutex };
                         wasCruising = g_map.wasCruising;
                     }
+                    if (accepted) {
+                        const auto destination = Destination();
+                        if (destination && destination->kind == BodyKind::kStation &&
+                            !AssignNativeShipTarget(*destination)) {
+                            ClearDestination("native station target assignment failed");
+                            accepted = false;
+                        }
+                    }
                     bool held = false;
                     bool holdCompleted = false;
                     auto heldDevice = RE::InputEvent::DeviceType::kNone;
@@ -2570,7 +2794,7 @@ namespace CFS::Bridge
             return;
         }
 
-        if (!ValidateIsInSpaceBinding())
+        if (!ValidateIsInSpaceBinding() || !ValidateShipTargetBinding())
             return;
         if (!MainThreadUiPump::Install()) {
             REX::ERROR("post-advance UI pump unavailable; bridge disabled to prevent off-thread Scaleform access");
@@ -2585,6 +2809,6 @@ namespace CFS::Bridge
         StartFocusWatcher();
         g_lastUnsettledTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
         tasks->AddPermanentTask(&OnFrame);
-        REX::INFO("bridge initialized: bodies-first, current-system only, no serialization or public API");
+        REX::INFO("bridge initialized: bodies/stations-first, current-system only, no serialization or public API");
     }
 }

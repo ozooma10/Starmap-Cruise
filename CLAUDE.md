@@ -17,10 +17,15 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
 
 - Never retain a raw form or Scaleform pointer across menu/movie transitions.
 - A selection is invalid unless exactly one `StarMapMenuMarkersData` row has
-  `bIsInHighlightRadius=true`, that row's id/type exactly matches the dossier
-  planet/moon PNDT, and its GNAM/current-system identities agree. Tree focus,
-  `bIsFocused`, timing heuristics, and last-dossier-wins are all invalid.
-- Anything outside current-system planet/moon system view is vanilla-owned.
+  `bIsInHighlightRadius=true` and a nonzero id. Planet/moon rows must also
+  exactly match the dossier PNDT and its GNAM/current-system identity.
+  A station-backed non-planet row may be a live station reference or a CELL that
+  resolves through persistent children to exactly one live reference whose base
+  carries `IsStarstation`. Another non-planet row must match exactly one current
+  cockpit target-feed row by the same ID. Keep the map id/type and resolved
+  target reference separate. Unmatched generic POIs, tree focus, `bIsFocused`,
+  timing heuristics, and last-dossier-wins are invalid.
+- Anything outside the currently loaded system's system view is vanilla-owned.
 - SFSE permanent tasks are worker-thread producers only. Marshal ordinary
   engine work through `RE::BSService::TaskQueue`; enter Scaleform only from the
   byte-verified post-`UI_AdvanceActiveMenus` pump, when the owning main thread's
@@ -35,7 +40,7 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
   focus loss, load, or Starmap movie replacement.
 - Suppress a carried map key until physical release. Keyboard testing proved
   that its cockpit event is a continued hold (`first=false`), not a new press.
-- A tap only marks. Queue its PNDT id after the HUD reports a later vanilla
+- A tap only marks. Queue its target id after the HUD reports a later vanilla
   inactive-to-active Cruise transition, or immediately when the map was opened
   while Cruise was already active. A completed map hold may drive the proven HUD
   down/held/up route; confirm every course lock from the low feed.
