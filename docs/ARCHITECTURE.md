@@ -52,8 +52,13 @@ Idle -> MapSelection -> Marked -> AwaitingCruise -> AutopilotLocked
   the up edge when Cruise becomes active, with a four-second safety release if
   activation never arrives. A later vanilla inactive-to-active Cruise transition moves
   the destination to `AwaitingCruise` and queues its PNDT id.
-- The same request is queued immediately if Cruise was already active when the
-  accepted map selection began.
+- If Cruise was already active when the map opened, the stacked control is
+  replaced by a stock tap-only `BasicButton`. Its accepted tap queues the course
+  request immediately; no hold action is exposed or accepted.
+- The same tap-only control is used while the stock cockpit
+  `ShipReticle.CanActivateCruiseMode` getter is false, including the short
+  post-exit cooldown. The tap still marks the destination but does not attempt
+  to synthesize a currently unavailable Cruise hold.
 - The carried physical event is still suppressed until release, so its
   remapped continued edge cannot double-trigger the cockpit.
 - `AwaitingCruise` means a HUD course request is queued or awaiting low-feed
@@ -83,18 +88,28 @@ clears it.
   and re-check the live root/generation immediately before entering AS3.
   Starmap subscriptions also require the visible map-open event;
   `UI::IsMenuOpen` alone can expose its incomplete background movie after load.
-- During active-flight system view, the native callback shows a separate
-  `ReleaseHoldComboButton` using the primary live `ShipHUD/Cruise` keyboard
-  binding. The button is interactive only while the exact selection gate passes;
-  otherwise its disabled label exposes the current rejection reason. The binding is read from
-  the version-gated engine `ControlMap` once at startup. This keeps the validated
-  mapping-array scan off the map-open frame; an in-session control remap takes
-  effect after restarting Starfield.
-  The input hook temporarily presents that physical key to the Starmap button
-  manager as `Cruise`, then restores the engine event string after the UI call.
-  The vanilla `SetRouteDestination` button is never changed. The added button is
-  created once per movie, then hidden only outside flight system view; no
-  SWF bytecode is replaced.
+- During active-flight system view, the native callback shows a separate stock
+  control using the primary live `ShipHUD/Cruise` keyboard binding. A
+  `ReleaseHoldComboButton` owns tap/hold before Cruise starts; a `BasicButton`
+  owns only tap when the map session began during Cruise or the stock cockpit
+  hold is unavailable. Both variants expose the engine-owned `Cruise` event so
+  the button keybox resolves the player's live binding; only the current one is
+  enabled and visible. Native callback handling also normalizes any stale hold
+  signal to tap while the tap-only variant owns the session.
+  The control is interactive only while the exact selection gate passes;
+  otherwise its disabled label exposes the current rejection reason. The binding
+  is read from the version-gated engine `ControlMap` once at startup. This keeps
+  the validated mapping-array scan off the map-open frame; an in-session control
+  remap takes effect after restarting Starfield. The input hook temporarily
+  presents that physical key as `Cruise`, then restores the engine event string
+  after the UI call. The vanilla `SetRouteDestination`
+  button is never changed. Each variant is created at most once per movie and
+  hidden when inactive; no SWF bytecode is replaced.
+- Hold availability mirrors the shipped `ShipReticle.UpdateCruiseButton` rule by
+  reading its public `CanActivateCruiseMode`, `MonocleModeActive`, and
+  `CruiseModeHUDActive` getters from the post-advance UI pump. Getter failure is
+  fail-closed to tap-only. While the Starmap is open, this state is polled so the
+  stacked variant can appear if a short cooldown expires.
 - The system/star tree provider is diagnostic-only. It never invalidates or
   participates in the marker/dossier body join.
 - Feed callbacks copy passed GFx payloads into plain C++ snapshots or queue a

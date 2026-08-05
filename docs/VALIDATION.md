@@ -302,3 +302,36 @@ session is still required to prove the runtime result:
 - [ ] Confirm both HUD subscriptions log on one owning thread, then complete the
   interaction matrix: cockpit idle, stacked prompt, tap, completed hold, Cruise
   activation, course lock, and HUD/movie rebuild.
+
+## 2026-08-05 active-Cruise tap-only action
+
+These are source/build/deployment results; the new prompt variant still needs a
+relaunched-game visual and input check:
+
+- [x] A map session captured while Cruise is active now creates the stock
+  `BasicButton`/`ButtonBaseData` variant with only `SET CRUISE TARGET` and one tap
+  callback. It does not display or register the combo button's hold action.
+- [x] Both variants use the engine-owned `Cruise` user-event name so the stock
+  keybox can resolve the player's live binding. Only the current variant is
+  enabled and visible, while each is created at most once per Starmap movie; a
+  stale hold callback is normalized to tap while the tap-only variant owns the
+  session.
+- [x] If the tap-only button closes the map on its down edge, the physical Cruise
+  key is suppressed until release so the carried cockpit event cannot disturb
+  the active Cruise state.
+- [x] Shipped `ShipReticle` source sets `_CanActivateCruiseMode` from HUD payload
+  `bShowCruiseButton`; its public getter also rejects playback/dialogue, and
+  `UpdateCruiseButton` enables the hold event only when that getter is true and
+  Cruise is inactive. The map now mirrors those public getters fail-closed.
+- [x] When stock Cruise is inactive but unavailable, the map uses the tap-only
+  variant. Availability is polled while the map is open so the stacked variant
+  can return when a short cooldown expires.
+- [x] `xmake f -m releasedbg -y` followed by `xmake -j1 -y` passed with inherited
+  CommonLibSF warnings only. Built and deployed MO2 DLL SHA-256 match:
+  `3866CB20CDFBBFBDCA553858E85233A990C5E3965F3057003B9DA9ACC041CF21`.
+- [ ] While already cruising, open the system map and confirm only the single-line
+  `SET CRUISE TARGET` prompt appears; tap another body and confirm course lock
+  changes without stopping or restarting Cruise.
+- [ ] Exit Cruise, immediately open the system map during its cooldown, and
+  confirm only the tap action appears. Wait for availability to return and
+  confirm the stacked `HOLD TO CRUISE` action appears and can engage normally.

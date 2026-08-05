@@ -81,6 +81,7 @@ namespace CFS::Bridge
             std::uint32_t generation{ 0 };
             bool openedWhileFlying{ false };
             bool wasCruising{ false };
+            bool cruiseEngageAvailable{ false };
             bool haveCapturedSystem{ false };
             std::uint32_t capturedSystem{ 0 };
             std::int32_t view{ -1 };
@@ -135,12 +136,16 @@ namespace CFS::Bridge
         struct MapActionHintState
         {
             std::uint32_t generation{ 0 };
-            bool ready{ false };
+            bool comboReady{ false };
+            bool tapReady{ false };
             bool installed{ false };
-            V cruiseButton;
-            V cruiseButtonData;
+            V comboButton;
+            V comboButtonData;
+            V tapButton;
+            V tapButtonData;
         } g_mapActionHint;
         std::atomic<bool> g_mapActionInteractive{ false };
+        std::atomic<bool> g_mapActionTapOnly{ false };
 
         std::mutex g_destinationMutex;
         std::optional<BodyDestination> g_destination;
@@ -149,6 +154,7 @@ namespace CFS::Bridge
         std::atomic<bool> g_haveCurrentSystem{ false };
         std::atomic<std::uint32_t> g_currentSystem{ 0 };
         std::atomic<bool> g_cruiseActive{ false };
+        std::atomic<bool> g_cruiseEngageAvailable{ false };
         std::atomic<std::uint32_t> g_confirmedCourseID{ 0 };
 
         struct PhysicalHold
@@ -948,7 +954,11 @@ namespace CFS::Bridge
                 // This callback is executing inside the AS3 VM. Record only a
                 // value signal; selection evaluation and engine/UI side effects
                 // run from the post-advance pump after the VM unwinds.
-                g_pendingMapAction.store(action, std::memory_order_release);
+                const auto pending = action == MapAction::kHold &&
+                                             g_mapActionTapOnly.load(std::memory_order_acquire) ?
+                                         MapAction::kTap :
+                                         action;
+                g_pendingMapAction.store(pending, std::memory_order_release);
             }
 
         private:
@@ -1053,7 +1063,10 @@ namespace CFS::Bridge
             // The engine's StarMap context normally names this physical key as
             // a map action rather than Cruise. Route the down edge only when a
             // configured chord modifier is held; always route release so the
-            // stock combo button cannot be left in its down state.
+            // active stock button cannot be left in its down state. Both
+            // variants expose the real Cruise event so Starfield can resolve
+            // the player's current binding and glyph; the inactive control is
+            // disabled and hidden.
             if (a_button->value != 0.0f && modifier >= 0 &&
                 (::GetAsyncKeyState(modifier) & 0x8000) == 0)
                 return false;
@@ -1144,6 +1157,8 @@ namespace CFS::Bridge
             };
             mix(a_snapshot.generation);
             mix(a_snapshot.session);
+            mix(a_snapshot.wasCruising);
+            mix(a_snapshot.cruiseEngageAvailable);
             mix(static_cast<std::uint64_t>(a_eligibility.code));
             mix(a_snapshot.markerBodyID);
             mix(a_snapshot.markerBodyType);
@@ -1158,7 +1173,7 @@ namespace CFS::Bridge
                    (a_buttonBar.IsObject() || a_buttonBar.IsDisplayObject());
         }
 
-        bool BuildCruiseMapButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+        bool BuildCruiseComboButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
             V& a_buttonBar, V& a_vanillaData, V& a_button, V& a_buttonData)
         {
             V pressEventName;
@@ -1237,8 +1252,71 @@ namespace CFS::Bridge
             return true;
         }
 
-        void SyncCruiseMapButton(V& a_vanillaData, V& a_buttonBar,
-            const MapEligibility& a_eligibility)
+        bool BuildCruiseTapButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+            V& a_buttonBar, V& a_vanillaData, V& a_button, V& a_buttonData)
+        {
+            V eventName;
+            // ButtonBase resolves its keybox from this UserEventData name. It
+            // must remain the engine-owned Cruise event rather than a private
+            // routing alias or the glyph will be empty.
+            a_root->CreateString(&eventName, kCruiseMapUserEvent);
+
+            V tapCallback;
+            a_root->CreateFunction(&tapCallback, &g_mapTapActionHandler);
+            V eventArgs[2]{ eventName, tapCallback };
+            V tapEvent;
+            a_root->CreateObject(&tapEvent,
+                "Shared.Components.ButtonControls.ButtonData.UserEventData", eventArgs, 2);
+            if (!(tapEvent.IsObject() || tapEvent.IsDisplayObject())) {
+                REX::WARN("[map] tap-only action hint unavailable: UserEventData construction failed");
+                return false;
+            }
+
+            V events;
+            a_root->CreateArray(&events);
+            if (!events.IsArray() || !events.PushBack(tapEvent)) {
+                REX::WARN("[map] tap-only action hint unavailable: event array construction failed");
+                return false;
+            }
+
+            V label;
+            a_root->CreateString(&label, kCruiseMapActionLabel);
+            V dataArgs[2]{ label, events };
+            a_root->CreateObject(&a_buttonData,
+                "Shared.Components.ButtonControls.ButtonData.ButtonBaseData",
+                dataArgs, 2);
+            if (!(a_buttonData.IsObject() || a_buttonData.IsDisplayObject())) {
+                REX::WARN("[map] tap-only action hint unavailable: ButtonBaseData construction failed");
+                return false;
+            }
+
+            for (const char* member : { "bEnabled", "bVisible" }) {
+                V value;
+                if (a_vanillaData.GetMember(member, &value))
+                    a_buttonData.SetMember(member, value);
+            }
+
+            V factory;
+            if (!a_root->GetVariable(&factory,
+                    "Shared.Components.ButtonControls.ButtonFactory.ButtonFactory") ||
+                !(factory.IsObject() || factory.IsDisplayObject())) {
+                REX::WARN("[map] tap-only action hint unavailable: stock ButtonFactory is inaccessible");
+                return false;
+            }
+            V buttonType;
+            a_root->CreateString(&buttonType, "BasicButton");
+            V factoryArgs[3]{ buttonType, a_buttonData, a_buttonBar };
+            if (!factory.Invoke("AddToButtonBar", &a_button, factoryArgs, 3) ||
+                !(a_button.IsObject() || a_button.IsDisplayObject())) {
+                REX::WARN("[map] tap-only action hint unavailable: stock ButtonFactory rejected BasicButton");
+                return false;
+            }
+
+            return true;
+        }
+
+        void SyncCruiseMapButtons(V& a_vanillaData, V& a_buttonBar,
+            const MapEligibility& a_eligibility, bool a_tapOnly)
         {
             bool enabled = a_eligibility.enabled;
             V vanillaEnabled;
@@ -1247,49 +1325,83 @@ namespace CFS::Bridge
                 enabled = vanillaEnabled.GetBoolean();
             }
 
-            g_mapActionHint.cruiseButtonData.SetMember("bEnabled", V{ enabled });
-            g_mapActionHint.cruiseButtonData.SetMember("bVisible", V{ a_eligibility.show });
-            const bool labelSet = g_mapActionHint.cruiseButtonData.SetMember(
-                "sButtonText", V{ a_eligibility.label.c_str() });
-            const bool holdLabelSet = g_mapActionHint.cruiseButtonData.SetMember(
-                "sHoldButtonText",
-                V{ a_eligibility.enabled ? kCruiseMapActionHoldLabel : "" });
+            const bool comboVisible = a_eligibility.show && !a_tapOnly &&
+                                      g_mapActionHint.comboReady;
+            const bool tapVisible = a_eligibility.show && a_tapOnly &&
+                                    g_mapActionHint.tapReady;
+            bool labelSet = true;
+            bool holdLabelSet = true;
+
+            if (g_mapActionHint.comboReady) {
+                g_mapActionHint.comboButtonData.SetMember("bEnabled",
+                    V{ enabled && comboVisible });
+                g_mapActionHint.comboButtonData.SetMember("bVisible", V{ comboVisible });
+                labelSet = g_mapActionHint.comboButtonData.SetMember(
+                    "sButtonText", V{ a_eligibility.label.c_str() });
+                holdLabelSet = g_mapActionHint.comboButtonData.SetMember(
+                    "sHoldButtonText",
+                    V{ enabled && comboVisible ? kCruiseMapActionHoldLabel : "" });
+                g_mapActionHint.comboButton.Invoke("RefreshButtonData");
+            }
+            if (g_mapActionHint.tapReady) {
+                g_mapActionHint.tapButtonData.SetMember("bEnabled",
+                    V{ enabled && tapVisible });
+                g_mapActionHint.tapButtonData.SetMember("bVisible", V{ tapVisible });
+                labelSet = g_mapActionHint.tapButtonData.SetMember(
+                    "sButtonText", V{ a_eligibility.label.c_str() }) && labelSet;
+                g_mapActionHint.tapButton.Invoke("RefreshButtonData");
+            }
             if ((!labelSet || !holdLabelSet) && Settings::Verbose())
                 REX::WARN("[map] action data rejected dynamic labels (tap={} hold={})",
                     labelSet, holdLabelSet);
-            g_mapActionHint.installed = a_eligibility.show;
-            g_mapActionInteractive.store(enabled, std::memory_order_release);
-            g_mapActionHint.cruiseButton.Invoke("RefreshButtonData");
+            const bool desiredReady = a_tapOnly ? g_mapActionHint.tapReady :
+                                                  g_mapActionHint.comboReady;
+            g_mapActionHint.installed = a_eligibility.show && desiredReady;
+            g_mapActionInteractive.store(enabled && desiredReady, std::memory_order_release);
+            g_mapActionTapOnly.store(enabled && desiredReady && a_tapOnly,
+                std::memory_order_release);
             a_buttonBar.Invoke("RefreshButtons");
         }
 
         bool InstallCruiseMapButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
             V& a_buttonBar, V& a_vanillaData,
-            std::uint32_t a_generation, const MapEligibility& a_eligibility)
+            std::uint32_t a_generation, const MapEligibility& a_eligibility,
+            bool a_tapOnly)
         {
-            const bool create = !g_mapActionHint.ready ||
-                                g_mapActionHint.generation != a_generation;
-            if (create) {
-                V cruiseButton;
-                V cruiseButtonData;
-                if (!BuildCruiseMapButton(a_root, a_buttonBar, a_vanillaData,
-                        cruiseButton, cruiseButtonData)) {
+            g_mapActionHint.generation = a_generation;
+            if (a_tapOnly && !g_mapActionHint.tapReady) {
+                V tapButton;
+                V tapButtonData;
+                if (!BuildCruiseTapButton(a_root, a_buttonBar, a_vanillaData,
+                        tapButton, tapButtonData)) {
+                    SyncCruiseMapButtons(a_vanillaData, a_buttonBar, {}, true);
+                    REX::WARN("[map] tap-only action hint installation failed; preserving vanilla route button");
+                    return false;
+                }
+                g_mapActionHint.tapReady = true;
+                g_mapActionHint.tapButton = std::move(tapButton);
+                g_mapActionHint.tapButtonData = std::move(tapButtonData);
+            } else if (!a_tapOnly && !g_mapActionHint.comboReady) {
+                V comboButton;
+                V comboButtonData;
+                if (!BuildCruiseComboButton(a_root, a_buttonBar, a_vanillaData,
+                        comboButton, comboButtonData)) {
+                    SyncCruiseMapButtons(a_vanillaData, a_buttonBar, {}, false);
                     REX::WARN("[map] stacked action hint installation failed; preserving vanilla route button");
                     return false;
                 }
-                g_mapActionHint.generation = a_generation;
-                g_mapActionHint.ready = true;
-                g_mapActionHint.cruiseButton = std::move(cruiseButton);
-                g_mapActionHint.cruiseButtonData = std::move(cruiseButtonData);
+                g_mapActionHint.comboReady = true;
+                g_mapActionHint.comboButton = std::move(comboButton);
+                g_mapActionHint.comboButtonData = std::move(comboButtonData);
             }
 
-            SyncCruiseMapButton(a_vanillaData, a_buttonBar, a_eligibility);
+            SyncCruiseMapButtons(a_vanillaData, a_buttonBar, a_eligibility, a_tapOnly);
             return true;
         }
 
         void HideCruiseMapButton(V& a_vanillaData, V& a_buttonBar)
         {
-            SyncCruiseMapButton(a_vanillaData, a_buttonBar, {});
+            SyncCruiseMapButtons(a_vanillaData, a_buttonBar, {}, false);
         }
 
         void UpdateMapActionHint()
@@ -1300,6 +1412,8 @@ namespace CFS::Bridge
                 snapshot = g_map;
             }
             const auto eligibility = EvaluateMapSelection(snapshot);
+            const bool tapOnly = snapshot.wasCruising ||
+                                 !snapshot.cruiseEngageAvailable;
             const auto signature = EligibilitySignature(snapshot, eligibility);
             const bool signatureChanged =
                 g_mapActionHintSignature.load(std::memory_order_acquire) != signature;
@@ -1327,19 +1441,25 @@ namespace CFS::Bridge
             if (!GetMapButtonBar(hintBar, buttonBar))
                 return;
 
-            if (g_mapActionHint.ready && g_mapActionHint.generation != snapshot.generation)
+            if ((g_mapActionHint.comboReady || g_mapActionHint.tapReady) &&
+                g_mapActionHint.generation != snapshot.generation)
             {
                 g_mapActionHint = {};
                 g_mapActionInteractive.store(false, std::memory_order_release);
+                g_mapActionTapOnly.store(false, std::memory_order_release);
             }
 
             bool updated = false;
             if (eligibility.show) {
-                if (!g_mapActionHint.installed) {
+                const bool desiredReady = tapOnly ?
+                                              g_mapActionHint.tapReady :
+                                              g_mapActionHint.comboReady;
+                if (!g_mapActionHint.installed || !desiredReady) {
                     updated = InstallCruiseMapButton(root, buttonBar, buttonData,
-                        snapshot.generation, eligibility);
+                        snapshot.generation, eligibility, tapOnly);
                 } else {
-                    SyncCruiseMapButton(buttonData, buttonBar, eligibility);
+                    SyncCruiseMapButtons(buttonData, buttonBar, eligibility,
+                        tapOnly);
                     updated = true;
                 }
             } else if (g_mapActionHint.installed) {
@@ -1353,8 +1473,10 @@ namespace CFS::Bridge
 
             g_mapActionHintSignature.store(signature, std::memory_order_release);
             if (Settings::Verbose() && signatureChanged)
-                REX::INFO("[map] action hint -> {} '{}' ({}, session={} generation={})",
+                REX::INFO("[map] action hint -> {} {} '{}' ({}, session={} generation={})",
                     eligibility.show ? (eligibility.enabled ? "ENABLED" : "DISABLED") : "HIDDEN",
+                    snapshot.wasCruising ? "TAP/ACTIVE" :
+                        (snapshot.cruiseEngageAvailable ? "TAP/HOLD" : "TAP/UNAVAILABLE"),
                     eligibility.show ? eligibility.label : "",
                     eligibility.detail, snapshot.session, snapshot.generation);
         }
@@ -1884,6 +2006,7 @@ namespace CFS::Bridge
             if ((reset & kResetMapUi) != 0) {
                 g_mapActionHint = {};
                 g_mapActionInteractive.store(false, std::memory_order_release);
+                g_mapActionTapOnly.store(false, std::memory_order_release);
                 g_pendingMapAction.store(MapAction::kNone, std::memory_order_release);
             }
             if ((reset & kResetHudUi) != 0) {
@@ -1908,7 +2031,10 @@ namespace CFS::Bridge
 
         void ReconcileHudUi()
         {
-            if (!g_hudUiDirty.load(std::memory_order_acquire) ||
+            // Poll while the map is open so a short stock Cruise cooldown can
+            // expire without requiring the player to close and reopen it.
+            if ((!g_hudUiDirty.load(std::memory_order_acquire) &&
+                    !g_mapOpen.load(std::memory_order_acquire)) ||
                 !WorldSettled() || !IsFlying())
                 return;
 
@@ -1939,6 +2065,36 @@ namespace CFS::Bridge
                 (base + ".Reticle_mc.CruiseModeHUDActive").c_str()) &&
                 cruise.IsBoolean() && cruise.GetBoolean();
             const bool wasActive = g_cruiseActive.exchange(active, std::memory_order_acq_rel);
+
+            // ShipReticle.UpdateCruiseButton enables the stock hold event only
+            // when CanActivateCruiseMode is true and neither Monocle nor Cruise
+            // mode is active. Mirror those public getters rather than guessing
+            // at cooldown timing in native code.
+            V canActivateValue;
+            V monocleValue;
+            const bool canActivateResolved = root->GetVariable(&canActivateValue,
+                (base + ".Reticle_mc.CanActivateCruiseMode").c_str()) &&
+                canActivateValue.IsBoolean();
+            const bool monocleResolved = root->GetVariable(&monocleValue,
+                (base + ".Reticle_mc.MonocleModeActive").c_str()) &&
+                monocleValue.IsBoolean();
+            const bool engageAvailable = canActivateResolved && monocleResolved &&
+                                         canActivateValue.GetBoolean() &&
+                                         !monocleValue.GetBoolean() && !active;
+            const bool wasEngageAvailable = g_cruiseEngageAvailable.exchange(
+                engageAvailable, std::memory_order_acq_rel);
+            if (engageAvailable != wasEngageAvailable) {
+                if (g_mapOpen.load(std::memory_order_acquire)) {
+                    {
+                        std::lock_guard lock{ g_mapMutex };
+                        g_map.cruiseEngageAvailable = engageAvailable;
+                    }
+                    g_mapUiDirty.store(true, std::memory_order_release);
+                }
+                if (Settings::Verbose())
+                    REX::INFO("[hud] stock Cruise engage availability -> {} (resolved={} monocleResolved={} active={})",
+                        engageAvailable, canActivateResolved, monocleResolved, active);
+            }
 
             if (active && !wasActive) {
                 CancelOrReleaseHudCruiseInput("CruiseModeHUDActive confirmed");
@@ -2077,15 +2233,19 @@ namespace CFS::Bridge
                     g_map.generation = g_mapMovie.generation.load(std::memory_order_acquire);
                     g_map.openedWhileFlying = IsFlying();
                     g_map.wasCruising = g_cruiseActive.load(std::memory_order_acquire);
+                    g_map.cruiseEngageAvailable =
+                        g_cruiseEngageAvailable.load(std::memory_order_acquire);
                     g_map.haveCapturedSystem = haveSystem;
                     g_map.capturedSystem = g_currentSystem.load(std::memory_order_acquire);
                     g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
                     if (Settings::Verbose())
-                        REX::INFO("[map] open session={} generation={} flying={} cruise={} currentSystem={}",
+                        REX::INFO("[map] open session={} generation={} flying={} cruise={} cruiseAvailable={} currentSystem={}",
                             session, g_map.generation, g_map.openedWhileFlying, g_map.wasCruising,
+                            g_map.cruiseEngageAvailable,
                             haveSystem ? std::format("{}", g_map.capturedSystem) : "unresolved");
                 } else {
                     g_mapActionInteractive.store(false, std::memory_order_release);
+                    g_mapActionTapOnly.store(false, std::memory_order_release);
                     bool accepted = g_selectionAcceptedThisOpen.exchange(false, std::memory_order_acq_rel);
                     bool wasCruising = false;
                     {
@@ -2101,11 +2261,12 @@ namespace CFS::Bridge
                         holdCompleted = g_hold.completed;
                         heldDevice = g_hold.device;
                         g_claimMapKey = false;
-                        // The Starmap fill has already confirmed intent. If the
-                        // physical key is still down, suppress its carried HUD
-                        // continuation until release; the latched HUD edge below
-                        // owns Cruise activation from this point forward.
-                        g_hold.suppressUntilRelease = accepted && holdCompleted && held;
+                        // A completed pre-Cruise fill or an already-cruising
+                        // BasicButton press can close the map while the physical
+                        // key is still down. Suppress that carried cockpit input
+                        // until release; only the former queues a latched HUD edge.
+                        g_hold.suppressUntilRelease = accepted && held &&
+                                                      (holdCompleted || wasCruising);
                     }
                     if (accepted) {
                         if (wasCruising) {
@@ -2315,6 +2476,7 @@ namespace CFS::Bridge
             g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
             g_mapActionHintSignature.store(0, std::memory_order_release);
             g_mapActionInteractive.store(false, std::memory_order_release);
+            g_mapActionTapOnly.store(false, std::memory_order_release);
             g_mapUiDirty.store(true, std::memory_order_release);
             g_uiResetMask.fetch_or(kResetMapUi, std::memory_order_acq_rel);
         } else {
@@ -2344,6 +2506,7 @@ namespace CFS::Bridge
             g_targetStatusReady.store(false, std::memory_order_release);
             g_targetStatusFailed.store(false, std::memory_order_release);
             g_cruiseActive.store(false, std::memory_order_release);
+            g_cruiseEngageAvailable.store(false, std::memory_order_release);
             g_hudUiDirty.store(true, std::memory_order_release);
             g_uiResetMask.fetch_or(kResetHudUi, std::memory_order_acq_rel);
         }

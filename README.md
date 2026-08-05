@@ -32,10 +32,17 @@ integration, and native ship target assignment are intentionally rejected in
 
 - Tap/release marks the body and returns to the cockpit. Starting Cruise normally
   afterward locks that marked body.
-- Completing the Starmap hold fill marks the body, closes the map, and latches a
-  held state through the stock `SpaceshipHudMenu.ProcessUserEvent` path. Vanilla
-  owns the cockpit threshold; the latch releases when Cruise becomes active or
-  after a four-second safety limit.
+- When the cockpit's stock Cruise action is currently available, completing the
+  Starmap hold fill marks the body, closes the map, and latches a held state
+  through the stock `SpaceshipHudMenu.ProcessUserEvent` path. Vanilla owns the
+  cockpit threshold; the latch releases when Cruise becomes active or after a
+  four-second safety limit.
+- If Cruise was already active when the map opened, the Starmap instead shows one
+  `SET CRUISE TARGET` action. A tap closes the map and queues the selected body as
+  the new course; there is no hold action or `HOLD TO CRUISE` affordance.
+- If Cruise is inactive but the stock cockpit action is temporarily unavailable,
+  such as its short post-exit cooldown, the same tap-only action marks the body
+  without advertising or attempting a hold-to-engage action.
 - The cockpit shows `CRUISE TARGET: <name>` while a mark exists. It changes to
   `LOCKING CRUISE TARGET` and `CRUISE LOCK` as engine readback advances.
 
@@ -104,15 +111,19 @@ xmake -y
 With `XSE_SF_MODS_PATH` set, the build deploys the DLL, PDB, default INI, and
 custom-INI example to `<mods>/CruiseFromStarmap/SFSE/Plugins`. It never deploys
 an ESP, replaces a SWF, or writes a body cache. While an active-flight system
-view is open, the plugin adds the Starmap's stock
-`ReleaseHoldComboButton`: `SET CRUISE TARGET` on top and `HOLD TO CRUISE`
-below. It is enabled only while the exact planet/moon gate passes; otherwise its
-disabled label explains the rejection, such as `STATIONS ARE NOT SUPPORTED` or
-`HIGHLIGHT A PLANET OR MOON`. This separate action uses the player's `Cruise` keyboard binding;
-the vanilla `SET COURSE` action and its binding remain unchanged. The added
-button is created once per Starmap movie and hidden outside flight system view. The binding
-is cached at plugin startup to keep `ControlMap` scanning off the map-open frame;
-restart Starfield after changing the Cruise key.
+view is open, the plugin adds a stock Starmap control. Before Cruise starts it is
+a `ReleaseHoldComboButton`: `SET CRUISE TARGET` on top and `HOLD TO CRUISE`
+below. If Cruise is already active or its stock cockpit hold action is currently
+unavailable, it is a tap-only `BasicButton` labeled `SET CRUISE TARGET`. The
+active variant is enabled only while the exact planet/moon gate passes;
+otherwise its disabled label explains
+the rejection, such as `STATIONS ARE NOT SUPPORTED` or
+`HIGHLIGHT A PLANET OR MOON`. This separate action uses the player's `Cruise`
+keyboard binding; the vanilla `SET COURSE` action and its binding remain
+unchanged. Each needed variant is created at most once per Starmap movie and the
+inactive one is disabled and hidden. The binding is cached at plugin startup to
+keep `ControlMap` scanning off the map-open frame; restart Starfield after
+changing the Cruise key.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the state and threading
 model and [docs/VALIDATION.md](docs/VALIDATION.md) for the acceptance matrix.
