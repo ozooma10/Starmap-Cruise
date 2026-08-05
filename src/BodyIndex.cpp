@@ -37,9 +37,39 @@ namespace CFS::BodyIndex
 
         struct PluginInfo
         {
+            enum class Tier : std::uint8_t
+            {
+                kFull,
+                kSmall,
+                kMedium,
+            };
+
             std::string name;
-            std::uint8_t index{ 0 };
+            Tier tier{ Tier::kFull };
+            std::uint16_t index{ 0 };
         };
+
+        constexpr std::uint32_t EncodeRuntimeFormID(std::uint32_t a_local,
+            PluginInfo::Tier a_tier, std::uint16_t a_index)
+        {
+            switch (a_tier) {
+            case PluginInfo::Tier::kSmall:
+                return 0xFE000000u | (static_cast<std::uint32_t>(a_index) << 12) |
+                       (a_local & 0x00000FFFu);
+            case PluginInfo::Tier::kMedium:
+                return 0xFD000000u | (static_cast<std::uint32_t>(a_index) << 16) |
+                       (a_local & 0x0000FFFFu);
+            default:
+                return (static_cast<std::uint32_t>(a_index) << 24) |
+                       (a_local & 0x00FFFFFFu);
+            }
+        }
+        static_assert(EncodeRuntimeFormID(0x01001234u, PluginInfo::Tier::kFull, 5) ==
+                      0x05001234u);
+        static_assert(EncodeRuntimeFormID(0x01001234u, PluginInfo::Tier::kMedium, 3) ==
+                      0xFD031234u);
+        static_assert(EncodeRuntimeFormID(0x01001234u, PluginInfo::Tier::kSmall, 2) ==
+                      0xFE002234u);
 
         std::mutex g_mutex;
         std::unordered_map<std::uint32_t, Entry> g_entries;
@@ -109,29 +139,49 @@ namespace CFS::BodyIndex
             const auto handler = RE::TESDataHandler::GetSingleton();
             if (!handler)
                 return plugins;
-            for (const auto* file : handler->compiledFileCollection.files) {
-                if (!file)
-                    continue;
-                const char* raw = file->fileName;
-                const auto length = ::strnlen(raw, sizeof(file->fileName));
-                if (length == 0 || length >= sizeof(file->fileName))
-                    break;
-                std::string name{ raw, length };
-                if (!(name.ends_with(".esm") || name.ends_with(".esp") || name.ends_with(".esl"))) {
-                    REX::WARN("Body index rejected suspicious load-order name '{}'", name);
-                    return {};
+
+            const auto append = [&plugins](const auto& a_files, PluginInfo::Tier a_tier) {
+                std::uint16_t tierIndex = 0;
+                for (const auto* file : a_files) {
+                    if (!file) {
+                        ++tierIndex;
+                        continue;
+                    }
+                    const char* raw = file->fileName;
+                    const auto length = ::strnlen(raw, sizeof(file->fileName));
+                    if (length == 0 || length >= sizeof(file->fileName))
+                        return false;
+                    std::string name{ raw, length };
+                    if (!(name.ends_with(".esm") || name.ends_with(".esp") || name.ends_with(".esl")))
+                        return false;
+                    const auto index = a_tier == PluginInfo::Tier::kFull ?
+                        static_cast<std::uint16_t>(file->compileIndex) : tierIndex;
+                    plugins.push_back({ std::move(name), a_tier, index });
+                    ++tierIndex;
                 }
-                plugins.push_back({ std::move(name), file->compileIndex });
+                return true;
+            };
+
+            if (!append(handler->compiledFileCollection.files, PluginInfo::Tier::kFull) ||
+                !append(handler->compiledFileCollection.smallFiles, PluginInfo::Tier::kSmall) ||
+                !append(handler->compiledFileCollection.mediumFiles, PluginInfo::Tier::kMedium)) {
+                REX::WARN("[bodies] active plugin collection failed validation");
+                return {};
             }
+
+            REX::INFO("[bodies] active plugin tiers: full={} small={} medium={} total={}",
+                handler->compiledFileCollection.files.size(),
+                handler->compiledFileCollection.smallFiles.size(),
+                handler->compiledFileCollection.mediumFiles.size(), plugins.size());
             return plugins;
         }
 
         std::uint32_t ResolveFormID(std::uint32_t a_local,
-            const std::vector<std::uint8_t>& a_masters, std::uint8_t a_self)
+            const std::vector<PluginInfo>& a_masters, const PluginInfo& a_self)
         {
             const auto slot = static_cast<std::size_t>(a_local >> 24);
-            const auto owner = slot < a_masters.size() ? a_masters[slot] : a_self;
-            return (static_cast<std::uint32_t>(owner) << 24) | (a_local & 0x00FFFFFFu);
+            const auto& owner = slot < a_masters.size() ? a_masters[slot] : a_self;
+            return EncodeRuntimeFormID(a_local, owner.tier, owner.index);
         }
 
         bool ReadMasters(const std::filesystem::path& a_path, std::vector<std::string>& a_out)
@@ -168,7 +218,7 @@ namespace CFS::BodyIndex
             return 0;
         }
 
-        void ParsePlugin(const PluginInfo& a_plugin, const std::vector<std::uint8_t>& a_masters,
+        void ParsePlugin(const PluginInfo& a_plugin, const std::vector<PluginInfo>& a_masters,
             std::unordered_map<std::uint32_t, Entry>& a_out)
         {
             const auto path = std::filesystem::path{ "Data" } / a_plugin.name;
@@ -218,7 +268,7 @@ namespace CFS::BodyIndex
                 });
                 if (!haveGalaxy)
                     continue;
-                const auto runtimeID = ResolveFormID(record.formID, a_masters, a_plugin.index);
+                const auto runtimeID = ResolveFormID(record.formID, a_masters, a_plugin);
                 const auto form = RE::TESForm::LookupByID(runtimeID);
                 if (!form || form->GetFormType() != RE::FormType::kPNDT)
                     continue;
@@ -238,7 +288,7 @@ namespace CFS::BodyIndex
         std::thread{ [plugins] {
             const auto started = std::chrono::steady_clock::now();
             std::unordered_map<std::uint32_t, Entry> entries;
-            std::unordered_map<std::string, std::uint8_t> indices;
+            std::unordered_map<std::string, PluginInfo> pluginByName;
             const auto fold = [](std::string text) {
                 std::ranges::transform(text, text.begin(), [](unsigned char ch) {
                     return static_cast<char>(std::tolower(ch));
@@ -246,17 +296,23 @@ namespace CFS::BodyIndex
                 return text;
             };
             for (const auto& plugin : plugins)
-                indices[fold(plugin.name)] = plugin.index;
+                pluginByName[fold(plugin.name)] = plugin;
             for (const auto& plugin : plugins) {
                 std::vector<std::string> masterNames;
                 if (!ReadMasters(std::filesystem::path{ "Data" } / plugin.name, masterNames)) {
                     REX::WARN("[bodies] could not read {}", plugin.name);
                     continue;
                 }
-                std::vector<std::uint8_t> masters;
+                std::vector<PluginInfo> masters;
                 for (const auto& master : masterNames) {
-                    const auto found = indices.find(fold(master));
-                    masters.push_back(found == indices.end() ? 0 : found->second);
+                    const auto found = pluginByName.find(fold(master));
+                    if (found == pluginByName.end()) {
+                        REX::WARN("[bodies] {} master '{}' is not active; records using it will not resolve",
+                            plugin.name, master);
+                        masters.push_back({});
+                    } else {
+                        masters.push_back(found->second);
+                    }
                 }
                 ParsePlugin(plugin, masters, entries);
             }

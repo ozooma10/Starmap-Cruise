@@ -13,24 +13,11 @@ namespace CFS::Settings
 {
     namespace
     {
-        REX::TIniSetting<std::string> sMode{ "General", "sMode", "SelectThenCruise" };
+        REX::TIniSetting<std::string> sMode{ "General", "sMode", "TapHoldCruise" };
         REX::TIniSetting<bool> bShowMarker{ "General", "bShowMarker", false };
         REX::TIniSetting<bool> bShowDestinationName{ "General", "bShowDestinationName", true };
+        REX::TIniSetting<bool> bShowTargetStatus{ "General", "bShowTargetStatus", true };
         REX::TIniSetting<bool> bVerboseLog{ "General", "bVerboseLog", true };
-        Mode g_mode{ Mode::kSelectThenCruise };
-
-        const char* ModeName(Mode a_mode)
-        {
-            switch (a_mode) {
-            case Mode::kSelectThenCruise:
-                return "SelectThenCruise";
-            case Mode::kMarkOnly:
-                return "MarkOnly";
-            case Mode::kHoldToCruise:
-                return "HoldToCruise";
-            }
-            return "SelectThenCruise";
-        }
     }
 
     void Load()
@@ -44,24 +31,17 @@ namespace CFS::Settings
         std::ranges::transform(mode, mode.begin(), [](unsigned char ch) {
             return static_cast<char>(std::tolower(ch));
         });
-        if (mode == "selectthencruise") {
-            g_mode = Mode::kSelectThenCruise;
-        } else if (mode == "markonly") {
-            g_mode = Mode::kMarkOnly;
-        } else if (mode == "holdtocruise") {
-            g_mode = Mode::kHoldToCruise;
-        } else {
-            g_mode = Mode::kSelectThenCruise;
-            REX::WARN("Unknown sMode='{}'; using SelectThenCruise", sMode.GetValue());
-        }
+        if (mode != "tapholdcruise")
+            REX::WARN("sMode={} is no longer exposed; using the supported TapHoldCruise flow",
+                sMode.GetValue());
 
-        REX::INFO("config: mode={} marker={} destinationName={} verbose={}",
-            ModeName(g_mode),
-            bShowMarker.GetValue(), bShowDestinationName.GetValue(), bVerboseLog.GetValue());
+        REX::INFO("config: mode=TapHoldCruise marker={} destinationName={} targetStatus={} verbose={}",
+            bShowMarker.GetValue(), bShowDestinationName.GetValue(),
+            bShowTargetStatus.GetValue(), bVerboseLog.GetValue());
     }
 
-    Mode GetMode() { return g_mode; }
     bool ShowMarker() { return bShowMarker.GetValue(); }
     bool ShowDestinationName() { return bShowDestinationName.GetValue(); }
+    bool ShowTargetStatus() { return bShowTargetStatus.GetValue(); }
     bool Verbose() { return bVerboseLog.GetValue(); }
 }

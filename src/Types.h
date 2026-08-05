@@ -31,13 +31,6 @@ namespace CFS
         [[nodiscard]] explicit operator bool() const noexcept { return formID != 0; }
     };
 
-    enum class Mode : std::uint8_t
-    {
-        kSelectThenCruise,
-        kMarkOnly,
-        kHoldToCruise,
-    };
-
     enum class NavState : std::uint8_t
     {
         kIdle,

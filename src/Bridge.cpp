@@ -1,10 +1,12 @@
 #include "Bridge.h"
 
 #include "BodyIndex.h"
+#include "MainThreadUiPump.h"
 #include "Settings.h"
 #include "Types.h"
 
 #include "RE/B/BSInputEventUser.h"
+#include "RE/B/BSService.h"
 #include "RE/U/UI.h"
 #include "SFSE/SFSE.h"
 
@@ -17,6 +19,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <exception>
 #include <format>
 #include <mutex>
 #include <optional>
@@ -36,9 +39,19 @@ namespace CFS::Bridge
         constexpr std::int32_t kSystemView = 1;
         constexpr std::uint32_t kPlanetType = 2;
         constexpr std::uint32_t kMoonType = 3;
+        constexpr std::uint32_t kStationType = 4;
         constexpr double kArrivalDistanceLightSeconds = 0.05;
         constexpr std::uint32_t kNavigationColor = 0x66CCFF;
         constexpr std::uint32_t kCruiseColor = 0xF5A04E;
+        constexpr const char* kCruiseMapActionLabel = "SET CRUISE TARGET";
+        constexpr const char* kCruiseMapActionHoldLabel = "HOLD TO CRUISE";
+        constexpr const char* kCruiseMapUserEvent = "Cruise";
+        constexpr REL::ID kControlMapSingletonPtr{ 938003 };
+        constexpr std::size_t kControlMapSize = 0x3A0;
+        constexpr std::size_t kControlMapContextSlotsOffset = 0x10;
+        constexpr std::size_t kControlMapMappingStride = 0x28;
+        constexpr std::size_t kMaxControlMappings = 4096;
+        constexpr std::array<std::uint8_t, 2> kCruiseControlContexts{ 0x21, 0x4D };
         constexpr std::array<std::uint8_t, 16> kIsInSpace116244Prologue{
             0x48, 0x89, 0x5C, 0x24, 0x10, 0x55, 0x56, 0x57,
             0x48, 0x83, 0xEC, 0x40, 0x40, 0x32, 0xF6, 0x48,
@@ -57,6 +70,10 @@ namespace CFS::Bridge
         MovieState g_mapMovie;
         MovieState g_hudMovie;
         std::atomic<bool> g_subscribeInFlight{ false };
+        std::atomic<bool> g_mainFramePending{ false };
+        std::atomic<std::uint32_t> g_uiResetMask{ 0 };
+        constexpr std::uint32_t kResetMapUi = 1u << 0;
+        constexpr std::uint32_t kResetHudUi = 1u << 1;
 
         struct MapSnapshot
         {
@@ -80,12 +97,50 @@ namespace CFS::Bridge
             std::string dossierName;
         };
 
+        enum class EligibilityCode : std::uint8_t
+        {
+            kHidden,
+            kTargetDataLoading,
+            kCruiseKeyUnbound,
+            kCurrentSystemUnavailable,
+            kSelectBody,
+            kAmbiguousTarget,
+            kStationUnsupported,
+            kTargetTypeUnsupported,
+            kTargetDataUpdating,
+            kTargetNotIndexed,
+            kOtherSystem,
+            kEligible,
+        };
+
+        struct MapEligibility
+        {
+            EligibilityCode code{ EligibilityCode::kHidden };
+            bool show{ false };
+            bool enabled{ false };
+            std::string label;
+            std::string detail;
+            std::optional<BodyDestination> destination;
+        };
+
         std::mutex g_mapMutex;
         MapSnapshot g_map;
         std::atomic<std::uint32_t> g_mapSession{ 0 };
         std::atomic<bool> g_mapOpen{ false };
         std::atomic<bool> g_closeRequested{ false };
         std::atomic<bool> g_selectionAcceptedThisOpen{ false };
+        std::atomic<std::uint64_t> g_mapActionHintSignature{ 0 };
+        std::atomic<bool> g_mapUiDirty{ false };
+
+        struct MapActionHintState
+        {
+            std::uint32_t generation{ 0 };
+            bool ready{ false };
+            bool installed{ false };
+            V cruiseButton;
+            V cruiseButtonData;
+        } g_mapActionHint;
+        std::atomic<bool> g_mapActionInteractive{ false };
 
         std::mutex g_destinationMutex;
         std::optional<BodyDestination> g_destination;
@@ -102,6 +157,7 @@ namespace CFS::Bridge
             RE::InputEvent::DeviceType device{ RE::InputEvent::DeviceType::kNone };
             std::int32_t idCode{ 0 };
             std::uint32_t session{ 0 };
+            bool completed{ false };
             bool sawCockpitContext{ false };
             bool timeoutLogged{ false };
             bool suppressUntilRelease{ false };
@@ -111,6 +167,20 @@ namespace CFS::Bridge
         std::mutex g_holdMutex;
         PhysicalHold g_hold;
         bool g_claimMapKey{ false };
+
+        enum class HudCruiseInputPhase : std::uint8_t
+        {
+            kIdle,
+            kPressPending,
+            kPressed,
+            kReleasePending,
+        };
+
+        std::mutex g_hudCruiseInputMutex;
+        HudCruiseInputPhase g_hudCruiseInputPhase{ HudCruiseInputPhase::kIdle };
+        const char* g_hudCruiseUserEvent{ "Cruise" };
+        bool g_hudCruiseInputLatched{ false };
+        Clock::time_point g_hudCruiseInputStarted{};
 
         struct CourseRequest
         {
@@ -133,6 +203,17 @@ namespace CFS::Bridge
         };
         std::mutex g_hudRowsMutex;
         std::vector<HudRow> g_hudRows;
+        std::atomic<bool> g_hudLowDirty{ false };
+
+        struct Bearing
+        {
+            bool valid{ false };
+            double angle{ 0.0 };
+            double distance{ -1.0 };
+        };
+        std::mutex g_hudBearingsMutex;
+        std::vector<Bearing> g_hudBearings;
+        std::atomic<bool> g_hudUiDirty{ false };
         std::atomic<double> g_markedDistance{ -1.0 };
         std::atomic<bool> g_courseWasLocked{ false };
         std::atomic<std::uint32_t> g_arrivalCheckID{ 0 };
@@ -149,9 +230,46 @@ namespace CFS::Bridge
         V g_markerLabel;
         V g_markerFormat;
 
+        std::atomic<bool> g_targetStatusReady{ false };
+        std::atomic<bool> g_targetStatusFailed{ false };
+        std::atomic<bool> g_targetStatusBuildInFlight{ false };
+        V g_targetStatus;
+        V g_targetStatusLabel;
+        V g_targetStatusFormat;
+
         using ProcessInput_t = void (*)(RE::BSInputEventReceiver*, const RE::InputEvent*);
         std::atomic<ProcessInput_t> g_originalInput{ nullptr };
         std::atomic<bool> g_inputInstalled{ false };
+        std::atomic<std::int32_t> g_cruiseMapKey{ -1 };
+        std::atomic<std::int32_t> g_cruiseMapModifier{ -1 };
+
+        struct ControlMapArray
+        {
+            std::uint32_t size;
+            std::uint32_t capacity;
+            std::uintptr_t data;
+        };
+        static_assert(sizeof(ControlMapArray) == 0x10);
+
+        struct ControlMapMapping
+        {
+            std::uintptr_t eventEntry;
+            std::uint32_t keyCode;
+            std::uint32_t modifierCode;
+            std::uint8_t bindingSlot;
+            std::uint8_t unk11;
+            std::uint16_t unk12;
+            std::uint8_t sortIndex;
+            std::uint8_t unk15[3];
+            std::uint32_t contextMask;
+            std::uint8_t bindingMeta;
+            std::uint8_t visibleInControls;
+            std::uint8_t defaultWasUnbound;
+            std::uint8_t unk1F;
+            std::uint8_t required;
+            std::uint8_t pad21[7];
+        };
+        static_assert(sizeof(ControlMapMapping) == kControlMapMappingStride);
 
         void ResolveCurrentSystem(const std::vector<HudRow>& a_rows)
         {
@@ -208,6 +326,128 @@ namespace CFS::Bridge
                 return {};
             const char* text = member.GetString();
             return text ? text : "";
+        }
+
+        bool IsReadableRange(std::uintptr_t a_address, std::size_t a_size)
+        {
+            if (!a_address || !a_size || a_address > UINTPTR_MAX - a_size)
+                return false;
+
+            const auto end = a_address + a_size;
+            while (a_address < end) {
+                MEMORY_BASIC_INFORMATION memory{};
+                if (::VirtualQuery(reinterpret_cast<const void*>(a_address),
+                        &memory, sizeof(memory)) != sizeof(memory) ||
+                    memory.State != MEM_COMMIT ||
+                    (memory.Protect & (PAGE_GUARD | PAGE_NOACCESS)) != 0)
+                    return false;
+
+                const auto regionEnd = reinterpret_cast<std::uintptr_t>(memory.BaseAddress) +
+                                       memory.RegionSize;
+                if (regionEnd <= a_address)
+                    return false;
+                a_address = std::min(end, regionEnd);
+            }
+            return true;
+        }
+
+        template <class T>
+        bool ReadMemory(std::uintptr_t a_address, T& a_value)
+        {
+            if (!IsReadableRange(a_address, sizeof(T)))
+                return false;
+            std::memcpy(&a_value, reinterpret_cast<const void*>(a_address), sizeof(T));
+            return true;
+        }
+
+        std::string ReadControlMapEvent(std::uintptr_t a_entry)
+        {
+            for (std::size_t depth = 0; a_entry && depth < 8; ++depth) {
+                std::uint8_t flags = 0;
+                if (!ReadMemory(a_entry + 0x14, flags))
+                    return {};
+                if ((flags & 0x02) == 0) {
+                    std::uint32_t length = 0;
+                    if (!ReadMemory(a_entry + 0x08, length) || length > 128 ||
+                        !IsReadableRange(a_entry + 0x18, length))
+                        return {};
+                    return std::string{ reinterpret_cast<const char*>(a_entry + 0x18), length };
+                }
+                if (!ReadMemory(a_entry + 0x08, a_entry))
+                    return {};
+            }
+            return {};
+        }
+
+        bool FindCruiseKeyboardBinding(std::uintptr_t a_controlMap,
+            std::uint8_t a_context, std::int32_t& a_key, std::int32_t& a_modifier)
+        {
+            std::uintptr_t context = 0;
+            if (!ReadMemory(a_controlMap + kControlMapContextSlotsOffset +
+                    static_cast<std::size_t>(a_context) * sizeof(std::uintptr_t), context) ||
+                !context)
+                return false;
+
+            ControlMapArray mappings{};  // keyboard is device array zero
+            if (!ReadMemory(context, mappings) || mappings.size > mappings.capacity ||
+                mappings.size > kMaxControlMappings ||
+                (mappings.size && !IsReadableRange(mappings.data,
+                    static_cast<std::size_t>(mappings.size) * kControlMapMappingStride)))
+                return false;
+
+            for (const auto desiredSlot : { std::uint8_t{ 0 }, std::uint8_t{ 1 } }) {
+                for (std::uint32_t i = 0; i < mappings.size; ++i) {
+                    ControlMapMapping mapping{};
+                    std::memcpy(&mapping,
+                        reinterpret_cast<const void*>(mappings.data +
+                            static_cast<std::size_t>(i) * kControlMapMappingStride),
+                        sizeof(mapping));
+                    if (mapping.bindingSlot != desiredSlot ||
+                        ReadControlMapEvent(mapping.eventEntry) != kCruiseMapUserEvent ||
+                        mapping.keyCode == 0xFF || mapping.keyCode == 0x7FFFFFFF ||
+                        mapping.keyCode > 0xFE)
+                        continue;
+
+                    a_key = static_cast<std::int32_t>(mapping.keyCode);
+                    a_modifier = mapping.modifierCode == 0xFF ||
+                                         mapping.modifierCode == 0x7FFFFFFF ?
+                                     -1 :
+                                     static_cast<std::int32_t>(mapping.modifierCode);
+                    return a_modifier <= 0xFE;
+                }
+            }
+            return false;
+        }
+
+        void ResolveCruiseMapBinding()
+        {
+            REL::Relocation<std::uintptr_t*> singleton{ kControlMapSingletonPtr };
+            std::uintptr_t controlMap = 0;
+            std::uintptr_t vtable = 0;
+            if (!ReadMemory(singleton.address(), controlMap) ||
+                !IsReadableRange(controlMap, kControlMapSize) ||
+                !ReadMemory(controlMap, vtable) ||
+                vtable != RE::VTABLE::ControlMap[0].address()) {
+                g_cruiseMapKey.store(-1, std::memory_order_release);
+                g_cruiseMapModifier.store(-1, std::memory_order_release);
+                REX::WARN("[input] live Cruise keyboard binding unavailable: ControlMap validation failed");
+                return;
+            }
+
+            std::int32_t key = -1;
+            std::int32_t modifier = -1;
+            for (const auto context : kCruiseControlContexts)
+                if (FindCruiseKeyboardBinding(controlMap, context, key, modifier))
+                    break;
+
+            const auto oldKey = g_cruiseMapKey.exchange(key, std::memory_order_acq_rel);
+            const auto oldModifier = g_cruiseMapModifier.exchange(modifier, std::memory_order_acq_rel);
+            if (key < 0) {
+                REX::WARN("[input] Cruise has no keyboard binding in ShipHUD; Starmap Cruise action disabled");
+            } else if (oldKey != key || oldModifier != modifier) {
+                REX::INFO("[input] Starmap Cruise action follows live Cruise binding: VK=0x{:02X} modifier={}",
+                    key, modifier < 0 ? "none" : std::format("0x{:02X}", modifier));
+            }
         }
 
         bool Payload(const RE::Scaleform::GFx::FunctionHandler::Params& a_params, V& a_data)
@@ -288,6 +528,53 @@ namespace CFS::Bridge
                 g_marker.SetMember("visible", V{ false });
         }
 
+        void CancelOrReleaseHudCruiseInput(const char* a_reason)
+        {
+            const char* action = nullptr;
+            {
+                std::lock_guard lock{ g_hudCruiseInputMutex };
+                g_hudCruiseInputLatched = false;
+                g_hudCruiseInputStarted = {};
+                if (g_hudCruiseInputPhase == HudCruiseInputPhase::kPressPending) {
+                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
+                    g_hudCruiseUserEvent = "Cruise";
+                    action = "cancelled pending press";
+                } else if (g_hudCruiseInputPhase == HudCruiseInputPhase::kPressed) {
+                    g_hudCruiseInputPhase = HudCruiseInputPhase::kReleasePending;
+                    action = "queued release";
+                }
+            }
+            g_hudUiDirty.store(true, std::memory_order_release);
+            if (action && Settings::Verbose())
+                REX::INFO("[input] HUD Cruise {}: {}", action, a_reason);
+        }
+
+        bool QueueHudCruisePress(RE::InputEvent::DeviceType a_device)
+        {
+            std::lock_guard lock{ g_hudCruiseInputMutex };
+            if (g_hudCruiseInputPhase != HudCruiseInputPhase::kIdle)
+                return false;
+            // ShipReticle installs a different quick/hold combo for controller
+            // mode. Both combos reach the same stock Cruise hold callback.
+            g_hudCruiseUserEvent = a_device == RE::InputEvent::DeviceType::kGamepad ?
+                                       "SHMonocle" :
+                                       "Cruise";
+            g_hudCruiseInputPhase = HudCruiseInputPhase::kPressPending;
+            // The Starmap's completed fill is the user's confirmation. Keep
+            // the separate cockpit hold pressed even if the physical key is
+            // released, then release on Cruise activation or the safety limit.
+            g_hudCruiseInputLatched = true;
+            g_hudCruiseInputStarted = Clock::now();
+            g_hudUiDirty.store(true, std::memory_order_release);
+            return true;
+        }
+
+        bool HudCruiseInputLatched()
+        {
+            std::lock_guard lock{ g_hudCruiseInputMutex };
+            return g_hudCruiseInputLatched;
+        }
+
         void ResetHold(const char* a_reason)
         {
             bool changed = false;
@@ -297,6 +584,7 @@ namespace CFS::Bridge
                 g_hold = {};
                 g_claimMapKey = false;
             }
+            CancelOrReleaseHudCruiseInput(a_reason);
             const auto state = g_state.load(std::memory_order_acquire);
             if (state == NavState::kAwaitingCruise || state == NavState::kMapSelection)
                 g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
@@ -323,6 +611,7 @@ namespace CFS::Bridge
             g_markedDistance.store(-1.0, std::memory_order_release);
             g_courseWasLocked.store(false, std::memory_order_release);
             g_arrivalCheckID.store(0, std::memory_order_release);
+            g_hudUiDirty.store(true, std::memory_order_release);
             if (old)
                 REX::INFO("[destination] cleared {:08X} '{}': {}", old->formID,
                     old->localizedName, a_reason);
@@ -346,6 +635,7 @@ namespace CFS::Bridge
             g_markedDistance.store(-1.0, std::memory_order_release);
             g_courseWasLocked.store(false, std::memory_order_release);
             g_arrivalCheckID.store(0, std::memory_order_release);
+            g_hudUiDirty.store(true, std::memory_order_release);
             if (old && old->formID != a_destination.formID)
                 REX::INFO("[destination] replaced {:08X} '{}' with {:08X} '{}'",
                     old->formID, old->localizedName, a_destination.formID,
@@ -358,96 +648,114 @@ namespace CFS::Bridge
                     a_destination.kind == BodyKind::kMoon ? "moon" : "planet");
         }
 
-        std::optional<BodyDestination> ResolveMapSelection(std::string& a_reason)
+        MapEligibility EvaluateMapSelection(MapSnapshot a_snapshot)
         {
-            if (!BodyIndex::Ready()) {
-                a_reason = "PNDT/GNAM index is not ready";
-                return std::nullopt;
-            }
+            const auto unavailable = [](EligibilityCode a_code, std::string a_label,
+                                         std::string a_detail) {
+                return MapEligibility{
+                    .code = a_code,
+                    .show = true,
+                    .enabled = false,
+                    .label = std::move(a_label),
+                    .detail = std::move(a_detail),
+                };
+            };
 
-            MapSnapshot snapshot;
-            {
-                std::lock_guard lock{ g_mapMutex };
-                snapshot = g_map;
+            if (!a_snapshot.openedWhileFlying || a_snapshot.view != kSystemView ||
+                a_snapshot.session == 0 ||
+                a_snapshot.session != g_mapSession.load(std::memory_order_acquire) ||
+                a_snapshot.generation != g_mapMovie.generation.load(std::memory_order_acquire)) {
+                return {
+                    .code = EligibilityCode::kHidden,
+                    .detail = "not an active-flight system-view map session",
+                };
             }
-
-            if (!snapshot.openedWhileFlying) {
-                a_reason = "map was not opened during active flight";
-                return std::nullopt;
+            if (!BodyIndex::Ready())
+                return unavailable(EligibilityCode::kTargetDataLoading,
+                    "CRUISE TARGET DATA LOADING", "PNDT/GNAM index is not ready");
+            if (g_cruiseMapKey.load(std::memory_order_acquire) < 0)
+                return unavailable(EligibilityCode::kCruiseKeyUnbound,
+                    "CRUISE KEY IS NOT BOUND", "Cruise has no keyboard binding");
+            if (!a_snapshot.haveCapturedSystem)
+                return unavailable(EligibilityCode::kCurrentSystemUnavailable,
+                    "CURRENT SYSTEM UNAVAILABLE",
+                    "cockpit current system was not resolved before map open");
+            if (a_snapshot.highlightedMarkerCount == 0)
+                return unavailable(EligibilityCode::kSelectBody,
+                    "HIGHLIGHT A PLANET OR MOON",
+                    "system view has no highlight-radius marker candidate");
+            if (a_snapshot.highlightedMarkerCount != 1)
+                return unavailable(EligibilityCode::kAmbiguousTarget,
+                    "TARGET IS AMBIGUOUS",
+                    std::format("system view has {} highlight-radius marker candidates",
+                        a_snapshot.highlightedMarkerCount));
+            if (a_snapshot.markerBodyType == kStationType)
+                return unavailable(EligibilityCode::kStationUnsupported,
+                    "STATIONS ARE NOT SUPPORTED",
+                    std::format("highlight-radius marker {:08X} is station type {}",
+                        a_snapshot.markerBodyID, a_snapshot.markerBodyType));
+            if (a_snapshot.markerBodyID == 0 ||
+                (a_snapshot.markerBodyType != kPlanetType &&
+                    a_snapshot.markerBodyType != kMoonType)) {
+                return unavailable(EligibilityCode::kTargetTypeUnsupported,
+                    "TARGET TYPE IS NOT SUPPORTED",
+                    std::format("highlight-radius marker is {:08X}/{}",
+                        a_snapshot.markerBodyID, a_snapshot.markerBodyType));
             }
-            if (snapshot.session == 0 ||
-                snapshot.session != g_mapSession.load(std::memory_order_acquire)) {
-                a_reason = "map session was replaced";
-                return std::nullopt;
-            }
-            if (snapshot.generation != g_mapMovie.generation.load(std::memory_order_acquire)) {
-                a_reason = "map movie was replaced";
-                return std::nullopt;
-            }
-            if (snapshot.view != kSystemView) {
-                a_reason = std::format("view {} is not system view {}", snapshot.view, kSystemView);
-                return std::nullopt;
-            }
-            if (!snapshot.haveCapturedSystem) {
-                a_reason = "cockpit current system was not resolved before map open";
-                return std::nullopt;
-            }
-            if (snapshot.highlightedMarkerCount != 1) {
-                a_reason = std::format(
-                    "system view has {} highlight-radius marker candidates; exactly one is required",
-                    snapshot.highlightedMarkerCount);
-                return std::nullopt;
-            }
-            if (snapshot.markerBodyID == 0 ||
-                (snapshot.markerBodyType != kPlanetType && snapshot.markerBodyType != kMoonType)) {
-                a_reason = std::format(
-                    "highlight-radius marker is not a planet/moon candidate ({:08X}/{})",
-                    snapshot.markerBodyID, snapshot.markerBodyType);
-                return std::nullopt;
-            }
-            if (snapshot.dossierBodyID == 0 ||
-                (snapshot.dossierBodyType != kPlanetType && snapshot.dossierBodyType != kMoonType)) {
-                a_reason = std::format(
-                    "system-view dossier has no planet/moon PNDT candidate ({:08X}/{})",
-                    snapshot.dossierBodyID, snapshot.dossierBodyType);
-                return std::nullopt;
-            }
-            if (snapshot.markerBodyID != snapshot.dossierBodyID ||
-                snapshot.markerBodyType != snapshot.dossierBodyType) {
-                a_reason = std::format(
-                    "highlight-radius marker {:08X}/{} differs from dossier {:08X}/{}",
-                    snapshot.markerBodyID, snapshot.markerBodyType,
-                    snapshot.dossierBodyID, snapshot.dossierBodyType);
-                return std::nullopt;
+            if (a_snapshot.dossierBodyID == 0 ||
+                (a_snapshot.dossierBodyType != kPlanetType &&
+                    a_snapshot.dossierBodyType != kMoonType) ||
+                a_snapshot.markerBodyID != a_snapshot.dossierBodyID ||
+                a_snapshot.markerBodyType != a_snapshot.dossierBodyType) {
+                return unavailable(EligibilityCode::kTargetDataUpdating,
+                    "TARGET DATA IS UPDATING",
+                    std::format("marker {:08X}/{} differs from dossier {:08X}/{}",
+                        a_snapshot.markerBodyID, a_snapshot.markerBodyType,
+                        a_snapshot.dossierBodyID, a_snapshot.dossierBodyType));
             }
 
             // Live 1.16.244 proof identifies the selected system-view body as
             // the one StarMapMenuMarkersData row with bIsInHighlightRadius.
             // Tree focus remains the system/star and does not join identity.
-            const auto form = RE::TESForm::LookupByID(snapshot.dossierBodyID);
+            const auto form = RE::TESForm::LookupByID(a_snapshot.dossierBodyID);
             if (!form || form->GetFormType() != RE::FormType::kPNDT) {
-                a_reason = std::format("system-view dossier {:08X} is not a live PNDT form",
-                    snapshot.dossierBodyID);
-                return std::nullopt;
+                return unavailable(EligibilityCode::kTargetTypeUnsupported,
+                    "TARGET TYPE IS NOT SUPPORTED",
+                    std::format("dossier {:08X} is not a live PNDT form",
+                        a_snapshot.dossierBodyID));
             }
-            const auto body = BodyIndex::Lookup(snapshot.dossierBodyID);
+            const auto body = BodyIndex::Lookup(a_snapshot.dossierBodyID);
             if (!body) {
-                a_reason = std::format("system-view dossier PNDT {:08X} has no parsed GNAM identity",
-                    snapshot.dossierBodyID);
-                return std::nullopt;
+                return unavailable(EligibilityCode::kTargetNotIndexed,
+                    "TARGET DATA IS NOT AVAILABLE",
+                    std::format("dossier PNDT {:08X} has no parsed GNAM identity",
+                        a_snapshot.dossierBodyID));
             }
-            if (body->galaxy.system != snapshot.capturedSystem) {
-                a_reason = std::format("dossier PNDT {:08X} system {} differs from captured cockpit system {}",
-                    snapshot.dossierBodyID, body->galaxy.system, snapshot.capturedSystem);
-                return std::nullopt;
+            if (body->galaxy.system != a_snapshot.capturedSystem) {
+                return unavailable(EligibilityCode::kOtherSystem,
+                    "CURRENT SYSTEM TARGETS ONLY",
+                    std::format("dossier PNDT {:08X} system {} differs from cockpit system {}",
+                        a_snapshot.dossierBodyID, body->galaxy.system,
+                        a_snapshot.capturedSystem));
             }
 
-            return BodyDestination{
-                .kind = snapshot.dossierBodyType == kMoonType ? BodyKind::kMoon : BodyKind::kPlanet,
-                .formID = snapshot.dossierBodyID,
+            auto destination = BodyDestination{
+                .kind = a_snapshot.dossierBodyType == kMoonType ? BodyKind::kMoon : BodyKind::kPlanet,
+                .formID = a_snapshot.dossierBodyID,
                 .galaxy = body->galaxy,
-                .localizedName = snapshot.dossierName.empty() ? snapshot.markerName : snapshot.dossierName,
-                .menuGeneration = snapshot.generation,
+                .localizedName = a_snapshot.dossierName.empty() ?
+                    a_snapshot.markerName : a_snapshot.dossierName,
+                .menuGeneration = a_snapshot.generation,
+            };
+            return {
+                .code = EligibilityCode::kEligible,
+                .show = true,
+                .enabled = true,
+                .label = kCruiseMapActionLabel,
+                .detail = std::format("eligible {} {:08X} '{}'",
+                    destination.kind == BodyKind::kMoon ? "moon" : "planet",
+                    destination.formID, destination.localizedName),
+                .destination = std::move(destination),
             };
         }
 
@@ -455,6 +763,7 @@ namespace CFS::Bridge
         {
             std::lock_guard lock{ g_courseMutex };
             g_courseRequest = { a_id, a_clearing, Clock::now() };
+            g_hudUiDirty.store(true, std::memory_order_release);
             if (Settings::Verbose())
                 REX::INFO("[course] queued {} for {:08X}", a_clearing ? "clear" : "lock", a_id);
         }
@@ -480,6 +789,65 @@ namespace CFS::Bridge
             if (event.IsObject() && manager.Invoke("dispatchEvent", nullptr, &event, 1))
                 return true;
             return manager.Invoke("dispatchCustomEvent", nullptr, args, a_params ? 2 : 1);
+        }
+
+        bool InvokeHudCruiseUserEvent(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+            const char* a_rootPath, const char* a_userEvent, bool a_down)
+        {
+            V menu;
+            const char* path = a_rootPath && *a_rootPath ? a_rootPath : "root";
+            if (!a_root->GetVariable(&menu, path) ||
+                !(menu.IsObject() || menu.IsDisplayObject())) {
+                REX::WARN("[input] HUD root '{}' unavailable for Cruise {}",
+                    path, a_down ? "press" : "release");
+                return false;
+            }
+
+            V eventName;
+            a_root->CreateString(&eventName, a_userEvent);
+            V args[2]{ eventName, V{ a_down } };
+            V handled;
+            const bool invoked = menu.Invoke("ProcessUserEvent", &handled, args, 2);
+            REX::INFO("[input] forwarded stock HUD '{}' {} invoked={} handled={}",
+                a_userEvent, a_down ? "press" : "release", invoked,
+                handled.IsBoolean() ? handled.GetBoolean() : false);
+            return invoked;
+        }
+
+        void DriveHudCruiseInput(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+            const char* a_rootPath)
+        {
+            bool press = false;
+            bool release = false;
+            const char* userEvent = "Cruise";
+            {
+                std::lock_guard lock{ g_hudCruiseInputMutex };
+                userEvent = g_hudCruiseUserEvent;
+                if (g_hudCruiseInputPhase == HudCruiseInputPhase::kPressPending) {
+                    // Publish the new phase before calling ActionScript. This
+                    // prevents a synchronous callback from repeating the edge.
+                    g_hudCruiseInputPhase = HudCruiseInputPhase::kPressed;
+                    press = true;
+                } else if (g_hudCruiseInputPhase == HudCruiseInputPhase::kReleasePending) {
+                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
+                    g_hudCruiseUserEvent = "Cruise";
+                    release = true;
+                }
+            }
+
+            if (press && !InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, true)) {
+                {
+                    std::lock_guard lock{ g_hudCruiseInputMutex };
+                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
+                    g_hudCruiseUserEvent = "Cruise";
+                    g_hudCruiseInputLatched = false;
+                    g_hudCruiseInputStarted = {};
+                }
+                g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
+                    std::memory_order_release);
+            } else if (release) {
+                InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, false);
+            }
         }
 
         void RunCourseRequest(RE::Scaleform::GFx::ASMovieRootBase* a_root)
@@ -518,46 +886,77 @@ namespace CFS::Bridge
             }
         }
 
-        void AcceptSelection(const RE::ButtonEvent* a_button)
+        enum class MapAction : std::uint8_t
         {
-            std::string reason;
-            const auto selected = ResolveMapSelection(reason);
-            if (!selected) {
+            kNone,
+            kTap,
+            kHold,
+        };
+        std::atomic<MapAction> g_pendingMapAction{ MapAction::kNone };
+
+        void AcceptSelection(MapAction a_action)
+        {
+            if (a_action == MapAction::kNone)
+                return;
+            MapSnapshot snapshot;
+            {
+                std::lock_guard lock{ g_mapMutex };
+                snapshot = g_map;
+            }
+            const auto eligibility = EvaluateMapSelection(std::move(snapshot));
+            if (!eligibility.enabled || !eligibility.destination) {
                 if (Settings::Verbose())
-                    REX::INFO("[map] SetRouteDestination left to vanilla: {}", reason);
+                    REX::INFO("[map] Cruise action rejected: {}", eligibility.detail);
                 return;
             }
+            const auto& selected = *eligibility.destination;
 
             const auto existing = Destination();
-            const bool same = existing && existing->formID == selected->formID;
-            if (same) {
-                const bool courseMatches = g_confirmedCourseID.load(std::memory_order_acquire) == selected->formID;
+            const bool same = existing && existing->formID == selected.formID;
+            if (same && a_action == MapAction::kTap) {
+                const bool courseMatches = g_confirmedCourseID.load(std::memory_order_acquire) == selected.formID;
                 ClearDestination("explicit same-body toggle");
                 if (courseMatches && g_cruiseActive.load(std::memory_order_acquire))
-                    QueueCourse(selected->formID, true);
-            } else {
-                StoreDestination(*selected);
+                    QueueCourse(selected.formID, true);
+            } else if (!same) {
+                StoreDestination(selected);
             }
 
             {
                 std::lock_guard lock{ g_holdMutex };
-                g_claimMapKey = true;
-                g_hold = {
-                    .active = true,
-                    .device = a_button->deviceType,
-                    .idCode = a_button->idCode,
-                    .session = g_mapSession.load(std::memory_order_acquire),
-                    .sawCockpitContext = false,
-                    .timeoutLogged = false,
-                    .suppressUntilRelease = false,
-                    .started = Clock::now(),
-                };
+                const bool liveHold = a_action == MapAction::kHold && g_hold.active &&
+                    g_hold.session == g_mapSession.load(std::memory_order_acquire);
+                if (a_action == MapAction::kHold && !liveHold) {
+                    REX::WARN("[map] completed UI hold had no matching physical control; preserving target without starting Cruise");
+                }
+                g_hold.completed = liveHold;
+                g_claimMapKey = liveHold;
             }
             g_selectionAcceptedThisOpen.store(true, std::memory_order_release);
             g_closeRequested.store(true, std::memory_order_release);
-            REX::INFO("[map] accepted {:08X}; consumed SetRouteDestination and requested normal menu hide",
-                selected->formID);
+            REX::INFO("[map] accepted {} {:08X}; requested normal menu hide",
+                a_action == MapAction::kHold ? "hold" : "tap", selected.formID);
         }
+
+        class MapActionHandler : public RE::Scaleform::GFx::FunctionHandler
+        {
+        public:
+            explicit MapActionHandler(MapAction a_action) : action(a_action) {}
+
+            void Call(const Params&) override
+            {
+                // This callback is executing inside the AS3 VM. Record only a
+                // value signal; selection evaluation and engine/UI side effects
+                // run from the post-advance pump after the VM unwinds.
+                g_pendingMapAction.store(action, std::memory_order_release);
+            }
+
+        private:
+            MapAction action;
+        };
+
+        MapActionHandler g_mapTapActionHandler{ MapAction::kTap };
+        MapActionHandler g_mapHoldActionHandler{ MapAction::kHold };
 
         bool ObserveButton(const RE::ButtonEvent* a_button)
         {
@@ -566,12 +965,30 @@ namespace CFS::Bridge
             const char* raw = a_button->strUserEvent.c_str();
             const std::string_view name = raw ? raw : "";
 
-            if (g_mapOpen.load(std::memory_order_acquire) && first && name == "SetRouteDestination") {
+            if (g_mapOpen.load(std::memory_order_acquire) && first &&
+                (name == kCruiseMapUserEvent || name == "SHMonocle")) {
                 if (a_button->disabled)
                     return false;
-                const auto before = g_selectionAcceptedThisOpen.load(std::memory_order_acquire);
-                AcceptSelection(a_button);
-                return !before && g_selectionAcceptedThisOpen.load(std::memory_order_acquire);
+                // The runtime-installed ReleaseHoldComboButton must receive the
+                // Cruise down/up stream so its stock hold timer and fill
+                // animation can distinguish tap from completed hold. Capture
+                // only the physical identity here; its callbacks accept the
+                // action after the UI gesture finishes.
+                if (g_mapActionInteractive.load(std::memory_order_acquire)) {
+                    std::lock_guard lock{ g_holdMutex };
+                    g_claimMapKey = false;
+                    g_hold = {
+                        .active = true,
+                        .device = a_button->deviceType,
+                        .idCode = a_button->idCode,
+                        .session = g_mapSession.load(std::memory_order_acquire),
+                        .sawCockpitContext = false,
+                        .timeoutLogged = false,
+                        .suppressUntilRelease = false,
+                        .started = Clock::now(),
+                    };
+                }
+                return false;
             }
 
             std::lock_guard lock{ g_holdMutex };
@@ -585,8 +1002,19 @@ namespace CFS::Bridge
             }
 
             if (g_hold.suppressUntilRelease) {
-                if (!down)
+                if (!down) {
                     g_hold.active = false;
+                    if (HudCruiseInputLatched()) {
+                        if (Settings::Verbose())
+                            REX::INFO("[input] physical control released after completed Starmap hold; HUD Cruise remains pressed until activation");
+                    } else {
+                        CancelOrReleaseHudCruiseInput("physical control released");
+                    }
+                    if (g_state.load(std::memory_order_acquire) == NavState::kAwaitingCruise &&
+                        !g_cruiseActive.load(std::memory_order_acquire))
+                        g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
+                            std::memory_order_release);
+                }
                 return true;
             }
 
@@ -612,6 +1040,28 @@ namespace CFS::Bridge
             return false;
         }
 
+        bool RouteCruiseMapKey(RE::ButtonEvent* a_button)
+        {
+            const auto key = g_cruiseMapKey.load(std::memory_order_acquire);
+            const auto modifier = g_cruiseMapModifier.load(std::memory_order_acquire);
+            if (!a_button || !g_mapOpen.load(std::memory_order_acquire) ||
+                !g_mapActionInteractive.load(std::memory_order_acquire) || a_button->disabled ||
+                a_button->deviceType != RE::InputEvent::DeviceType::kKeyboard ||
+                key < 0 || a_button->idCode != key)
+                return false;
+
+            // The engine's StarMap context normally names this physical key as
+            // a map action rather than Cruise. Route the down edge only when a
+            // configured chord modifier is held; always route release so the
+            // stock combo button cannot be left in its down state.
+            if (a_button->value != 0.0f && modifier >= 0 &&
+                (::GetAsyncKeyState(modifier) & 0x8000) == 0)
+                return false;
+
+            a_button->strUserEvent = RE::BSFixedString{ kCruiseMapUserEvent };
+            return true;
+        }
+
         void ProcessInputHook(RE::BSInputEventReceiver* a_receiver, const RE::InputEvent* a_head)
         {
             struct Fix
@@ -619,16 +1069,31 @@ namespace CFS::Bridge
                 RE::InputEvent* node{ nullptr };
                 RE::InputEvent* next{ nullptr };
             };
+            struct RoutedEvent
+            {
+                RE::ButtonEvent* event{ nullptr };
+                RE::BSFixedString originalName;
+            };
             std::array<Fix, 16> fixes{};
+            std::array<RoutedEvent, 16> routedEvents{};
             std::size_t fixCount = 0;
+            std::size_t routedCount = 0;
             const RE::InputEvent* head = a_head;
             RE::InputEvent* previous = nullptr;
 
             for (auto* event = a_head; event;) {
                 auto* next = event->next;
                 bool drop = false;
-                if (event->eventType == RE::InputEvent::EventType::kButton)
-                    drop = ObserveButton(static_cast<const RE::ButtonEvent*>(event));
+                if (event->eventType == RE::InputEvent::EventType::kButton) {
+                    auto* button = const_cast<RE::ButtonEvent*>(
+                        static_cast<const RE::ButtonEvent*>(event));
+                    if (routedCount < routedEvents.size()) {
+                        const auto originalName = button->strUserEvent;
+                        if (RouteCruiseMapKey(button))
+                            routedEvents[routedCount++] = { button, originalName };
+                    }
+                    drop = ObserveButton(button);
+                }
                 if (drop && fixCount < fixes.size()) {
                     if (previous) {
                         fixes[fixCount++] = { previous, previous->next };
@@ -646,6 +1111,8 @@ namespace CFS::Bridge
                 original(a_receiver, head);
             for (std::size_t i = fixCount; i-- > 0;)
                 fixes[i].node->next = fixes[i].next;
+            for (std::size_t i = routedCount; i-- > 0;)
+                routedEvents[i].event->strUserEvent = routedEvents[i].originalName;
         }
 
         void TryInstallInputHook()
@@ -667,6 +1134,231 @@ namespace CFS::Bridge
             REX::INFO("[input] UI::PerformInputProcessing hook installed (physical device/id tracking)");
         }
 
+        std::uint64_t EligibilitySignature(const MapSnapshot& a_snapshot,
+            const MapEligibility& a_eligibility)
+        {
+            std::uint64_t signature = 1469598103934665603ull;
+            const auto mix = [&signature](std::uint64_t a_value) {
+                signature ^= a_value;
+                signature *= 1099511628211ull;
+            };
+            mix(a_snapshot.generation);
+            mix(a_snapshot.session);
+            mix(static_cast<std::uint64_t>(a_eligibility.code));
+            mix(a_snapshot.markerBodyID);
+            mix(a_snapshot.markerBodyType);
+            mix(a_snapshot.dossierBodyID);
+            mix(a_snapshot.dossierBodyType);
+            return signature;
+        }
+
+        bool GetMapButtonBar(V& a_hintBar, V& a_buttonBar)
+        {
+            return a_hintBar.GetMember("HintBar_mc", &a_buttonBar) &&
+                   (a_buttonBar.IsObject() || a_buttonBar.IsDisplayObject());
+        }
+
+        bool BuildCruiseMapButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+            V& a_buttonBar, V& a_vanillaData, V& a_button, V& a_buttonData)
+        {
+            V pressEventName;
+            a_root->CreateString(&pressEventName, kCruiseMapUserEvent);
+
+            V tapCallback;
+            a_root->CreateFunction(&tapCallback, &g_mapTapActionHandler);
+            V pressArgs[2]{ pressEventName, tapCallback };
+            V pressEvent;
+            a_root->CreateObject(&pressEvent,
+                "Shared.Components.ButtonControls.ButtonData.UserEventData", pressArgs, 2);
+            if (!(pressEvent.IsObject() || pressEvent.IsDisplayObject())) {
+                REX::WARN("[map] stacked action hint unavailable: tap UserEventData construction failed");
+                return false;
+            }
+
+            V emptyName;
+            a_root->CreateString(&emptyName, "");
+            V holdCallback;
+            a_root->CreateFunction(&holdCallback, &g_mapHoldActionHandler);
+            V holdArgs[2]{ emptyName, holdCallback };
+            V holdEvent;
+            a_root->CreateObject(&holdEvent,
+                "Shared.Components.ButtonControls.ButtonData.UserEventData", holdArgs, 2);
+            if (!(holdEvent.IsObject() || holdEvent.IsDisplayObject())) {
+                REX::WARN("[map] stacked action hint unavailable: UserEventData construction failed");
+                return false;
+            }
+
+            V events;
+            a_root->CreateArray(&events);
+            if (!events.IsArray() || !events.PushBack(pressEvent) || !events.PushBack(holdEvent)) {
+                REX::WARN("[map] stacked action hint unavailable: combo event array construction failed");
+                return false;
+            }
+
+            V pressLabel;
+            V holdLabel;
+            a_root->CreateString(&pressLabel, kCruiseMapActionLabel);
+            a_root->CreateString(&holdLabel, kCruiseMapActionHoldLabel);
+            V dataArgs[3]{ pressLabel, holdLabel, events };
+            a_root->CreateObject(&a_buttonData,
+                "Shared.Components.ButtonControls.ButtonData.ReleaseHoldComboButtonData",
+                dataArgs, 3);
+            if (!(a_buttonData.IsObject() || a_buttonData.IsDisplayObject())) {
+                REX::WARN("[map] stacked action hint unavailable: ReleaseHoldComboButtonData construction failed");
+                return false;
+            }
+
+            for (const char* member : { "bEnabled", "bVisible" }) {
+                V value;
+                if (a_vanillaData.GetMember(member, &value))
+                    a_buttonData.SetMember(member, value);
+            }
+
+            // ReleaseHoldComboButton is an imported library symbol. Let the
+            // movie instantiate it through the same factory used by
+            // StarMapButtonHintBar.PopulateButtons; creating the AS3 class
+            // directly does not attach the exported display asset.
+            V factory;
+            if (!a_root->GetVariable(&factory,
+                    "Shared.Components.ButtonControls.ButtonFactory.ButtonFactory") ||
+                !(factory.IsObject() || factory.IsDisplayObject())) {
+                REX::WARN("[map] stacked action hint unavailable: stock ButtonFactory is inaccessible");
+                return false;
+            }
+            V buttonType;
+            a_root->CreateString(&buttonType, "ReleaseHoldComboButton");
+            V factoryArgs[3]{ buttonType, a_buttonData, a_buttonBar };
+            if (!factory.Invoke("AddToButtonBar", &a_button, factoryArgs, 3) ||
+                !(a_button.IsObject() || a_button.IsDisplayObject())) {
+                REX::WARN("[map] stacked action hint unavailable: stock ButtonFactory rejected ReleaseHoldComboButton");
+                return false;
+            }
+
+            return true;
+        }
+
+        void SyncCruiseMapButton(V& a_vanillaData, V& a_buttonBar,
+            const MapEligibility& a_eligibility)
+        {
+            bool enabled = a_eligibility.enabled;
+            V vanillaEnabled;
+            if (enabled && a_vanillaData.GetMember("bEnabled", &vanillaEnabled) &&
+                vanillaEnabled.IsBoolean()) {
+                enabled = vanillaEnabled.GetBoolean();
+            }
+
+            g_mapActionHint.cruiseButtonData.SetMember("bEnabled", V{ enabled });
+            g_mapActionHint.cruiseButtonData.SetMember("bVisible", V{ a_eligibility.show });
+            const bool labelSet = g_mapActionHint.cruiseButtonData.SetMember(
+                "sButtonText", V{ a_eligibility.label.c_str() });
+            const bool holdLabelSet = g_mapActionHint.cruiseButtonData.SetMember(
+                "sHoldButtonText",
+                V{ a_eligibility.enabled ? kCruiseMapActionHoldLabel : "" });
+            if ((!labelSet || !holdLabelSet) && Settings::Verbose())
+                REX::WARN("[map] action data rejected dynamic labels (tap={} hold={})",
+                    labelSet, holdLabelSet);
+            g_mapActionHint.installed = a_eligibility.show;
+            g_mapActionInteractive.store(enabled, std::memory_order_release);
+            g_mapActionHint.cruiseButton.Invoke("RefreshButtonData");
+            a_buttonBar.Invoke("RefreshButtons");
+        }
+
+        bool InstallCruiseMapButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+            V& a_buttonBar, V& a_vanillaData,
+            std::uint32_t a_generation, const MapEligibility& a_eligibility)
+        {
+            const bool create = !g_mapActionHint.ready ||
+                                g_mapActionHint.generation != a_generation;
+            if (create) {
+                V cruiseButton;
+                V cruiseButtonData;
+                if (!BuildCruiseMapButton(a_root, a_buttonBar, a_vanillaData,
+                        cruiseButton, cruiseButtonData)) {
+                    REX::WARN("[map] stacked action hint installation failed; preserving vanilla route button");
+                    return false;
+                }
+                g_mapActionHint.generation = a_generation;
+                g_mapActionHint.ready = true;
+                g_mapActionHint.cruiseButton = std::move(cruiseButton);
+                g_mapActionHint.cruiseButtonData = std::move(cruiseButtonData);
+            }
+
+            SyncCruiseMapButton(a_vanillaData, a_buttonBar, a_eligibility);
+            return true;
+        }
+
+        void HideCruiseMapButton(V& a_vanillaData, V& a_buttonBar)
+        {
+            SyncCruiseMapButton(a_vanillaData, a_buttonBar, {});
+        }
+
+        void UpdateMapActionHint()
+        {
+            MapSnapshot snapshot;
+            {
+                std::lock_guard lock{ g_mapMutex };
+                snapshot = g_map;
+            }
+            const auto eligibility = EvaluateMapSelection(snapshot);
+            const auto signature = EligibilitySignature(snapshot, eligibility);
+            const bool signatureChanged =
+                g_mapActionHintSignature.load(std::memory_order_acquire) != signature;
+            if (!signatureChanged)
+                return;
+
+            const auto ui = RE::UI::GetSingleton();
+            const RE::BSFixedString mapName{ kMapMenu };
+            const auto menu = ui ? ui->GetMenu(mapName) : nullptr;
+            if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot)
+                return;
+            auto* root = menu->uiMovie->asMovieRoot.get();
+            const char* rootPath = menu->GetRootPath();
+            const std::string hintPath = std::format("{}.ButtonHintBar_mc",
+                rootPath && *rootPath ? rootPath : "root");
+            V hintBar;
+            V buttonData;
+            if (!root->GetVariable(&hintBar, hintPath.c_str()) ||
+                !(hintBar.IsObject() || hintBar.IsDisplayObject()) ||
+                !hintBar.GetMember("SetRouteDestinationButtonData", &buttonData) ||
+                !(buttonData.IsObject() || buttonData.IsDisplayObject()))
+                return;
+
+            V buttonBar;
+            if (!GetMapButtonBar(hintBar, buttonBar))
+                return;
+
+            if (g_mapActionHint.ready && g_mapActionHint.generation != snapshot.generation)
+            {
+                g_mapActionHint = {};
+                g_mapActionInteractive.store(false, std::memory_order_release);
+            }
+
+            bool updated = false;
+            if (eligibility.show) {
+                if (!g_mapActionHint.installed) {
+                    updated = InstallCruiseMapButton(root, buttonBar, buttonData,
+                        snapshot.generation, eligibility);
+                } else {
+                    SyncCruiseMapButton(buttonData, buttonBar, eligibility);
+                    updated = true;
+                }
+            } else if (g_mapActionHint.installed) {
+                HideCruiseMapButton(buttonData, buttonBar);
+                updated = true;
+            } else {
+                updated = true;
+            }
+            if (!updated)
+                return;
+
+            g_mapActionHintSignature.store(signature, std::memory_order_release);
+            if (Settings::Verbose() && signatureChanged)
+                REX::INFO("[map] action hint -> {} '{}' ({}, session={} generation={})",
+                    eligibility.show ? (eligibility.enabled ? "ENABLED" : "DISABLED") : "HIDDEN",
+                    eligibility.show ? eligibility.label : "",
+                    eligibility.detail, snapshot.session, snapshot.generation);
+        }
+
         class MapDataHandler : public RE::Scaleform::GFx::FunctionHandler
         {
         public:
@@ -676,24 +1368,27 @@ namespace CFS::Bridge
                 if (!Payload(a_params, data))
                     return;
                 V value;
-                std::lock_guard lock{ g_mapMutex };
-                if (data.GetMember("iCurrentMenuView", &value)) {
-                    const auto view = static_cast<std::int32_t>(AsNumber(value));
-                    if (view != g_map.view) {
-                        g_map.treeBodyID = 0;
-                        g_map.treeBodyType = 0;
-                        g_map.highlightedMarkerCount = 0;
-                        g_map.markerBodyID = 0;
-                        g_map.markerBodyType = 0;
-                        g_map.markerName.clear();
-                        g_map.dossierBodyID = 0;
-                        g_map.dossierBodyType = 0;
-                        g_map.dossierName.clear();
+                {
+                    std::lock_guard lock{ g_mapMutex };
+                    if (data.GetMember("iCurrentMenuView", &value)) {
+                        const auto view = static_cast<std::int32_t>(AsNumber(value));
+                        if (view != g_map.view) {
+                            g_map.treeBodyID = 0;
+                            g_map.treeBodyType = 0;
+                            g_map.highlightedMarkerCount = 0;
+                            g_map.markerBodyID = 0;
+                            g_map.markerBodyType = 0;
+                            g_map.markerName.clear();
+                            g_map.dossierBodyID = 0;
+                            g_map.dossierBodyType = 0;
+                            g_map.dossierName.clear();
+                        }
+                        g_map.view = view;
                     }
-                    g_map.view = view;
+                    g_map.systemLocationID = UIntMember(data, "uSystemLocationID");
+                    g_map.bodyLocationID = UIntMember(data, "uBodyLocationID");
                 }
-                g_map.systemLocationID = UIntMember(data, "uSystemLocationID");
-                g_map.bodyLocationID = UIntMember(data, "uBodyLocationID");
+                g_mapUiDirty.store(true, std::memory_order_release);
             }
         } g_mapDataHandler;
 
@@ -707,21 +1402,16 @@ namespace CFS::Bridge
                     return;
                 const auto bodyID = UIntMember(data, "focusedBodyID");
                 const auto bodyType = UIntMember(data, "focusedBodyType");
-                std::lock_guard lock{ g_mapMutex };
-                if (bodyID != g_map.treeBodyID || bodyType != g_map.treeBodyType) {
-                    // Provider callbacks are asynchronous. Invalidate the copied
-                    // selection join when the tree snapshot changes; current
-                    // marker/dossier callbacks must repopulate it.
-                    g_map.highlightedMarkerCount = 0;
-                    g_map.markerBodyID = 0;
-                    g_map.markerBodyType = 0;
-                    g_map.markerName.clear();
-                    g_map.dossierBodyID = 0;
-                    g_map.dossierBodyType = 0;
-                    g_map.dossierName.clear();
+                {
+                    std::lock_guard lock{ g_mapMutex };
+                    // Live evidence shows this provider identifies the system/star,
+                    // not the highlighted body. Keep it diagnostic-only: clearing
+                    // the marker/dossier join here made eligibility depend on
+                    // asynchronous callback order.
+                    g_map.treeBodyID = bodyID;
+                    g_map.treeBodyType = bodyType;
                 }
-                g_map.treeBodyID = bodyID;
-                g_map.treeBodyType = bodyType;
+                g_mapUiDirty.store(true, std::memory_order_release);
             }
         } g_bodyInfoHandler;
 
@@ -764,17 +1454,20 @@ namespace CFS::Bridge
                     if (markers.IsArray())
                         markers.VisitElements(&visitor);
                 }
-                std::lock_guard lock{ g_mapMutex };
-                g_map.highlightedMarkerCount = visitor.highlightedCount;
-                if (visitor.highlightedCount == 1) {
-                    g_map.markerBodyID = visitor.bodyID;
-                    g_map.markerBodyType = visitor.bodyType;
-                    g_map.markerName = std::move(visitor.name);
-                } else {
-                    g_map.markerBodyID = 0;
-                    g_map.markerBodyType = 0;
-                    g_map.markerName.clear();
+                {
+                    std::lock_guard lock{ g_mapMutex };
+                    g_map.highlightedMarkerCount = visitor.highlightedCount;
+                    if (visitor.highlightedCount == 1) {
+                        g_map.markerBodyID = visitor.bodyID;
+                        g_map.markerBodyType = visitor.bodyType;
+                        g_map.markerName = std::move(visitor.name);
+                    } else {
+                        g_map.markerBodyID = 0;
+                        g_map.markerBodyType = 0;
+                        g_map.markerName.clear();
+                    }
                 }
+                g_mapUiDirty.store(true, std::memory_order_release);
             }
         } g_markersHandler;
 
@@ -786,10 +1479,13 @@ namespace CFS::Bridge
                 V data;
                 if (!Payload(a_params, data))
                     return;
-                std::lock_guard lock{ g_mapMutex };
-                g_map.dossierBodyID = UIntMember(data, "uBodyID");
-                g_map.dossierBodyType = UIntMember(data, "iType");
-                g_map.dossierName = StringMember(data, "sBodyName");
+                {
+                    std::lock_guard lock{ g_mapMutex };
+                    g_map.dossierBodyID = UIntMember(data, "uBodyID");
+                    g_map.dossierBodyType = UIntMember(data, "iType");
+                    g_map.dossierName = StringMember(data, "sBodyName");
+                }
+                g_mapUiDirty.store(true, std::memory_order_release);
             }
         } g_dossierHandler;
 
@@ -833,58 +1529,63 @@ namespace CFS::Bridge
 
                 LowCollector collector;
                 array.VisitElements(&collector);
-
-                ResolveCurrentSystem(collector.rows);
-
-                std::uint32_t course = 0;
-                for (const auto& row : collector.rows)
-                    if (row.courseLocked) {
-                        course = row.id;
-                        break;
-                    }
-                const auto previousCourse = g_confirmedCourseID.exchange(course, std::memory_order_acq_rel);
-                const auto asked = g_courseAskedID.load(std::memory_order_acquire);
-                if (asked && g_courseAskedClearing.load(std::memory_order_acquire) && course != asked) {
-                    g_courseAskedID.store(0, std::memory_order_release);
-                    g_courseAskedClearing.store(false, std::memory_order_release);
-                    REX::INFO("[course] engine confirmed clear of {:08X}", asked);
-                }
-
                 {
                     std::lock_guard lock{ g_hudRowsMutex };
-                    g_hudRows = collector.rows;
+                    g_hudRows = std::move(collector.rows);
                 }
-
-                const auto destination = Destination();
-                if (!destination)
-                    return;
-
-                if (course == destination->formID) {
-                    g_courseWasLocked.store(true, std::memory_order_release);
-                    g_courseAskedID.store(0, std::memory_order_release);
-                    g_courseAskedClearing.store(false, std::memory_order_release);
-                    g_state.store(NavState::kAutopilotLocked, std::memory_order_release);
-                    if (previousCourse != course)
-                        REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
-                            destination->formID, destination->localizedName);
-                } else if (previousCourse == destination->formID &&
-                    g_courseWasLocked.exchange(false, std::memory_order_acq_rel)) {
-                    g_arrivalCheckID.store(destination->formID, std::memory_order_release);
-                    g_arrivalCheckTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
-                    g_state.store(NavState::kMarked, std::memory_order_release);
-                    if (Settings::Verbose())
-                        REX::INFO("[arrival] Cruise lock left {:08X}; waiting for arrival evidence",
-                            destination->formID);
-                }
+                g_hudLowDirty.store(true, std::memory_order_release);
+                g_hudUiDirty.store(true, std::memory_order_release);
             }
         } g_lowHandler;
 
-        struct Bearing
+        void ProcessLowSnapshot()
         {
-            bool valid{ false };
-            double angle{ 0.0 };
-            double distance{ -1.0 };
-        };
+            if (!g_hudLowDirty.exchange(false, std::memory_order_acq_rel))
+                return;
+
+            std::vector<HudRow> rows;
+            {
+                std::lock_guard lock{ g_hudRowsMutex };
+                rows = g_hudRows;
+            }
+            ResolveCurrentSystem(rows);
+
+            std::uint32_t course = 0;
+            for (const auto& row : rows)
+                if (row.courseLocked) {
+                    course = row.id;
+                    break;
+                }
+            const auto previousCourse = g_confirmedCourseID.exchange(course, std::memory_order_acq_rel);
+            const auto asked = g_courseAskedID.load(std::memory_order_acquire);
+            if (asked && g_courseAskedClearing.load(std::memory_order_acquire) && course != asked) {
+                g_courseAskedID.store(0, std::memory_order_release);
+                g_courseAskedClearing.store(false, std::memory_order_release);
+                REX::INFO("[course] engine confirmed clear of {:08X}", asked);
+            }
+
+            const auto destination = Destination();
+            if (!destination)
+                return;
+
+            if (course == destination->formID) {
+                g_courseWasLocked.store(true, std::memory_order_release);
+                g_courseAskedID.store(0, std::memory_order_release);
+                g_courseAskedClearing.store(false, std::memory_order_release);
+                g_state.store(NavState::kAutopilotLocked, std::memory_order_release);
+                if (previousCourse != course)
+                    REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
+                        destination->formID, destination->localizedName);
+            } else if (previousCourse == destination->formID &&
+                g_courseWasLocked.exchange(false, std::memory_order_acq_rel)) {
+                g_arrivalCheckID.store(destination->formID, std::memory_order_release);
+                g_arrivalCheckTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
+                g_state.store(NavState::kMarked, std::memory_order_release);
+                if (Settings::Verbose())
+                    REX::INFO("[arrival] Cruise lock left {:08X}; waiting for arrival evidence",
+                        destination->formID);
+            }
+        }
 
         class HighCollector : public V::ArrayVisitor
         {
@@ -918,9 +1619,9 @@ namespace CFS::Bridge
         }
 
         bool AddSprite(RE::Scaleform::GFx::ASMovieRootBase* a_root, V& a_parent,
-            V& a_out, const char* a_name)
+            V& a_out, const char* a_name, std::int32_t a_depth = 21000)
         {
-            if (a_parent.CreateEmptyMovieClip(&a_out, a_name, 21000))
+            if (a_parent.CreateEmptyMovieClip(&a_out, a_name, a_depth))
                 return true;
             a_root->CreateObject(&a_out, "flash.display.Sprite");
             if (!(a_out.IsObject() || a_out.IsDisplayObject()))
@@ -930,7 +1631,7 @@ namespace CFS::Bridge
         }
 
         bool BorrowTextFormat(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            const std::string& a_base)
+            const std::string& a_base, V& a_format)
         {
             const char* donors[]{
                 ".Reticle_mc.ShipReticle_mc.LockOn_mc.LockText_tf",
@@ -940,7 +1641,7 @@ namespace CFS::Bridge
             for (const auto* suffix : donors) {
                 V donor;
                 if (a_root->GetVariable(&donor, (a_base + suffix).c_str()) &&
-                    donor.Invoke("getTextFormat", &g_markerFormat) && g_markerFormat.IsObject())
+                    donor.Invoke("getTextFormat", &a_format) && a_format.IsObject())
                     return true;
             }
             return false;
@@ -965,6 +1666,90 @@ namespace CFS::Bridge
             graphics.Invoke("lineTo", nullptr, p0, 2);
             graphics.Invoke("endFill", nullptr, nullptr, 0);
             return true;
+        }
+
+        void TryCreateTargetStatus(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+            const char* a_rootPath)
+        {
+            if (!Settings::ShowTargetStatus() ||
+                g_targetStatusReady.load(std::memory_order_acquire) ||
+                g_targetStatusFailed.load(std::memory_order_acquire) || !WorldSettled())
+                return;
+            if (g_targetStatusBuildInFlight.exchange(true, std::memory_order_acq_rel))
+                return;
+            struct Release
+            {
+                ~Release()
+                {
+                    g_targetStatusBuildInFlight.store(false, std::memory_order_release);
+                }
+            } release;
+
+            const std::string base{ a_rootPath ? a_rootPath : "root" };
+            V reticle;
+            if (!a_root->GetVariable(&reticle, (base + ".Reticle_mc").c_str()))
+                return;
+            if (!AddSprite(a_root, reticle, g_targetStatus,
+                    "CruiseFromStarmapTargetStatus", 21001)) {
+                g_targetStatusFailed.store(true, std::memory_order_release);
+                REX::WARN("[status] cockpit target-status construction failed");
+                return;
+            }
+
+            a_root->CreateObject(&g_targetStatusLabel, "flash.text.TextField");
+            if (!(g_targetStatusLabel.IsObject() || g_targetStatusLabel.IsDisplayObject())) {
+                g_targetStatusFailed.store(true, std::memory_order_release);
+                REX::WARN("[status] cockpit target-status text construction failed");
+                return;
+            }
+            V added;
+            g_targetStatus.Invoke("addChild", &added, &g_targetStatusLabel, 1);
+            g_targetStatusLabel.SetMember("selectable", V{ false });
+            g_targetStatusLabel.SetMember("mouseEnabled", V{ false });
+            g_targetStatusLabel.SetMember("width", V{ 520.0 });
+            g_targetStatusLabel.SetMember("height", V{ 30.0 });
+            g_targetStatusLabel.SetMember("x", V{ -260.0 });
+            g_targetStatusLabel.SetMember("y", V{ 185.0 });
+            if (BorrowTextFormat(a_root, base, g_targetStatusFormat)) {
+                g_targetStatusFormat.SetMember("size", V{ 18.0 });
+                g_targetStatusFormat.SetMember("color", V{ kNavigationColor });
+                g_targetStatusFormat.SetMember("align", V{ "center" });
+                g_targetStatusLabel.SetMember("defaultTextFormat", g_targetStatusFormat);
+            }
+            g_targetStatus.SetMember("visible", V{ false });
+            g_targetStatusReady.store(true, std::memory_order_release);
+            REX::INFO("[status] cockpit Cruise target confirmation ready");
+        }
+
+        void UpdateTargetStatus(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+            const char* a_rootPath)
+        {
+            const auto destination = Destination();
+            if (!destination || !Settings::ShowTargetStatus()) {
+                if (g_targetStatusReady.load(std::memory_order_acquire))
+                    g_targetStatus.SetMember("visible", V{ false });
+                return;
+            }
+
+            TryCreateTargetStatus(a_root, a_rootPath);
+            if (!g_targetStatusReady.load(std::memory_order_acquire))
+                return;
+
+            const auto state = g_state.load(std::memory_order_acquire);
+            const bool locked = state == NavState::kAutopilotLocked;
+            const bool awaiting = state == NavState::kAwaitingCruise;
+            const auto text = std::format("{}: {}",
+                locked ? "CRUISE LOCK" : (awaiting ? "LOCKING CRUISE TARGET" : "CRUISE TARGET"),
+                destination->localizedName);
+            const auto color = locked ? kCruiseColor : kNavigationColor;
+            g_targetStatusLabel.SetMember("text", V{ text.c_str() });
+            g_targetStatusLabel.SetMember("textColor", V{ color });
+            if (g_targetStatusFormat.IsObject()) {
+                g_targetStatusFormat.SetMember("color", V{ color });
+                g_targetStatusLabel.Invoke("setTextFormat", nullptr,
+                    &g_targetStatusFormat, 1);
+            }
+            g_targetStatus.SetMember("visible", V{ true });
         }
 
         void TryCreateMarker(RE::Scaleform::GFx::ASMovieRootBase* a_root, const char* a_rootPath)
@@ -1000,7 +1785,7 @@ namespace CFS::Bridge
                 g_markerLabel.SetMember("height", V{ 28.0 });
                 g_markerLabel.SetMember("x", V{ 18.0 });
                 g_markerLabel.SetMember("y", V{ -14.0 });
-                if (BorrowTextFormat(a_root, base)) {
+                if (BorrowTextFormat(a_root, base, g_markerFormat)) {
                     g_markerFormat.SetMember("size", V{ 18.0 });
                     g_markerLabel.SetMember("defaultTextFormat", g_markerFormat);
                 }
@@ -1083,42 +1868,98 @@ namespace CFS::Bridge
 
                 HighCollector collector;
                 array.VisitElements(&collector);
-
-                const auto ui = RE::UI::GetSingleton();
-                const RE::BSFixedString hudName{ kHudMenu };
-                const auto menu = ui ? ui->GetMenu(hudName) : nullptr;
-                if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot)
-                    return;
-                auto* root = menu->uiMovie->asMovieRoot.get();
-                const char* rootPath = menu->GetRootPath();
-                const std::string base{ rootPath ? rootPath : "root" };
-                V cruise;
-                const bool active = root->GetVariable(&cruise,
-                    (base + ".Reticle_mc.CruiseModeHUDActive").c_str()) &&
-                    cruise.IsBoolean() && cruise.GetBoolean();
-                const bool wasActive = g_cruiseActive.exchange(active, std::memory_order_acq_rel);
-
-                if (active && !wasActive) {
-                    const auto state = g_state.load(std::memory_order_acquire);
-                    const auto destination = Destination();
-                    if (destination &&
-                        (state == NavState::kAwaitingCruise ||
-                            (state == NavState::kMarked &&
-                                Settings::GetMode() == Mode::kSelectThenCruise))) {
-                        g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
-                        if (state == NavState::kMarked)
-                            REX::INFO("[course] vanilla Cruise activation detected; locking marked destination {:08X}",
-                                destination->formID);
-                        QueueCourse(destination->formID, false);
-                    }
+                {
+                    std::lock_guard lock{ g_hudBearingsMutex };
+                    g_hudBearings = std::move(collector.rows);
                 }
-                if (!active && wasActive && g_state.load(std::memory_order_acquire) == NavState::kAutopilotLocked)
-                    g_state.store(NavState::kMarked, std::memory_order_release);
-
-                UpdateMarker(root, rootPath, collector.rows);
-                RunCourseRequest(root);
+                // Passed GFx values die with this callback. The post-advance
+                // pump consumes only copied C++ rows before entering AS3.
+                g_hudUiDirty.store(true, std::memory_order_release);
             }
         } g_highHandler;
+
+        void ReleaseStaleUiState()
+        {
+            const auto reset = g_uiResetMask.exchange(0, std::memory_order_acq_rel);
+            if ((reset & kResetMapUi) != 0) {
+                g_mapActionHint = {};
+                g_mapActionInteractive.store(false, std::memory_order_release);
+                g_pendingMapAction.store(MapAction::kNone, std::memory_order_release);
+            }
+            if ((reset & kResetHudUi) != 0) {
+                g_markerReady.store(false, std::memory_order_release);
+                g_markerFailed.store(false, std::memory_order_release);
+                g_marker = V{};
+                g_navGlyph = V{};
+                g_cruiseGlyph = V{};
+                g_markerLabel = V{};
+                g_markerFormat = V{};
+                g_targetStatusReady.store(false, std::memory_order_release);
+                g_targetStatusFailed.store(false, std::memory_order_release);
+                g_targetStatus = V{};
+                g_targetStatusLabel = V{};
+                g_targetStatusFormat = V{};
+                {
+                    std::lock_guard lock{ g_hudBearingsMutex };
+                    g_hudBearings.clear();
+                }
+            }
+        }
+
+        void ReconcileHudUi()
+        {
+            if (!g_hudUiDirty.load(std::memory_order_acquire) ||
+                !WorldSettled() || !IsFlying())
+                return;
+
+            const auto ui = RE::UI::GetSingleton();
+            const RE::BSFixedString hudName{ kHudMenu };
+            if (!ui || !ui->IsMenuOpen(hudName))
+                return;
+            const auto menu = ui->GetMenu(hudName);
+            if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot)
+                return;
+
+            g_hudUiDirty.store(false, std::memory_order_release);
+            auto* root = menu->uiMovie->asMovieRoot.get();
+            const char* rootPath = menu->GetRootPath();
+
+            DriveHudCruiseInput(root, rootPath);
+            UpdateTargetStatus(root, rootPath);
+
+            std::vector<Bearing> bearings;
+            {
+                std::lock_guard lock{ g_hudBearingsMutex };
+                bearings = g_hudBearings;
+            }
+
+            const std::string base{ rootPath ? rootPath : "root" };
+            V cruise;
+            const bool active = root->GetVariable(&cruise,
+                (base + ".Reticle_mc.CruiseModeHUDActive").c_str()) &&
+                cruise.IsBoolean() && cruise.GetBoolean();
+            const bool wasActive = g_cruiseActive.exchange(active, std::memory_order_acq_rel);
+
+            if (active && !wasActive) {
+                CancelOrReleaseHudCruiseInput("CruiseModeHUDActive confirmed");
+                const auto state = g_state.load(std::memory_order_acquire);
+                const auto destination = Destination();
+                if (destination &&
+                    (state == NavState::kAwaitingCruise || state == NavState::kMarked)) {
+                    g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                    if (state == NavState::kMarked)
+                        REX::INFO("[course] vanilla Cruise activation detected; locking marked destination {:08X}",
+                            destination->formID);
+                    QueueCourse(destination->formID, false);
+                }
+            }
+            if (!active && wasActive &&
+                g_state.load(std::memory_order_acquire) == NavState::kAutopilotLocked)
+                g_state.store(NavState::kMarked, std::memory_order_release);
+
+            UpdateMarker(root, rootPath, bearings);
+            RunCourseRequest(root);
+        }
 
         struct Subscription
         {
@@ -1227,6 +2068,7 @@ namespace CFS::Bridge
 
                 g_mapOpen.store(a_event.opening, std::memory_order_release);
                 if (a_event.opening) {
+                    g_mapUiDirty.store(true, std::memory_order_release);
                     const auto session = g_mapSession.fetch_add(1, std::memory_order_acq_rel) + 1;
                     const bool haveSystem = g_haveCurrentSystem.load(std::memory_order_acquire);
                     std::lock_guard lock{ g_mapMutex };
@@ -1243,6 +2085,7 @@ namespace CFS::Bridge
                             session, g_map.generation, g_map.openedWhileFlying, g_map.wasCruising,
                             haveSystem ? std::format("{}", g_map.capturedSystem) : "unresolved");
                 } else {
+                    g_mapActionInteractive.store(false, std::memory_order_release);
                     bool accepted = g_selectionAcceptedThisOpen.exchange(false, std::memory_order_acq_rel);
                     bool wasCruising = false;
                     {
@@ -1250,20 +2093,22 @@ namespace CFS::Bridge
                         wasCruising = g_map.wasCruising;
                     }
                     bool held = false;
+                    bool holdCompleted = false;
+                    auto heldDevice = RE::InputEvent::DeviceType::kNone;
                     {
                         std::lock_guard lock{ g_holdMutex };
                         held = g_hold.active;
+                        holdCompleted = g_hold.completed;
+                        heldDevice = g_hold.device;
                         g_claimMapKey = false;
-                        // Keyboard proof shows the remapped cockpit event is a
-                        // continued hold (first=false), not a usable Cruise
-                        // press. Suppress the carried event in every mode until
-                        // release; upstream synthetic replay remains prohibited.
-                        g_hold.suppressUntilRelease = true;
+                        // The Starmap fill has already confirmed intent. If the
+                        // physical key is still down, suppress its carried HUD
+                        // continuation until release; the latched HUD edge below
+                        // owns Cruise activation from this point forward.
+                        g_hold.suppressUntilRelease = accepted && holdCompleted && held;
                     }
                     if (accepted) {
-                        const auto mode = Settings::GetMode();
-                        if (wasCruising &&
-                            (mode == Mode::kHoldToCruise || mode == Mode::kSelectThenCruise)) {
+                        if (wasCruising) {
                             if (const auto destination = Destination())
                                 QueueCourse(destination->formID, false);
                             g_state.store(Destination() ? NavState::kAwaitingCruise : NavState::kIdle,
@@ -1271,13 +2116,20 @@ namespace CFS::Bridge
                         } else {
                             g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
                                 std::memory_order_release);
-                            if (held && mode == Mode::kHoldToCruise && Destination())
-                                REX::WARN("[input] one-action HoldToCruise is unavailable: the continued cockpit hold is suppressed until release and synthetic replay is disabled");
+                            if (holdCompleted && Destination()) {
+                                if (QueueHudCruisePress(heldDevice)) {
+                                    g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                                    REX::INFO("[input] completed Starmap hold queued latched stock HUD Cruise press");
+                                } else {
+                                    REX::WARN("[input] stock HUD Cruise press was already pending; destination remains marked");
+                                }
+                            }
                         }
                     }
                     if (Settings::Verbose())
-                        REX::INFO("[map] close accepted={} physicalHeld={} state={}",
-                            accepted, held, static_cast<std::uint32_t>(g_state.load(std::memory_order_acquire)));
+                        REX::INFO("[map] close accepted={} holdCompleted={} physicalHeld={} state={}",
+                            accepted, holdCompleted, held,
+                            static_cast<std::uint32_t>(g_state.load(std::memory_order_acquire)));
                 }
                 return RE::BSEventNotifyControl::kContinue;
             }
@@ -1351,15 +2203,92 @@ namespace CFS::Bridge
                 }
             }
 
-            std::lock_guard lock{ g_holdMutex };
-            if (g_hold.active && !g_hold.timeoutLogged &&
-                g_state.load(std::memory_order_acquire) == NavState::kAwaitingCruise &&
-                !g_cruiseActive.load(std::memory_order_acquire) &&
-                Clock::now() - g_hold.started > std::chrono::seconds(2)) {
-                g_hold.timeoutLogged = true;
-                REX::WARN("[input] held key did not make vanilla CruiseModeHUDActive within 2 seconds. "
-                          "The destination remains marked; synthetic input is disabled until the RE probe proves a complete queue route.");
+            bool hudHoldExpired = false;
+            {
+                std::lock_guard lock{ g_hudCruiseInputMutex };
+                hudHoldExpired = g_hudCruiseInputLatched &&
+                    g_hudCruiseInputStarted != Clock::time_point{} &&
+                    Clock::now() - g_hudCruiseInputStarted > std::chrono::seconds(4);
             }
+            if (hudHoldExpired) {
+                CancelOrReleaseHudCruiseInput("four-second activation safety limit");
+                REX::WARN("[input] latched HUD Cruise hold did not make CruiseModeHUDActive within 4 seconds; released automatically and preserved destination");
+                g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
+                    std::memory_order_release);
+            }
+        }
+
+        void RunMainThreadFrame()
+        {
+            if (BodyIndex::Ready() && !g_haveCurrentSystem.load(std::memory_order_acquire)) {
+                std::vector<HudRow> rows;
+                {
+                    std::lock_guard lock{ g_hudRowsMutex };
+                    rows = g_hudRows;
+                }
+                if (!rows.empty())
+                    ResolveCurrentSystem(rows);
+            }
+
+            if (g_closeRequested.exchange(false, std::memory_order_acq_rel)) {
+                if (const auto queue = RE::UIMessageQueue::GetSingleton())
+                    queue->AddMessage(RE::BSFixedString{ kMapMenu }, RE::UI_MESSAGE_TYPE::kHide);
+            }
+
+            const auto destination = Destination();
+            if (destination) {
+                const auto player = RE::PlayerCharacter::GetSingleton();
+                const auto ship = player ? player->GetSpaceship() : nullptr;
+                if (!IsShipInSpace(ship)) {
+                    ClearDestination("landing, docking, or leaving the pilot seat");
+                } else if (g_haveCurrentSystem.load(std::memory_order_acquire) &&
+                    g_currentSystem.load(std::memory_order_acquire) != destination->galaxy.system) {
+                    ClearDestination("system change");
+                }
+            }
+
+            CheckArrival();
+            CheckCourseTimeout();
+        }
+
+        class MainFrameTask final : public RE::BSService::QueuedDelegate
+        {
+        public:
+            void Run() override
+            {
+                struct Release
+                {
+                    ~Release()
+                    {
+                        g_mainFramePending.store(false, std::memory_order_release);
+                    }
+                } release;
+
+                try {
+                    RunMainThreadFrame();
+                } catch (const std::exception& e) {
+                    REX::ERROR("main-thread frame threw '{}'; frame dropped", e.what());
+                } catch (...) {
+                    REX::ERROR("main-thread frame threw an unknown exception; frame dropped");
+                }
+            }
+        };
+
+        bool QueueMainThreadFrame()
+        {
+            auto* queue = RE::BSService::TaskQueue::GetSingleton();
+            if (!queue)
+                return false;
+
+            RE::BSService::QueuedDelegate* task = new MainFrameTask();
+            queue->QueueTask(task);
+            if (task) {
+                // Queueing is disabled or tried to use an inline fallback.
+                // Never run engine work on the SFSE worker; retry next frame.
+                delete task;
+                return false;
+            }
+            return true;
         }
     }
 
@@ -1384,8 +2313,19 @@ namespace CFS::Bridge
         if (state == &g_mapMovie) {
             ResetHold("Starmap movie replacement");
             g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+            g_mapActionHintSignature.store(0, std::memory_order_release);
+            g_mapActionInteractive.store(false, std::memory_order_release);
+            g_mapUiDirty.store(true, std::memory_order_release);
+            g_uiResetMask.fetch_or(kResetMapUi, std::memory_order_acq_rel);
         } else {
             ResetHold("Spaceship HUD movie replacement");
+            {
+                std::lock_guard lock{ g_hudCruiseInputMutex };
+                g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
+                g_hudCruiseUserEvent = "Cruise";
+                g_hudCruiseInputLatched = false;
+                g_hudCruiseInputStarted = {};
+            }
             {
                 std::lock_guard lock{ g_courseMutex };
                 g_courseRequest = {};
@@ -1398,14 +2338,14 @@ namespace CFS::Bridge
                 std::lock_guard lock{ g_hudRowsMutex };
                 g_hudRows.clear();
             }
+            g_hudLowDirty.store(false, std::memory_order_release);
             g_markerReady.store(false, std::memory_order_release);
             g_markerFailed.store(false, std::memory_order_release);
-            g_marker = V{};
-            g_navGlyph = V{};
-            g_cruiseGlyph = V{};
-            g_markerLabel = V{};
-            g_markerFormat = V{};
+            g_targetStatusReady.store(false, std::memory_order_release);
+            g_targetStatusFailed.store(false, std::memory_order_release);
             g_cruiseActive.store(false, std::memory_order_release);
+            g_hudUiDirty.store(true, std::memory_order_release);
+            g_uiResetMask.fetch_or(kResetHudUi, std::memory_order_acq_rel);
         }
         REX::INFO("[ui] movie created: {} generation={}", name,
             state->generation.load(std::memory_order_acquire));
@@ -1413,38 +2353,47 @@ namespace CFS::Bridge
 
     void OnFrame()
     {
-        TryInstallInputHook();
-        TrySubscribe();
+        // SFSE permanent tasks run on rotating render-graph workers. This is a
+        // coalesced producer only; engine work drains through BSService on the
+        // game main thread.
+        if (g_mainFramePending.exchange(true, std::memory_order_acq_rel))
+            return;
+        if (!QueueMainThreadFrame())
+            g_mainFramePending.store(false, std::memory_order_release);
+    }
 
-        if (BodyIndex::Ready() && !g_haveCurrentSystem.load(std::memory_order_acquire)) {
-            std::vector<HudRow> rows;
-            {
-                std::lock_guard lock{ g_hudRowsMutex };
-                rows = g_hudRows;
+    void OnUiSafeFrame()
+    {
+        static std::atomic<bool> faulted{ false };
+        if (faulted.load(std::memory_order_acquire))
+            return;
+
+        try {
+            ReleaseStaleUiState();
+            TrySubscribe();
+            ProcessLowSnapshot();
+
+            const auto action = g_pendingMapAction.exchange(
+                MapAction::kNone, std::memory_order_acq_rel);
+            if (action != MapAction::kNone)
+                AcceptSelection(action);
+
+            if (g_mapUiDirty.load(std::memory_order_acquire)) {
+                const auto ui = RE::UI::GetSingleton();
+                const RE::BSFixedString mapName{ kMapMenu };
+                if (ui && ui->IsMenuOpen(mapName)) {
+                    g_mapUiDirty.store(false, std::memory_order_release);
+                    UpdateMapActionHint();
+                }
             }
-            if (!rows.empty())
-                ResolveCurrentSystem(rows);
+            ReconcileHudUi();
+        } catch (const std::exception& e) {
+            faulted.store(true, std::memory_order_release);
+            REX::ERROR("post-advance UI pump threw '{}'; disabling further Scaleform work", e.what());
+        } catch (...) {
+            faulted.store(true, std::memory_order_release);
+            REX::ERROR("post-advance UI pump threw an unknown exception; disabling further Scaleform work");
         }
-
-        if (g_closeRequested.exchange(false, std::memory_order_acq_rel)) {
-            if (const auto queue = RE::UIMessageQueue::GetSingleton())
-                queue->AddMessage(RE::BSFixedString{ kMapMenu }, RE::UI_MESSAGE_TYPE::kHide);
-        }
-
-        const auto destination = Destination();
-        if (destination) {
-            const auto player = RE::PlayerCharacter::GetSingleton();
-            const auto ship = player ? player->GetSpaceship() : nullptr;
-            if (!IsShipInSpace(ship)) {
-                ClearDestination("landing, docking, or leaving the pilot seat");
-            } else if (g_haveCurrentSystem.load(std::memory_order_acquire) &&
-                g_currentSystem.load(std::memory_order_acquire) != destination->galaxy.system) {
-                ClearDestination("system change");
-            }
-        }
-
-        CheckArrival();
-        CheckCourseTimeout();
     }
 
     void Initialize()
@@ -1460,7 +2409,12 @@ namespace CFS::Bridge
 
         if (!ValidateIsInSpaceBinding())
             return;
+        if (!MainThreadUiPump::Install()) {
+            REX::ERROR("post-advance UI pump unavailable; bridge disabled to prevent off-thread Scaleform access");
+            return;
+        }
 
+        ResolveCruiseMapBinding();
         BodyIndex::StartLoad();
         menus->Register(&OnMovieCreated);
         ui->RegisterSink<RE::MenuOpenCloseEvent>(&g_menuSink);
@@ -1468,6 +2422,6 @@ namespace CFS::Bridge
         StartFocusWatcher();
         g_lastUnsettledTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
         tasks->AddPermanentTask(&OnFrame);
-        REX::INFO("bridge initialized: bodies-first, current-system only, no serialization/API/SWF replacement");
+        REX::INFO("bridge initialized: bodies-first, current-system only, no serialization or public API");
     }
 }

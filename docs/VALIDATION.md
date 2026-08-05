@@ -10,7 +10,7 @@ treated as a proven gameplay behavior.
 - [x] DLL, INI, example override, and PDB deploy layout
 - [x] No serialization registration
 - [x] No runtime output/cache file path
-- [x] No ESP, Papyrus, SWF, or public plugin API
+- [x] No ESP, Papyrus, SWF replacement, or public plugin API
 - [x] Destination contains no retained raw form pointer
 - [x] Invalid selection paths do not splice/disable input
 - [x] Selection requires exactly one highlight-radius marker and exact dossier id/type agreement
@@ -26,9 +26,13 @@ treated as a proven gameplay behavior.
   system/star tree id and current cockpit body field
 - [x] Keyboard hold preserves physical device/id but does **not** generate a
   fresh Cruise down-edge after the map closes
-- [ ] Controller hold naturally changes from `SetRouteDestination` to Cruise input
+- [ ] Controller binding and glyph for the separate Cruise action (current live
+  ControlMap projection is keyboard-only)
 - [x] Rebound Cruise control preserves physical device/id, but the cockpit
   event is a continued hold (`first=false`) and does not activate Cruise
+- [x] Direct `Reticle_OnCruiseActivate` dispatch returns success but does not
+  activate Cruise; the full HUD `ProcessUserEvent("Cruise", down/hold/up)` path
+  activates after the stock hold threshold and was visually confirmed in-game
 - [x] Direct HUD course event locks, clears, and retargets planets and a moon,
   with low-feed/readback confirmation
 - [x] Current-system PNDT/GNAM vote stayed unanimous across the tested Alpha
@@ -50,18 +54,17 @@ last-dossier-wins remain invalid. The follow-up run proved
 handoff are in OSF RE
 `Investigations/Responses/2026-08-04-cruise-from-starmap-focus-discriminator.md`.
 
-Controller testing was blocked because no controller was available. Safe
-synthetic replay is also incomplete: the engine queue layout was recovered,
-but no public ButtonEvent enqueue wrapper or proven queue/pool/thread ownership
-route was found. Injection remains prohibited.
+Controller testing was blocked because no controller was available. Engine
+input injection remains prohibited; the production path uses the stock HUD
+movie's public user-event method from the post-advance Scaleform pump instead.
 
 ## Gameplay acceptance
 
 - [x] Flight tap marks without Cruise
-- [x] `SelectThenCruise`: release after selection, press Cruise normally, and
-  lock the correct selected body
+- [ ] Current reliability build: release after selection, press Cruise normally,
+  and lock the correct selected body
 - [ ] Flight hold enters Cruise and locks the correct body
-- [ ] Already-cruising tap changes course immediately in `HoldToCruise`
+- [ ] Already-cruising tap changes course immediately in `TapHoldCruise`
 - [ ] Off-screen/behind body receives the correct marker and course
 - [x] Same body clears; another body replaces
 - [ ] Manual Cruise exit preserves the mark
@@ -71,7 +74,8 @@ route was found. Injection remains prohibited.
 - [x] Canceling the map changes nothing
 - [ ] Galaxy/surface/inspect, another system, POI/station, and on-foot maps stay vanilla
 - [ ] HUD movie rebuild, focus loss, load, and repeated map cycles are safe
-- [x] `MarkOnly` suppresses the carried key until release
+- [ ] Disabled eligibility reasons render and never consume input
+- [ ] Fixed cockpit target status renders independently of positional bearing
 - [ ] Cruise Navigation Panel coexists; both input hooks chain and markers remain independent
 - [ ] Save made during use loads after uninstall
 
@@ -183,3 +187,118 @@ These include source/build evidence and the first production gameplay capture:
   dispatched `Reticle_OnCruiseLockCourse` for `0005E311`; the engine low feed
   confirmed the Gagarin course lock 11 ms later. Cruise visibly started toward
   Gagarin, and the default configuration logged `marker=false`.
+
+## 2026-08-04 TapHoldCruise and SWF rollback
+
+- [x] OSF RE proved that direct `Reticle_OnCruiseActivate` dispatch does not
+  start Cruise, while the stock HUD `ProcessUserEvent` press/hold/release path
+  does. The operator visually confirmed Cruise after the HUD feed became active.
+- [x] Added `TapHoldCruise` as the default and retained `SelectThenCruise` and
+  `MarkOnly`; the old `HoldToCruise` value is accepted as an alias.
+- [x] Native forwarding uses `Cruise` for keyboard/mouse and the stock
+  `SHMonocle` combo for controller. Controller behavior remains static evidence.
+- [x] Rejected and removed the FFDec `StarMapButtonHintBar.PopulateButtons`
+  replacement after its round trip dropped `NEED_ACTIVATION` plus fourteen
+  activation slots used by inline callbacks. The deployed movie crashed during
+  AS3 initialization at `Starfield.exe+331B11E`; the native plugin had completed
+  initialization and PNDT indexing but no menu callback had run.
+- [x] Build, release, and MO2 contain no SWF after rollback. The action label is
+  now changed through the stock public `ButtonBaseData.sButtonText` property only
+  from a visible Starmap data callback, and only while the exact selection gate
+  passes.
+- [x] Replacement build/package/MO2 DLL hashes match:
+  `364E92B41ACDFB95F5617D6F0850EF3E8CE852242EB457FD254DDDFA77519444`.
+- [ ] Clean startup and runtime action-label/tap/hold behavior after rollback.
+
+## 2026-08-04 stacked cruise action hint
+
+These are source/build results, not live visual proof:
+
+- [x] Reused the stock `ReleaseHoldComboButton` and
+  `ReleaseHoldComboButtonData` classes from the loaded Starmap movie to render
+  `SET CRUISE TARGET` above `HOLD TO CRUISE` without shipping or patching a SWF.
+- [x] The native callback leaves the original `SetRouteDestinationButton` and
+  its binding unchanged. It adds one separate control per Starmap movie, follows
+  the primary live `Cruise` keyboard binding only inside the exact gate, and
+  disables/hides that control outside the gate.
+- [x] Releasedbg configure/build and the non-deploying install layout pass. The
+  only compiler diagnostics are inherited CommonLibSF warnings. The current
+  separate-binding build and release-package DLL SHA-256 hashes match:
+  `FE5EE2C2CC5D7ECFF2532BCCA3E14CFBD5C4E2B8FB7705504F37C4DD1C544C7B`.
+- [x] Build, release package, and MO2 deployment hashes match. The live-Cruise-
+  binding build has not yet been claimed as live UI/gameplay validation.
+- [x] The first runtime attempt loaded the intended DLL and reached the exact
+  Gagarin selection gate, but left `SET COURSE` visible because direct AS3 class
+  construction did not attach the imported display symbol. The replacement now
+  uses the same stock `ButtonFactory.AddToButtonBar` path as
+  `StarMapButtonHintBar.PopulateButtons`, with explicit per-step failure logs.
+- [x] The second runtime attempt proved that the factory renders the intended
+  stacked control, but native `removeChild` failed after creation. Repeated data
+  callbacks therefore leaked multiple controls. The replacement now creates at
+  most one control per movie and leaves it Starmap-owned.
+- [x] The third revision separates the actions: vanilla `SET COURSE` keeps its
+  `SetRouteDestination` binding, while the stacked control follows the live
+  `Cruise` keyboard binding (`T` by default) and is only routed/enabled/visible
+  inside the exact gate. This is source/build evidence until the revised DLL is
+  exercised in-game.
+- [ ] Confirm the stacked prompt, tap, hold, controller glyph, large-text mode,
+  invalid-selection restoration, and repeated map/movie cycles in Starfield.
+
+## 2026-08-05 reliability and feedback pass
+
+These are source/build results; the current DLL still needs a production-enabled
+Starfield pass before gameplay rows can be checked:
+
+- [x] Removed the system/star tree callback's marker/dossier invalidation. The
+  proven body join now changes only from marker/dossier data or real
+  session/view/movie lifetime boundaries.
+- [x] Centralized selection gating in one eligibility result used by both the
+  visible action and acceptance callback.
+- [x] In active-flight system view, the separate action remains present while
+  ineligible and receives a disabled reason label. Input routing remains off
+  unless the exact planet/moon gate passes.
+- [x] Added a fixed cockpit `CRUISE TARGET` status independent of low/high
+  positional-bearing availability. The optional diamond marker remains separate.
+- [x] Reduced the exposed interaction to `TapHoldCruise`. Legacy custom mode
+  strings warn and use the supported behavior instead of entering unreachable
+  selection paths.
+- [x] Production PNDT/GNAM indexing now covers full, medium, and light plugin
+  tiers using the same runtime FormID encoding as the companion OSF RE probe.
+  Compile-time checks cover one ID from each tier.
+- [x] `xmake f -m releasedbg -y` and the non-deploying `xmake -y` passed. Build
+  and `build/deploy/Data` DLL SHA-256 hashes match:
+  `7AA345F1B0887DA2F0FC5589A743ED930F4D438BA9C0352CDE451230DBAC3BC0`.
+- [x] Explicit xmake install deployed the same DLL to MO2; build, package,
+  release, and MO2 SHA-256 hashes match. No live gameplay claim is made from
+  this build yet.
+
+## 2026-08-05 Scaleform thread-affinity crash fix
+
+These checks establish the corrected static boundary. A restarted Starfield
+session is still required to prove the runtime result:
+
+- [x] The crash stack faults inside the AS3 VM with an SFSE task-pump frame.
+  The final plugin log records low/high HUD subscriptions on different worker
+  thread ids (`41244`, then `24496`) immediately before the crash.
+- [x] SFSE permanent-task work is now a coalesced producer only. It refuses the
+  task queue's inline fallback and sends engine work through
+  `RE::BSService::TaskQueue` for main-thread execution.
+- [x] `UI_AdvanceActiveMenus` Address Library ID 130455 was byte-checked against
+  the installed 1.16.244 executable at RVA `0x2542320`; the five-byte hook
+  boundary is `4C 89 44 24 18`. The executable has exactly two direct callers,
+  RVAs `0x1890E88` and `0x1890F01`, matching the OSF UI proof.
+- [x] CruiseFromStarmap hooks the function entry and runs the original first.
+  This composes with OSF UI's two caller hooks regardless of their later
+  installation: OSF UI still sees both unmodified calls to the same entry.
+- [x] Feed/action callbacks retain no passed GFx values and perform no movie
+  lookup, object construction, or arbitrary AS3 invocation. They copy plain C++
+  snapshots/actions; the post-advance pump performs subscriptions and mutations
+  after the VM unwinds. Stale retained values are also released there.
+- [x] `xmake f -m releasedbg -y` followed by `xmake -y` passed with inherited
+  CommonLibSF warnings only. Build and deployed MO2 DLL SHA-256 match:
+  `72C978600FD269C6885D58F83524D44BA415EEF1594FA6BB6248071D94665E96`.
+- [x] Relaunched-game crash regression smoke: repeated/spammed use did not
+  reproduce the Scaleform access violation.
+- [ ] Confirm both HUD subscriptions log on one owning thread, then complete the
+  interaction matrix: cockpit idle, stacked prompt, tap, completed hold, Cruise
+  activation, course lock, and HUD/movie rebuild.

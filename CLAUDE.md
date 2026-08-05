@@ -21,17 +21,24 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
   planet/moon PNDT, and its GNAM/current-system identities agree. Tree focus,
   `bIsFocused`, timing heuristics, and last-dossier-wins are all invalid.
 - Anything outside current-system planet/moon system view is vanilla-owned.
-- Construct/drive HUD objects and dispatch course events only from HUD feed
-  callbacks. Per-frame work may subscribe only after movie/world settle gates;
-  the Starmap additionally requires its visible `MenuOpenCloseEvent`, because
-  `UI::IsMenuOpen` can be true while the background AS3 movie is incomplete.
+- SFSE permanent tasks are worker-thread producers only. Marshal ordinary
+  engine work through `RE::BSService::TaskQueue`; enter Scaleform only from the
+  byte-verified post-`UI_AdvanceActiveMenus` pump, when the owning main thread's
+  AS3 advance has returned.
+- Feed callbacks may read their passed GFx values and copy plain C++ state only.
+  They must not fetch a movie root, construct/drive HUD objects, subscribe,
+  dispatch course events, or otherwise re-enter AS3. The post-advance pump owns
+  those mutations. Subscriptions still require movie/world settle gates; the
+  Starmap additionally requires its visible `MenuOpenCloseEvent`, because
+  `UI::IsMenuOpen` can expose its incomplete background movie.
 - Track physical input by `(deviceType,idCode)`. Reset pending holds on release,
   focus loss, load, or Starmap movie replacement.
 - Suppress a carried map key until physical release. Keyboard testing proved
   that its cockpit event is a continued hold (`first=false`), not a new press.
-- In `SelectThenCruise`, queue the marked PNDT id only after the HUD reports a
-  vanilla inactive-to-active Cruise transition, or immediately when the map was
-  opened while Cruise was already active. Confirm the lock from the low feed.
+- A tap only marks. Queue its PNDT id after the HUD reports a later vanilla
+  inactive-to-active Cruise transition, or immediately when the map was opened
+  while Cruise was already active. A completed map hold may drive the proven HUD
+  down/held/up route; confirm every course lock from the low feed.
 - Do not synthesize Cruise input until the OSF RE probe proves a complete
   engine-owned down/held/up injection route.
 - Do not use the landed/docked CommonLibSF helpers for the active-flight gate.
