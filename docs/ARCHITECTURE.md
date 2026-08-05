@@ -88,7 +88,10 @@ clears it.
 ## Threading and movie lifetime
 
 - Movie creation increments a generation and invalidates every GFx handle from
-  that movie.
+  that movie. HUD reconciliation waits 1.5 seconds after the HUD movie-created
+  timestamp and confirms that generation is still current before entering
+  Scaleform. It rechecks the menu's root immediately after resolving
+  `Reticle_mc`; dirty HUD work remains queued while the replacement settles.
 - SFSE permanent tasks run on rotating render-graph workers. They only coalesce
   and post ordinary per-frame work through the engine's `BSService::TaskQueue`,
   which drains on the game main thread; they never touch UI or Scaleform.
@@ -119,10 +122,11 @@ clears it.
   button is never changed. Each variant is created at most once per movie and
   hidden when inactive; no SWF bytecode is replaced.
 - Hold availability mirrors the shipped `ShipReticle.UpdateCruiseButton` rule by
+  resolving and type-checking `Reticle_mc` once after the HUD movie guard, then
   reading its public `CanActivateCruiseMode`, `MonocleModeActive`, and
-  `CruiseModeHUDActive` getters from the post-advance UI pump. Getter failure is
-  fail-closed to tap-only. While the Starmap is open, this state is polled so the
-  stacked variant can appear if a short cooldown expires.
+  `CruiseModeHUDActive` members. Getter failure is fail-closed to tap-only and
+  does not synthesize a Cruise exit. While the Starmap is open, fallback polls
+  reach Scaleform only after the HUD movie has settled.
 - The system/star tree provider is diagnostic-only. It never invalidates or
   participates in the marker/dossier body join.
 - Feed callbacks copy passed GFx payloads into plain C++ snapshots or queue a

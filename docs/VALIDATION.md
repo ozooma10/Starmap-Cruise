@@ -382,3 +382,35 @@ CELL `0001285A`, while its persistent ship reference is `00012894`:
   and receives matching lock readback.
 - [ ] Confirm missing and ambiguous non-station markers remain disabled as
   `TARGET IS NOT AVAILABLE TO CRUISE` or `TARGET IS AMBIGUOUS`.
+
+## 2026-08-05 HUD getter crash hardening
+
+The Trainwreck 1.4.0 report for Starfield 1.16.244 faults in
+`ReconcileHudUi` at the first dotted
+`root1.Menu_mc.Reticle_mc.CruiseModeHUDActive` lookup. The engine is resolving
+that path with a null internal object; OSF UI is only the preceding hook frame.
+
+- [x] HUD reconciliation waits 1.5 seconds after the current HUD
+  movie-created timestamp and confirms that generation before entering
+  Scaleform.
+- [x] Dirty HUD work is preserved while the movie settles. Generation and the
+  menu's root are rechecked immediately after resolving the reticle.
+- [x] `Reticle_mc` is resolved and type-checked once for the three Cruise
+  getters, which use `GetMember` on that validated object instead of separate
+  dotted `GetVariable` traversals.
+- [x] An unreadable `CruiseModeHUDActive` preserves the last active state rather
+  than manufacturing an exit; hold availability still fails closed.
+- [x] Map-open fallback polling reaches Scaleform only after the HUD movie
+  guard passes.
+- [x] `xmake f -m releasedbg -y` followed by `xmake -j1 -y` passed with
+  inherited CommonLibSF warnings only. The releasedbg and local deploy-package
+  DLL SHA-256 hashes match:
+  `03492C0A9AEB9634B95B2054EA291EDE74B311B776E43B28809449E9A71DBF3D`.
+  External MO2 deployment was deliberately disabled for this build.
+- [ ] Relaunch Starfield and verify startup, landed-to-takeoff HUD replacement,
+  docking/undocking, loading, and repeated Starmap opens do not enter HUD
+  Scaleform until 1.5 seconds after the matching movie-created log.
+- [ ] Exit Cruise, open the Starmap during cooldown, and verify tap-only changes
+  to stacked hold after cooldown without a crash or close/reopen.
+- [ ] With OSF UI enabled, repeat active-Cruise targeting, completed hold,
+  course-lock readback, and rapid map open/close cycles.

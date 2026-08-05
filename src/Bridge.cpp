@@ -45,6 +45,7 @@ namespace CFS::Bridge
         constexpr const char* kCruiseMapActionLabel = "SET CRUISE TARGET";
         constexpr const char* kCruiseMapActionHoldLabel = "HOLD TO CRUISE";
         constexpr const char* kCruiseMapUserEvent = "Cruise";
+        constexpr auto kHudMovieSettleTime = std::chrono::milliseconds(1500);
         constexpr REL::ID kControlMapSingletonPtr{ 938003 };
         constexpr REL::ID kSetShipHudTarget{ 97892 };
         constexpr REL::ID kCurrentShipHudTarget{ 883585 };
@@ -1956,6 +1957,16 @@ namespace CFS::Bridge
             return Clock::now() - last > std::chrono::milliseconds(2500);
         }
 
+        bool HudMovieSettled(std::uint32_t a_generation)
+        {
+            if (a_generation == 0 ||
+                g_hudMovie.generation.load(std::memory_order_acquire) != a_generation)
+                return false;
+            const auto born = Clock::time_point{ Clock::duration{
+                g_hudMovie.bornTicks.load(std::memory_order_acquire) } };
+            return Clock::now() - born >= kHudMovieSettleTime;
+        }
+
         bool AddSprite(RE::Scaleform::GFx::ASMovieRootBase* a_root, V& a_parent,
             V& a_out, const char* a_name, std::int32_t a_depth = 21000)
         {
@@ -2247,11 +2258,11 @@ namespace CFS::Bridge
 
         void ReconcileHudUi()
         {
-            // Poll while the map is open so a short stock Cruise cooldown can
-            // expire without requiring the player to close and reopen it.
-            if ((!g_hudUiDirty.load(std::memory_order_acquire) &&
-                    !g_mapOpen.load(std::memory_order_acquire)) ||
-                !WorldSettled() || !IsFlying())
+            const bool dirty = g_hudUiDirty.load(std::memory_order_acquire);
+            const bool mapOpen = g_mapOpen.load(std::memory_order_acquire);
+            // A settled HUD may be sampled while the map is open so a short
+            // stock Cruise cooldown can expire without a close/reopen.
+            if ((!dirty && !mapOpen) || !WorldSettled() || !IsFlying())
                 return;
 
             const auto ui = RE::UI::GetSingleton();
@@ -2262,9 +2273,22 @@ namespace CFS::Bridge
             if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot)
                 return;
 
-            g_hudUiDirty.store(false, std::memory_order_release);
             auto* root = menu->uiMovie->asMovieRoot.get();
+            const auto generation = g_hudMovie.generation.load(std::memory_order_acquire);
+            if (!HudMovieSettled(generation))
+                return;
+
             const char* rootPath = menu->GetRootPath();
+            const std::string base{ rootPath ? rootPath : "root" };
+            V reticle;
+            if (!root->GetVariable(&reticle, (base + ".Reticle_mc").c_str()) ||
+                !reticle.IsObject() ||
+                g_hudMovie.generation.load(std::memory_order_acquire) != generation ||
+                !menu->uiMovie || !menu->uiMovie->asMovieRoot ||
+                menu->uiMovie->asMovieRoot.get() != root)
+                return;
+
+            g_hudUiDirty.store(false, std::memory_order_release);
 
             DriveHudCruiseInput(root, rootPath);
             UpdateTargetStatus(root, rootPath);
@@ -2275,11 +2299,11 @@ namespace CFS::Bridge
                 bearings = g_hudBearings;
             }
 
-            const std::string base{ rootPath ? rootPath : "root" };
             V cruise;
-            const bool active = root->GetVariable(&cruise,
-                (base + ".Reticle_mc.CruiseModeHUDActive").c_str()) &&
-                cruise.IsBoolean() && cruise.GetBoolean();
+            const bool activeResolved = reticle.GetMember("CruiseModeHUDActive", &cruise) &&
+                                        cruise.IsBoolean();
+            const bool active = activeResolved ? cruise.GetBoolean() :
+                g_cruiseActive.load(std::memory_order_acquire);
             const bool wasActive = g_cruiseActive.exchange(active, std::memory_order_acq_rel);
 
             // ShipReticle.UpdateCruiseButton enables the stock hold event only
@@ -2288,14 +2312,14 @@ namespace CFS::Bridge
             // at cooldown timing in native code.
             V canActivateValue;
             V monocleValue;
-            const bool canActivateResolved = root->GetVariable(&canActivateValue,
-                (base + ".Reticle_mc.CanActivateCruiseMode").c_str()) &&
+            const bool canActivateResolved = reticle.GetMember(
+                "CanActivateCruiseMode", &canActivateValue) &&
                 canActivateValue.IsBoolean();
-            const bool monocleResolved = root->GetVariable(&monocleValue,
-                (base + ".Reticle_mc.MonocleModeActive").c_str()) &&
+            const bool monocleResolved = reticle.GetMember(
+                "MonocleModeActive", &monocleValue) &&
                 monocleValue.IsBoolean();
-            const bool engageAvailable = canActivateResolved && monocleResolved &&
-                                         canActivateValue.GetBoolean() &&
+            const bool engageAvailable = activeResolved && canActivateResolved &&
+                                         monocleResolved && canActivateValue.GetBoolean() &&
                                          !monocleValue.GetBoolean() && !active;
             const bool wasEngageAvailable = g_cruiseEngageAvailable.exchange(
                 engageAvailable, std::memory_order_acq_rel);
@@ -2308,8 +2332,9 @@ namespace CFS::Bridge
                     g_mapUiDirty.store(true, std::memory_order_release);
                 }
                 if (Settings::Verbose())
-                    REX::INFO("[hud] stock Cruise engage availability -> {} (resolved={} monocleResolved={} active={})",
-                        engageAvailable, canActivateResolved, monocleResolved, active);
+                    REX::INFO("[hud] stock Cruise engage availability -> {} (activeResolved={} resolved={} monocleResolved={} active={})",
+                        engageAvailable, activeResolved, canActivateResolved,
+                        monocleResolved, active);
             }
 
             if (active && !wasActive) {
