@@ -33,6 +33,7 @@ namespace CFS
 
     enum class Mode : std::uint8_t
     {
+        kSelectThenCruise,
         kMarkOnly,
         kHoldToCruise,
     };

@@ -13,11 +13,24 @@ namespace CFS::Settings
 {
     namespace
     {
-        REX::TIniSetting<std::string> sMode{ "General", "sMode", "MarkOnly" };
-        REX::TIniSetting<bool> bShowMarker{ "General", "bShowMarker", true };
+        REX::TIniSetting<std::string> sMode{ "General", "sMode", "SelectThenCruise" };
+        REX::TIniSetting<bool> bShowMarker{ "General", "bShowMarker", false };
         REX::TIniSetting<bool> bShowDestinationName{ "General", "bShowDestinationName", true };
         REX::TIniSetting<bool> bVerboseLog{ "General", "bVerboseLog", true };
-        Mode g_mode{ Mode::kMarkOnly };
+        Mode g_mode{ Mode::kSelectThenCruise };
+
+        const char* ModeName(Mode a_mode)
+        {
+            switch (a_mode) {
+            case Mode::kSelectThenCruise:
+                return "SelectThenCruise";
+            case Mode::kMarkOnly:
+                return "MarkOnly";
+            case Mode::kHoldToCruise:
+                return "HoldToCruise";
+            }
+            return "SelectThenCruise";
+        }
     }
 
     void Load()
@@ -31,17 +44,19 @@ namespace CFS::Settings
         std::ranges::transform(mode, mode.begin(), [](unsigned char ch) {
             return static_cast<char>(std::tolower(ch));
         });
-        if (mode == "markonly") {
+        if (mode == "selectthencruise") {
+            g_mode = Mode::kSelectThenCruise;
+        } else if (mode == "markonly") {
             g_mode = Mode::kMarkOnly;
         } else if (mode == "holdtocruise") {
             g_mode = Mode::kHoldToCruise;
         } else {
-            g_mode = Mode::kMarkOnly;
-            REX::WARN("Unknown sMode='{}'; using MarkOnly", sMode.GetValue());
+            g_mode = Mode::kSelectThenCruise;
+            REX::WARN("Unknown sMode='{}'; using SelectThenCruise", sMode.GetValue());
         }
 
         REX::INFO("config: mode={} marker={} destinationName={} verbose={}",
-            g_mode == Mode::kHoldToCruise ? "HoldToCruise" : "MarkOnly",
+            ModeName(g_mode),
             bShowMarker.GetValue(), bShowDestinationName.GetValue(), bVerboseLog.GetValue());
     }
 

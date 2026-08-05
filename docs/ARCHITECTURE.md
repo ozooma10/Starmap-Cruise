@@ -6,10 +6,10 @@
 GalaxyStarMapMenu movie
   StarMapMenuData -------------------- view + system/body location ids
   StarMapMenuSystemBodyInfoData ------ system/star identity (not selected body)
-  StarMapMenuMarkersData ------------- may have no focused marker in system view
+  StarMapMenuMarkersData ------------- unique bIsInHighlightRadius marker row
   StarmapSystemBodyInfoProvider ------ dossier PNDT candidates while browsing
                     |
-                    | stable focus discriminator (NOT YET PROVEN)
+                    | exact marker/dossier id+type agreement
                     | + live PNDT + parsed GNAM + current system
                     v
               BodyDestination value
@@ -19,7 +19,7 @@ SpaceshipHudMenu movie
   TargetLowFrequencyProvider -------- uniqueID/name/course-lock/current system
   TargetHighFrequencyProvider ------- index-aligned bearing + distance
                     |
-                    +---- runtime marker and localized label
+                    +---- optional runtime marker and localized label
                     |
                     +---- Reticle_OnCruiseLockCourse {uBodyID}
 ```
@@ -37,13 +37,20 @@ Idle -> MapSelection -> Marked -> AwaitingCruise -> AutopilotLocked
           +-> vanilla     | no Cruise    +-----------------+ interruption
 ```
 
-- `MapSelection` begins only after the exact selection gate passes. The current
-  build cannot enter it because the system-view focus discriminator is still
-  unproven; validated dossier candidates are logged and rejected.
+- `MapSelection` begins only after the exact selection gate passes: one
+  highlight-radius planet/moon marker, matching dossier id/type, live PNDT,
+  parsed GNAM, captured current system, active flight, and current session/movie
+  generation.
 - `Marked` owns the process-local destination but not autopilot.
-- `AwaitingCruise` is reserved for a course request when Cruise was already
-  active. A carried map hold is suppressed until release and cannot enter
-  Cruise by itself.
+- In the default `SelectThenCruise` mode, a vanilla inactive-to-active Cruise
+  transition moves `Marked` to `AwaitingCruise` and queues the marked PNDT id.
+  The same request is queued immediately if Cruise was already active when the
+  accepted map selection began.
+- A carried map hold is suppressed until release and cannot enter Cruise by
+  itself. `MarkOnly` never moves a mark into `AwaitingCruise`; `HoldToCruise`
+  retains only the already-active retarget path.
+- `AwaitingCruise` means a HUD course request is queued or awaiting low-feed
+  confirmation.
 - `AutopilotLocked` is entered only when the low feed reports
   `bIsCruiseTargetLock` on the same PNDT id.
 
@@ -58,7 +65,9 @@ clears it.
 - Movie creation increments a generation and invalidates every GFx handle from
   that movie.
 - Feed subscriptions occur one per frame after a settle delay and re-check the
-  live root/generation immediately before entering AS3.
+  live root/generation immediately before entering AS3. Starmap subscriptions
+  also require the visible map-open event; `UI::IsMenuOpen` alone can expose its
+  incomplete background movie after a load.
 - HUD object construction, marker movement, and course dispatch run from the
   HUD feed callback—the same UI thread that owns the movie.
 - Input interception only reads/copies value state, edits its own queue links
@@ -71,5 +80,7 @@ clears it.
 Keyboard testing proved that the physical device/id survives, but the cockpit
 event is a continued hold with `first=false`; vanilla does not activate Cruise.
 The plugin therefore suppresses the carried event until release in every mode.
+`SelectThenCruise` responds only to a later vanilla Cruise activation observed
+in the HUD, so the game continues to own input and Cruise startup.
 Synthetic replay remains prohibited because pool ownership, reverse binding,
 thread ownership, and a safe upstream enqueue API are unproven.

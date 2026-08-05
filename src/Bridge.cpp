@@ -71,6 +71,7 @@ namespace CFS::Bridge
             std::uint32_t bodyLocationID{ 0 };
             std::uint32_t treeBodyID{ 0 };
             std::uint32_t treeBodyType{ 0 };
+            std::size_t highlightedMarkerCount{ 0 };
             std::uint32_t markerBodyID{ 0 };
             std::uint32_t markerBodyType{ 0 };
             std::string markerName;
@@ -223,8 +224,6 @@ namespace CFS::Bridge
         bool ValidateIsInSpaceBinding()
         {
             static_assert(RE::ID::TESObjectREFR::IsInSpace.id() == 63482);
-            static_assert(RE::ID::TESObjectREFR::IsSpaceshipLanded.id() == 0);
-            static_assert(RE::ID::TESObjectREFR::IsSpaceshipDocked.id() == 0);
 
             REL::Relocation<std::uintptr_t> target{ RE::ID::TESObjectREFR::IsInSpace };
             const auto address = target.address();
@@ -376,6 +375,11 @@ namespace CFS::Bridge
                 a_reason = "map was not opened during active flight";
                 return std::nullopt;
             }
+            if (snapshot.session == 0 ||
+                snapshot.session != g_mapSession.load(std::memory_order_acquire)) {
+                a_reason = "map session was replaced";
+                return std::nullopt;
+            }
             if (snapshot.generation != g_mapMovie.generation.load(std::memory_order_acquire)) {
                 a_reason = "map movie was replaced";
                 return std::nullopt;
@@ -388,6 +392,19 @@ namespace CFS::Bridge
                 a_reason = "cockpit current system was not resolved before map open";
                 return std::nullopt;
             }
+            if (snapshot.highlightedMarkerCount != 1) {
+                a_reason = std::format(
+                    "system view has {} highlight-radius marker candidates; exactly one is required",
+                    snapshot.highlightedMarkerCount);
+                return std::nullopt;
+            }
+            if (snapshot.markerBodyID == 0 ||
+                (snapshot.markerBodyType != kPlanetType && snapshot.markerBodyType != kMoonType)) {
+                a_reason = std::format(
+                    "highlight-radius marker is not a planet/moon candidate ({:08X}/{})",
+                    snapshot.markerBodyID, snapshot.markerBodyType);
+                return std::nullopt;
+            }
             if (snapshot.dossierBodyID == 0 ||
                 (snapshot.dossierBodyType != kPlanetType && snapshot.dossierBodyType != kMoonType)) {
                 a_reason = std::format(
@@ -395,12 +412,18 @@ namespace CFS::Bridge
                     snapshot.dossierBodyID, snapshot.dossierBodyType);
                 return std::nullopt;
             }
+            if (snapshot.markerBodyID != snapshot.dossierBodyID ||
+                snapshot.markerBodyType != snapshot.dossierBodyType) {
+                a_reason = std::format(
+                    "highlight-radius marker {:08X}/{} differs from dossier {:08X}/{}",
+                    snapshot.markerBodyID, snapshot.markerBodyType,
+                    snapshot.dossierBodyID, snapshot.dossierBodyType);
+                return std::nullopt;
+            }
 
-            // Live 1.16.244 evidence disproved tree/marker/dossier equality:
-            // the tree is the system/star, the marker may be zero, and the
-            // dossier emits the selected PNDT plus other bodies while browsing.
-            // Validate the dossier only as a diagnostic candidate. It must not
-            // be accepted until a stable focus discriminator is proven.
+            // Live 1.16.244 proof identifies the selected system-view body as
+            // the one StarMapMenuMarkersData row with bIsInHighlightRadius.
+            // Tree focus remains the system/star and does not join identity.
             const auto form = RE::TESForm::LookupByID(snapshot.dossierBodyID);
             if (!form || form->GetFormType() != RE::FormType::kPNDT) {
                 a_reason = std::format("system-view dossier {:08X} is not a live PNDT form",
@@ -419,13 +442,13 @@ namespace CFS::Bridge
                 return std::nullopt;
             }
 
-            a_reason = std::format(
-                "selection blocked: dossier candidate {:08X}/{} '{}' is a live current-system PNDT "
-                "(GNAM system={} parent={} planet={}), but no stable system-view focus discriminator is proven; "
-                "last-dossier-wins is prohibited",
-                snapshot.dossierBodyID, snapshot.dossierBodyType, snapshot.dossierName,
-                body->galaxy.system, body->galaxy.parent, body->galaxy.planet);
-            return std::nullopt;
+            return BodyDestination{
+                .kind = snapshot.dossierBodyType == kMoonType ? BodyKind::kMoon : BodyKind::kPlanet,
+                .formID = snapshot.dossierBodyID,
+                .galaxy = body->galaxy,
+                .localizedName = snapshot.dossierName.empty() ? snapshot.markerName : snapshot.dossierName,
+                .menuGeneration = snapshot.generation,
+            };
         }
 
         void QueueCourse(std::uint32_t a_id, bool a_clearing)
@@ -659,6 +682,7 @@ namespace CFS::Bridge
                     if (view != g_map.view) {
                         g_map.treeBodyID = 0;
                         g_map.treeBodyType = 0;
+                        g_map.highlightedMarkerCount = 0;
                         g_map.markerBodyID = 0;
                         g_map.markerBodyType = 0;
                         g_map.markerName.clear();
@@ -685,9 +709,10 @@ namespace CFS::Bridge
                 const auto bodyType = UIntMember(data, "focusedBodyType");
                 std::lock_guard lock{ g_mapMutex };
                 if (bodyID != g_map.treeBodyID || bodyType != g_map.treeBodyType) {
-                    // Provider callbacks are asynchronous. Invalidate corroborating
-                    // values whenever focus changes so a previous visit to the same
-                    // body cannot accidentally satisfy the exact-join gate.
+                    // Provider callbacks are asynchronous. Invalidate the copied
+                    // selection join when the tree snapshot changes; current
+                    // marker/dossier callbacks must repopulate it.
+                    g_map.highlightedMarkerCount = 0;
                     g_map.markerBodyID = 0;
                     g_map.markerBodyType = 0;
                     g_map.markerName.clear();
@@ -706,15 +731,16 @@ namespace CFS::Bridge
             std::uint32_t bodyID{ 0 };
             std::uint32_t bodyType{ 0 };
             std::string name;
-            std::size_t focusedCount{ 0 };
+            std::size_t highlightedCount{ 0 };
 
             void Visit(std::uint32_t, const V& a_value) override
             {
                 V entry = a_value;
-                V focus;
-                if (!entry.GetMember("bIsFocused", &focus) || !focus.IsBoolean() || !focus.GetBoolean())
+                V highlighted;
+                if (!entry.GetMember("bIsInHighlightRadius", &highlighted) ||
+                    !highlighted.IsBoolean() || !highlighted.GetBoolean())
                     return;
-                ++focusedCount;
+                ++highlightedCount;
                 bodyID = UIntMember(entry, "uBodyID");
                 bodyType = UIntMember(entry, "uBodyType");
                 name = StringMember(entry, "sMarkerText");
@@ -729,25 +755,25 @@ namespace CFS::Bridge
                 V data;
                 if (!Payload(a_params, data))
                     return;
+                MarkerCollector visitor;
                 V markers;
-                if (!data.GetMember("aMarkersData", &markers))
-                    return;
-                V inner;
-                if (markers.GetMember("dataA", &inner) && inner.IsArray())
-                    markers = inner;
-                if (markers.IsArray()) {
-                    MarkerCollector visitor;
-                    markers.VisitElements(&visitor);
-                    std::lock_guard lock{ g_mapMutex };
-                    if (visitor.focusedCount == 1) {
-                        g_map.markerBodyID = visitor.bodyID;
-                        g_map.markerBodyType = visitor.bodyType;
-                        g_map.markerName = std::move(visitor.name);
-                    } else {
-                        g_map.markerBodyID = 0;
-                        g_map.markerBodyType = 0;
-                        g_map.markerName.clear();
-                    }
+                if (data.GetMember("aMarkersData", &markers)) {
+                    V inner;
+                    if (markers.GetMember("dataA", &inner) && inner.IsArray())
+                        markers = inner;
+                    if (markers.IsArray())
+                        markers.VisitElements(&visitor);
+                }
+                std::lock_guard lock{ g_mapMutex };
+                g_map.highlightedMarkerCount = visitor.highlightedCount;
+                if (visitor.highlightedCount == 1) {
+                    g_map.markerBodyID = visitor.bodyID;
+                    g_map.markerBodyType = visitor.bodyType;
+                    g_map.markerName = std::move(visitor.name);
+                } else {
+                    g_map.markerBodyID = 0;
+                    g_map.markerBodyType = 0;
+                    g_map.markerName.clear();
                 }
             }
         } g_markersHandler;
@@ -1072,9 +1098,19 @@ namespace CFS::Bridge
                     cruise.IsBoolean() && cruise.GetBoolean();
                 const bool wasActive = g_cruiseActive.exchange(active, std::memory_order_acq_rel);
 
-                if (active && !wasActive && g_state.load(std::memory_order_acquire) == NavState::kAwaitingCruise) {
-                    if (const auto destination = Destination())
+                if (active && !wasActive) {
+                    const auto state = g_state.load(std::memory_order_acquire);
+                    const auto destination = Destination();
+                    if (destination &&
+                        (state == NavState::kAwaitingCruise ||
+                            (state == NavState::kMarked &&
+                                Settings::GetMode() == Mode::kSelectThenCruise))) {
+                        g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                        if (state == NavState::kMarked)
+                            REX::INFO("[course] vanilla Cruise activation detected; locking marked destination {:08X}",
+                                destination->formID);
                         QueueCourse(destination->formID, false);
+                    }
                 }
                 if (!active && wasActive && g_state.load(std::memory_order_acquire) == NavState::kAutopilotLocked)
                     g_state.store(NavState::kMarked, std::memory_order_release);
@@ -1128,6 +1164,11 @@ namespace CFS::Bridge
                 return;
             for (const auto& sub : g_subscriptions) {
                 if ((sub.movie->subscriptions.load(std::memory_order_acquire) & sub.bit) != 0)
+                    continue;
+                // The Starmap can be registered as open while its background
+                // AS3 movie is still being constructed after a load. Only enter
+                // its VM after the visible MenuOpenCloseEvent for this session.
+                if (sub.movie == &g_mapMovie && !g_mapOpen.load(std::memory_order_acquire))
                     continue;
                 if (sub.movie == &g_hudMovie && (!WorldSettled() || !IsFlying()))
                     continue;
@@ -1220,7 +1261,9 @@ namespace CFS::Bridge
                         g_hold.suppressUntilRelease = true;
                     }
                     if (accepted) {
-                        if (wasCruising && Settings::GetMode() == Mode::kHoldToCruise) {
+                        const auto mode = Settings::GetMode();
+                        if (wasCruising &&
+                            (mode == Mode::kHoldToCruise || mode == Mode::kSelectThenCruise)) {
                             if (const auto destination = Destination())
                                 QueueCourse(destination->formID, false);
                             g_state.store(Destination() ? NavState::kAwaitingCruise : NavState::kIdle,
@@ -1228,7 +1271,7 @@ namespace CFS::Bridge
                         } else {
                             g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
                                 std::memory_order_release);
-                            if (held && Settings::GetMode() == Mode::kHoldToCruise && Destination())
+                            if (held && mode == Mode::kHoldToCruise && Destination())
                                 REX::WARN("[input] one-action HoldToCruise is unavailable: the continued cockpit hold is suppressed until release and synthetic replay is disabled");
                         }
                     }

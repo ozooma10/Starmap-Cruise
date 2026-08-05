@@ -1,6 +1,6 @@
 ; Rename this file to CruiseFromStarmapCustom.ini and include only overrides.
 [General]
-; sMode=HoldToCruise
-; bShowMarker=false
+; sMode=SelectThenCruise
+; bShowMarker=true
 ; bShowDestinationName=false
 ; bVerboseLog=false
