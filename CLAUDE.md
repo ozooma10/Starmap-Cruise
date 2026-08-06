@@ -38,10 +38,19 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
   While Starfield is not foreground, do not advance or expire the remote-route
   driver; restart the current phase timeout and readiness dwell on focus return.
   Carry the already-proven STDT root through stock Back, pin it against transient
-  star-feed rows until system-scope Set Course, establish native galaxy selection
-  with the shipped Quick Select `bodyID` change event rather than mouse hover,
-  and consume repeat presses of the Cruise-bound control while the guarded
-  handoff remains active.
+  star-feed rows until system-scope Set Course, and consume repeat presses of the
+  Cruise-bound control while the guarded handoff remains active.
+  Reaching galaxy view with the captured root is a separate phase from
+  establishing the galaxy marker context, and each owns a full timeout. Marker
+  context is attempted with cursor-independent stock seams only, one rung at a
+  time with a fixed number of completed AS3 advances between rungs: the shipped
+  Quick Select `bodyID` change event, then the shipped public `SetHoveredSystem`
+  galaxy setter. Set Course may be dispatched
+  only after native itself names the captured system through the vanilla Set
+  Course button, the native Quick Select cursor, or a unique galaxy highlight
+  marker; the two weaker authorities additionally require the vanilla Set Course
+  button to be present and visible. Never write, force, or infer that button's
+  enabled state, and never synthesize cursor input.
   An ActionScript invocation is not proof that travel began; only the guarded,
   player-filtered `GravJumpEvent` stream provides jump acknowledgement.
 - Anything outside the currently loaded system's system view is vanilla-owned.

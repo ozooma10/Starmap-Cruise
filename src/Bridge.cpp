@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -23,6 +24,8 @@
 #include <format>
 #include <mutex>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -52,6 +55,10 @@ namespace CFS::Bridge
         constexpr auto kMapRoutePollTime = std::chrono::milliseconds(250);
         constexpr auto kRemoteRouteExecuteSettleTime = std::chrono::milliseconds(500);
         constexpr auto kRemoteRouteTimeout = std::chrono::seconds(5);
+        // Post-advance passes a focus rung keeps before the next one may run.
+        // The unit is completed AS3 advances, not wall clock: each pass means
+        // native finished one advance with the previous rung already applied.
+        constexpr std::uint32_t kGalaxyFocusRungPasses = 10;
         constexpr REL::ID kControlMapSingletonPtr{ 938003 };
         constexpr REL::ID kSetShipHudTarget{ 97892 };
         constexpr REL::ID kCurrentShipHudTarget{ 883585 };
@@ -118,6 +125,13 @@ namespace CFS::Bridge
             std::uint32_t dossierBodyID{ 0 };
             std::uint32_t dossierBodyType{ 0 };
             std::string dossierName;
+            // Native Quick Select readback. This is the cursor-independent
+            // statement of which galaxy system vanilla currently considers
+            // selected; it is read only and never written back.
+            bool quickSelectPublished{ false };
+            std::uint32_t quickSelectCount{ 0 };
+            std::int32_t quickSelectCursorIndex{ -1 };
+            std::uint32_t quickSelectCursorBodyID{ 0 };
         };
 
         enum class EligibilityCode : std::uint8_t
@@ -161,7 +175,19 @@ namespace CFS::Bridge
         {
             kNone,
             kAwaitGalaxy,
+            kEstablishSelection,
             kAwaitRoute,
+        };
+
+        // Ordered, cursor-independent attempts at establishing the vanilla
+        // galaxy marker context. Each rung is attempted at most once and only
+        // on a post-advance pass that already failed the proof test, so the
+        // ladder advances on observed state rather than on elapsed time.
+        enum class GalaxyFocusRung : std::uint8_t
+        {
+            kQuickSelectChange = 0,
+            kHoverSetter = 1,
+            kExhausted = 2,
         };
 
         struct RemoteRouteRequest
@@ -171,7 +197,9 @@ namespace CFS::Bridge
             std::uint32_t generation{ 0 };
             std::uint32_t targetFormID{ 0 };
             std::uint32_t systemBodyID{ 0 };
-            bool galaxySelectionDispatched{ false };
+            GalaxyFocusRung nextFocusRung{ GalaxyFocusRung::kQuickSelectChange };
+            std::uint32_t focusRungCooldown{ 0 };
+            bool focusDiagnosticsLogged{ false };
             std::string expectedSystemName;
             std::string targetName;
             Clock::time_point started{};
@@ -1361,30 +1389,48 @@ namespace CFS::Bridge
                        g_mapMovie.generation.load(std::memory_order_acquire);
         }
 
+        struct SetCourseButtonState
+        {
+            bool resolved{ false };
+            bool enabled{ false };
+            bool visible{ false };
+            std::string detail{ "vanilla Set Course button data is unavailable" };
+
+            [[nodiscard]] bool Ready() const noexcept
+            {
+                return resolved && enabled && visible;
+            }
+        };
+
+        SetCourseButtonState ReadVanillaSetCourseButton(V& a_menuRoot,
+            V& a_hintBar, V& a_buttonData)
+        {
+            SetCourseButtonState state;
+            if (!ObjectMember(a_menuRoot, "ButtonHintBar_mc", a_hintBar) ||
+                !ObjectMember(a_hintBar, "SetRouteDestinationButtonData",
+                    a_buttonData))
+                return state;
+
+            if (!BooleanMember(a_buttonData, "bEnabled", state.enabled) ||
+                !BooleanMember(a_buttonData, "bVisible", state.visible)) {
+                state.detail = "vanilla Set Course button state is unresolved";
+                return state;
+            }
+            state.resolved = true;
+            state.detail = state.Ready() ?
+                "vanilla Set Course is enabled and visible" :
+                std::format("vanilla Set Course is disabled or hidden (enabled={} visible={})",
+                    state.enabled, state.visible);
+            return state;
+        }
+
         bool GetVanillaSetCourseData(V& a_menuRoot, V& a_hintBar,
             V& a_buttonData, std::string& a_detail)
         {
-            if (!ObjectMember(a_menuRoot, "ButtonHintBar_mc", a_hintBar) ||
-                !ObjectMember(a_hintBar, "SetRouteDestinationButtonData",
-                    a_buttonData)) {
-                a_detail = "vanilla Set Course button data is unavailable";
-                return false;
-            }
-
-            bool enabled = false;
-            bool visible = false;
-            if (!BooleanMember(a_buttonData, "bEnabled", enabled) ||
-                !BooleanMember(a_buttonData, "bVisible", visible)) {
-                a_detail = "vanilla Set Course button state is unresolved";
-                return false;
-            }
-            if (!enabled || !visible) {
-                a_detail = std::format("vanilla Set Course is disabled or hidden (enabled={} visible={})",
-                    enabled, visible);
-                return false;
-            }
-            a_detail = "vanilla Set Course is enabled and visible";
-            return true;
+            const auto state = ReadVanillaSetCourseButton(a_menuRoot, a_hintBar,
+                a_buttonData);
+            a_detail = state.detail;
+            return state.Ready();
         }
 
         std::string BrowsedSystemName(V& a_menuRoot)
@@ -1399,6 +1445,166 @@ namespace CFS::Bridge
             return StringMember(textField, "text");
         }
 
+        // Bounded, read-only member enumeration. It copies names and a type tag
+        // only: no GFx handle is retained past the visit, so nothing can outlive
+        // the movie generation that produced it.
+        class MemberNameCollector : public V::ObjectVisitor
+        {
+        public:
+            explicit MemberNameCollector(std::size_t a_limit) : limit(a_limit) {}
+
+            bool IncludeAS3PublicMembers() const override { return true; }
+
+            void Visit(const char* a_name, const V& a_value) override
+            {
+                ++seen;
+                if (!a_name || names.size() >= limit)
+                    return;
+                const char* kind = "value";
+                if (a_value.IsArray())
+                    kind = "array";
+                else if (a_value.IsDisplayObject())
+                    kind = "displayobject";
+                else if (a_value.IsObject())
+                    kind = "object";
+                else if (a_value.IsBoolean())
+                    kind = "bool";
+                else if (a_value.IsString() || a_value.IsStringW())
+                    kind = "string";
+                else if (a_value.IsNumber() || a_value.IsInt() || a_value.IsUInt())
+                    kind = "number";
+                names.emplace_back(std::format("{}:{}", a_name, kind));
+            }
+
+            std::vector<std::string> names;
+            std::size_t seen{ 0 };
+            std::size_t limit{ 0 };
+        };
+
+        std::string JoinMemberNames(V& a_object, std::size_t a_limit)
+        {
+            if (!a_object.IsObject())
+                return "<not an object>";
+            MemberNameCollector collector{ a_limit };
+            a_object.VisitMembers(&collector);
+            std::string joined;
+            for (const auto& name : collector.names) {
+                if (!joined.empty())
+                    joined += ", ";
+                joined += name;
+            }
+            if (collector.seen > collector.names.size())
+                joined += std::format(", ...(+{} more)",
+                    collector.seen - collector.names.size());
+            return joined.empty() ? "<none>" : joined;
+        }
+
+        struct GalaxySelectionProof
+        {
+            bool proven{ false };
+            const char* authority{ "none" };
+            SetCourseButtonState button;
+            bool quickSelectMatch{ false };
+            bool markerMatch{ false };
+
+            [[nodiscard]] std::string Describe(const MapSnapshot& a_snapshot,
+                std::uint32_t a_root) const
+            {
+                return std::format(
+                    "root={:08X} setCourse(resolved={} enabled={} visible={}) quickSelect(published={} count={} cursor={} bodyID={:08X}) marker(count={} bodyID={:08X})",
+                    a_root, button.resolved, button.enabled, button.visible,
+                    a_snapshot.quickSelectPublished, a_snapshot.quickSelectCount,
+                    a_snapshot.quickSelectCursorIndex,
+                    a_snapshot.quickSelectCursorBodyID,
+                    a_snapshot.highlightedMarkerCount, a_snapshot.markerBodyID);
+            }
+        };
+
+        // A galaxy selection counts as established only when native itself says
+        // so. The vanilla Set Course button is the strongest statement; the
+        // Quick Select cursor and the unique galaxy highlight marker are the two
+        // other native-published readbacks that name a system directly. Nothing
+        // here forces, writes, or infers the button state.
+        GalaxySelectionProof EvaluateGalaxySelection(V& a_menuRoot,
+            const MapSnapshot& a_snapshot, std::uint32_t a_systemBodyID)
+        {
+            GalaxySelectionProof proof;
+            V hintBar;
+            V buttonData;
+            proof.button = ReadVanillaSetCourseButton(a_menuRoot, hintBar,
+                buttonData);
+            proof.quickSelectMatch = a_snapshot.quickSelectPublished &&
+                a_snapshot.quickSelectCursorIndex >= 0 && a_systemBodyID != 0 &&
+                a_snapshot.quickSelectCursorBodyID == a_systemBodyID;
+            proof.markerMatch = a_snapshot.highlightedMarkerCount == 1 &&
+                a_systemBodyID != 0 &&
+                a_snapshot.markerBodyID == a_systemBodyID;
+
+            if (proof.button.Ready()) {
+                proof.proven = true;
+                proof.authority = "vanilla Set Course button";
+            } else if (proof.button.resolved && proof.button.visible &&
+                       proof.quickSelectMatch) {
+                // QuickSystemSelect.OnItemPress plots from the list cursor
+                // without consulting the hint bar. Mirror that seam only when
+                // native published the cursor on the captured root.
+                proof.proven = true;
+                proof.authority = "native Quick Select cursor";
+            } else if (proof.button.resolved && proof.button.visible &&
+                       proof.markerMatch) {
+                proof.proven = true;
+                proof.authority = "unique galaxy highlight marker";
+            }
+            return proof;
+        }
+
+        void LogGalaxyFocusDiagnostics(V& a_menuRoot,
+            const MapSnapshot& a_snapshot, const GalaxySelectionProof& a_proof,
+            std::uint32_t a_systemBodyID)
+        {
+            REX::WARN("[jump] galaxy marker context not established: {}",
+                a_proof.Describe(a_snapshot, a_systemBodyID));
+            REX::INFO("[jump] galaxy diagnostics root members: {}",
+                JoinMemberNames(a_menuRoot, 96));
+
+            V hintBar;
+            if (!ObjectMember(a_menuRoot, "ButtonHintBar_mc", hintBar)) {
+                REX::INFO("[jump] galaxy diagnostics: ButtonHintBar_mc is unavailable");
+                return;
+            }
+            MemberNameCollector collector{ 96 };
+            hintBar.VisitMembers(&collector);
+            std::string joined;
+            for (const auto& entry : collector.names) {
+                if (!joined.empty())
+                    joined += ", ";
+                joined += entry;
+            }
+            REX::INFO("[jump] galaxy diagnostics hint bar members: {}",
+                joined.empty() ? "<none>" : joined);
+            for (const auto& entry : collector.names) {
+                const auto colon = entry.rfind(':');
+                const auto name = entry.substr(0, colon);
+                if (name.size() < 10 ||
+                    name.compare(name.size() - 10, 10, "ButtonData") != 0)
+                    continue;
+                V data;
+                if (!ObjectMember(hintBar, name.c_str(), data))
+                    continue;
+                bool enabled = false;
+                bool visible = false;
+                BooleanMember(data, "bEnabled", enabled);
+                BooleanMember(data, "bVisible", visible);
+                auto text = StringMember(data, "sText");
+                if (text.empty())
+                    text = StringMember(data, "text");
+                auto action = StringMember(data, "sButtonAction");
+                if (action.empty())
+                    action = StringMember(data, "buttonAction");
+                REX::INFO("[jump] galaxy diagnostics hint '{}' enabled={} visible={} text='{}' action='{}'",
+                    name, enabled, visible, text, action);
+            }
+        }
 
         RemoteRouteGate InspectRemoteRoute(V& a_menuRoot,
             const std::string& a_expectedSystemName, V* a_jumpDataOut = nullptr)
@@ -1512,6 +1718,84 @@ namespace CFS::Bridge
                 return false;
             return DispatchHudEvent(a_root,
                 "StarMapMenu_QuickSelectChange", &params);
+        }
+
+        constexpr const char* kGalaxyHoverSetter = "SetHoveredSystem";
+
+        bool ContainsNoCase(const std::string& a_haystack, std::string_view a_needle)
+        {
+            const auto it = std::search(a_haystack.begin(), a_haystack.end(),
+                a_needle.begin(), a_needle.end(),
+                [](char a_lhs, char a_rhs) {
+                    return std::tolower(static_cast<unsigned char>(a_lhs)) ==
+                           std::tolower(static_cast<unsigned char>(a_rhs));
+                });
+            return it != a_haystack.end();
+        }
+
+        // Second rung: invoke the shipped public hover setter with the captured
+        // root instead of relying on the physical cursor. Enumeration is
+        // read-only and the only mutation is one call to a method vanilla
+        // already exposes; a miss leaves the map untouched.
+        bool InvokeGalaxyHoverSetter(V& a_menuRoot, std::uint32_t a_systemBodyID,
+            std::string& a_detail)
+        {
+            MemberNameCollector collector{ 64 };
+            if (!a_menuRoot.IsObject()) {
+                a_detail = "menu root is not an object";
+                return false;
+            }
+            a_menuRoot.VisitMembers(&collector);
+
+            auto tryInvoke = [&](V& a_owner, const std::string& a_path) {
+                if (!a_owner.HasMember(kGalaxyHoverSetter))
+                    return false;
+                V argument{ static_cast<double>(a_systemBodyID) };
+                V result;
+                const bool invoked = a_owner.Invoke(kGalaxyHoverSetter, &result,
+                    &argument, 1);
+                a_detail = std::format("{}.{}({:08X}) invoked={}", a_path,
+                    kGalaxyHoverSetter, a_systemBodyID, invoked);
+                return invoked;
+            };
+
+            for (const auto& entry : collector.names) {
+                const auto colon = entry.rfind(':');
+                if (colon == std::string::npos ||
+                    (entry.compare(colon, std::string::npos, ":object") != 0 &&
+                        entry.compare(colon, std::string::npos, ":displayobject") != 0))
+                    continue;
+                const auto name = entry.substr(0, colon);
+                V member;
+                if (!ObjectMember(a_menuRoot, name.c_str(), member))
+                    continue;
+                if (tryInvoke(member, name))
+                    return true;
+                if (!ContainsNoCase(name, "galaxy"))
+                    continue;
+                // The shipped Galaxy2DMap can sit one level inside its
+                // container. Only galaxy-named containers are descended into so
+                // this stays a bounded, targeted probe.
+                MemberNameCollector children{ 64 };
+                member.VisitMembers(&children);
+                for (const auto& childEntry : children.names) {
+                    const auto childColon = childEntry.rfind(':');
+                    if (childColon == std::string::npos ||
+                        (childEntry.compare(childColon, std::string::npos, ":object") != 0 &&
+                            childEntry.compare(childColon, std::string::npos, ":displayobject") != 0))
+                        continue;
+                    const auto childName = childEntry.substr(0, childColon);
+                    V child;
+                    if (!ObjectMember(member, childName.c_str(), child))
+                        continue;
+                    if (tryInvoke(child, std::format("{}.{}", name, childName)))
+                        return true;
+                }
+            }
+
+            if (a_detail.empty())
+                a_detail = std::format("no reachable public '{}' method", kGalaxyHoverSetter);
+            return false;
         }
 
         bool DispatchVanillaMapCancel(RE::Scaleform::GFx::ASMovieRootBase* a_root)
@@ -1818,8 +2102,6 @@ namespace CFS::Bridge
 
             if (request.phase == RemoteRoutePhase::kAwaitGalaxy) {
                 std::string gateDetail;
-                V hintBar;
-                V setCourseData;
                 if (snapshot.view != kGalaxyView) {
                     gateDetail = std::format("Starmap view is {} rather than galaxy view",
                         snapshot.view);
@@ -1832,15 +2114,119 @@ namespace CFS::Bridge
                         gateDetail = std::format("galaxy root {:08X}/system {} differs from marked root {:08X}/system {}",
                             snapshot.treeBodyID, *focusedSystemID,
                             request.systemBodyID, destination->galaxy.system);
-                    } else if (!request.galaxySelectionDispatched) {
+                    } else {
+                        // Galaxy view now carries the exact captured root. The
+                        // remaining work is native galaxy-marker selection, which
+                        // gets its own phase and its own full timeout so a slow
+                        // Back transition cannot consume the focus budget.
                         {
                             std::lock_guard lock{ g_remoteRouteMutex };
                             if (g_remoteRouteRequest.phase != RemoteRoutePhase::kAwaitGalaxy ||
                                 g_remoteRouteRequest.targetFormID != request.targetFormID ||
                                 g_remoteRouteRequest.generation != request.generation)
                                 return;
-                            g_remoteRouteRequest.galaxySelectionDispatched = true;
+                            g_remoteRouteRequest.phase = RemoteRoutePhase::kEstablishSelection;
+                            g_remoteRouteRequest.started = Clock::now();
+                            g_remoteRouteRequest.executeReadySince = {};
                         }
+                        REX::INFO("[jump] matching galaxy STDT/DNAM root {:08X}/system {} reached after {} ms; establishing cursor-independent marker context for '{}'",
+                            snapshot.treeBodyID, *focusedSystemID,
+                            std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
+                            request.expectedSystemName);
+                        return;
+                    }
+                }
+
+                if (age < kRemoteRouteTimeout)
+                    return;
+                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                const auto reason = std::format("vanilla Back did not produce a matching galaxy focus: {}",
+                    gateDetail);
+                ClearDestination(reason.c_str());
+                g_mapUiDirty.store(true, std::memory_order_release);
+                REX::WARN("[jump] {}; remote mark cleared", reason);
+                return;
+            }
+
+            if (request.phase == RemoteRoutePhase::kEstablishSelection) {
+                if (snapshot.view != kGalaxyView) {
+                    if (age < kRemoteRouteTimeout)
+                        return;
+                    g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                    ClearDestination("galaxy marker context left galaxy view before Set Course");
+                    g_mapUiDirty.store(true, std::memory_order_release);
+                    REX::WARN("[jump] marker-context gate timed out outside galaxy view; remote mark cleared");
+                    return;
+                }
+
+                const auto proof = EvaluateGalaxySelection(menuRoot, snapshot,
+                    request.systemBodyID);
+                if (proof.proven) {
+                    {
+                        std::lock_guard lock{ g_remoteRouteMutex };
+                        if (g_remoteRouteRequest.phase != RemoteRoutePhase::kEstablishSelection ||
+                            g_remoteRouteRequest.targetFormID != request.targetFormID ||
+                            g_remoteRouteRequest.generation != request.generation)
+                            return;
+                        g_remoteRouteRequest.phase = RemoteRoutePhase::kAwaitRoute;
+                        g_remoteRouteRequest.started = Clock::now();
+                        g_remoteRouteRequest.executeReadySince = {};
+                    }
+                    REX::INFO("[jump] marker context established by {} after {} ms; {}",
+                        proof.authority,
+                        std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
+                        proof.Describe(snapshot, request.systemBodyID));
+                    if (proof.button.Ready())
+                        REX::INFO("[jump] Set Course enabled for '{}' root={:08X}",
+                            request.expectedSystemName, request.systemBodyID);
+                    else
+                        REX::INFO("[jump] Set Course still reports enabled={} visible={} while native selection is proven by {}; the vanilla button is never written to",
+                            proof.button.enabled, proof.button.visible,
+                            proof.authority);
+                    if (!DispatchVanillaSetCourse(root)) {
+                        g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                        ClearDestination("vanilla system-level Set Course handoff failed");
+                        g_mapUiDirty.store(true, std::memory_order_release);
+                        REX::WARN("[jump] stock system-level SetRouteDestination dispatch failed; remote mark cleared");
+                        return;
+                    }
+                    REX::INFO("[jump] Set Course dispatched at system scope for '{}' root={:08X} (authority={})",
+                        request.expectedSystemName, request.systemBodyID,
+                        proof.authority);
+                    return;  // Never consume a route that predates this dispatch.
+                }
+
+                // No proof yet. A rung that has just run keeps the ladder for a
+                // fixed number of completed advances so native can publish its
+                // result before the next rung is allowed to change the same
+                // state.
+                if (request.focusRungCooldown != 0) {
+                    std::lock_guard lock{ g_remoteRouteMutex };
+                    if (g_remoteRouteRequest.phase == RemoteRoutePhase::kEstablishSelection &&
+                        g_remoteRouteRequest.targetFormID == request.targetFormID &&
+                        g_remoteRouteRequest.generation == request.generation &&
+                        g_remoteRouteRequest.focusRungCooldown != 0)
+                        --g_remoteRouteRequest.focusRungCooldown;
+                    return;
+                }
+
+                // Advance the focus ladder by exactly one rung on this pass.
+                // Each rung is a stock, cursor-independent seam.
+                if (request.nextFocusRung != GalaxyFocusRung::kExhausted) {
+                    auto rung = request.nextFocusRung;
+                    {
+                        std::lock_guard lock{ g_remoteRouteMutex };
+                        if (g_remoteRouteRequest.phase != RemoteRoutePhase::kEstablishSelection ||
+                            g_remoteRouteRequest.targetFormID != request.targetFormID ||
+                            g_remoteRouteRequest.generation != request.generation)
+                            return;
+                        g_remoteRouteRequest.nextFocusRung =
+                            rung == GalaxyFocusRung::kQuickSelectChange ?
+                            GalaxyFocusRung::kHoverSetter :
+                            GalaxyFocusRung::kExhausted;
+                        g_remoteRouteRequest.focusRungCooldown = kGalaxyFocusRungPasses;
+                    }
+                    if (rung == GalaxyFocusRung::kQuickSelectChange) {
                         if (!DispatchVanillaGalaxySelection(root, request.systemBodyID)) {
                             g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
                             ClearDestination("vanilla galaxy system selection handoff failed");
@@ -1848,48 +2234,43 @@ namespace CFS::Bridge
                             REX::WARN("[jump] stock StarMapMenu_QuickSelectChange dispatch failed; remote mark cleared");
                             return;
                         }
-                        REX::INFO("[jump] galaxy view reached after {} ms; primed stock Quick Select system bodyID={:08X} for '{}' without cursor input",
-                            std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
+                        REX::INFO("[jump] focus rung 1: primed stock Quick Select system bodyID={:08X} for '{}' without cursor input",
                             request.systemBodyID, request.expectedSystemName);
-                        return;  // Let native publish Set Course state on a later advance.
-                    } else if (!GetVanillaSetCourseData(menuRoot, hintBar,
-                                   setCourseData, gateDetail)) {
-                        // The stock button state is native-owned and can trail
-                        // the view transition by several UI advances.
                     } else {
-                        {
-                            std::lock_guard lock{ g_remoteRouteMutex };
-                            if (g_remoteRouteRequest.phase != RemoteRoutePhase::kAwaitGalaxy ||
-                                g_remoteRouteRequest.targetFormID != request.targetFormID ||
-                                g_remoteRouteRequest.generation != request.generation)
-                                return;
-                            g_remoteRouteRequest.phase = RemoteRoutePhase::kAwaitRoute;
-                            g_remoteRouteRequest.started = Clock::now();
-                            g_remoteRouteRequest.executeReadySince = {};
-                        }
-                        if (!DispatchVanillaSetCourse(root)) {
-                            g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                            ClearDestination("vanilla system-level Set Course handoff failed");
-                            g_mapUiDirty.store(true, std::memory_order_release);
-                            REX::WARN("[jump] stock system-level SetRouteDestination dispatch failed; remote mark cleared");
-                            return;
-                        }
-                        REX::INFO("[jump] matching galaxy STDT/DNAM root {:08X}/system {} reached after {} ms; dispatched stock system-level SetRouteDestination for '{}'",
-                            snapshot.treeBodyID, *focusedSystemID,
-                            std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
-                            request.expectedSystemName);
-                        return;  // Never consume a route that predates this dispatch.
+                        std::string detail;
+                        const bool invoked = InvokeGalaxyHoverSetter(menuRoot,
+                            request.systemBodyID, detail);
+                        // A miss here is not fatal: rung 1 may still settle, and
+                        // the vanilla route/warning state is untouched either way.
+                        REX::INFO("[jump] focus rung 2: public galaxy hover setter {} ({})",
+                            invoked ? "invoked" : "unavailable", detail);
                     }
+                    return;  // Re-test native state on the next advance.
+                }
+
+                if (!request.focusDiagnosticsLogged) {
+                    {
+                        std::lock_guard lock{ g_remoteRouteMutex };
+                        if (g_remoteRouteRequest.phase != RemoteRoutePhase::kEstablishSelection ||
+                            g_remoteRouteRequest.targetFormID != request.targetFormID ||
+                            g_remoteRouteRequest.generation != request.generation)
+                            return;
+                        g_remoteRouteRequest.focusDiagnosticsLogged = true;
+                    }
+                    LogGalaxyFocusDiagnostics(menuRoot, snapshot, proof,
+                        request.systemBodyID);
+                    return;
                 }
 
                 if (age < kRemoteRouteTimeout)
                     return;
                 g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                const auto reason = std::format("vanilla Back did not produce a matching executable galaxy focus: {}",
-                    gateDetail);
+                const auto reason = std::format("no cursor-independent galaxy marker context was established: {}",
+                    proof.Describe(snapshot, request.systemBodyID));
                 ClearDestination(reason.c_str());
                 g_mapUiDirty.store(true, std::memory_order_release);
-                REX::WARN("[jump] {}; remote mark cleared", reason);
+                REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
+                    reason);
                 return;
             }
 
@@ -1939,7 +2320,7 @@ namespace CFS::Bridge
                         return;
                     g_remoteRouteRequest.executeReadySince = now;
                 }
-                REX::INFO("[jump] matching executable route observed for '{}' body='{}'; requiring {} ms continuous readiness before stock Execute Route",
+                REX::INFO("[jump] route identity confirmed: vanilla route ends in '{}' body='{}'; requiring {} ms continuous readiness before stock Execute Route",
                     request.expectedSystemName, gate.destinationBodyName,
                     kRemoteRouteExecuteSettleTime.count());
                 return;
@@ -1968,7 +2349,7 @@ namespace CFS::Bridge
                 REX::WARN("[jump] JumpDataPanel.SendExecuteEvent invocation failed; remote mark cleared");
                 return;
             }
-            REX::INFO("[jump] vanilla matching-system route remained executable for {} ms for '{}' body='{}' (route age {} ms); dispatched stock StarMapMenu_ExecuteRoute while retaining Cruise target {:08X}",
+            REX::INFO("[jump] Execute dispatched: vanilla matching-system route remained executable for {} ms for '{}' body='{}' (route age {} ms); stock StarMapMenu_ExecuteRoute sent while retaining Cruise target {:08X}",
                 std::chrono::duration_cast<std::chrono::milliseconds>(readyAge).count(),
                 request.expectedSystemName,
                 gate.destinationBodyName,
@@ -2709,7 +3090,8 @@ namespace CFS::Bridge
                 std::optional<std::uint32_t> expectedRemoteRoot;
                 {
                     std::lock_guard lock{ g_remoteRouteMutex };
-                    if (g_remoteRouteRequest.phase == RemoteRoutePhase::kAwaitGalaxy)
+                    if (g_remoteRouteRequest.phase == RemoteRoutePhase::kAwaitGalaxy ||
+                        g_remoteRouteRequest.phase == RemoteRoutePhase::kEstablishSelection)
                         expectedRemoteRoot = g_remoteRouteRequest.systemBodyID;
                 }
                 const bool acceptedRoot = systemID &&
@@ -2797,6 +3179,78 @@ namespace CFS::Bridge
                 g_mapUiDirty.store(true, std::memory_order_release);
             }
         } g_markersHandler;
+
+        class QuickSelectCollector : public V::ArrayVisitor
+        {
+        public:
+            explicit QuickSelectCollector(std::int32_t a_cursor) : cursor(a_cursor) {}
+
+            void Visit(std::uint32_t a_index, const V& a_value) override
+            {
+                ++count;
+                if (cursor < 0 || static_cast<std::uint32_t>(cursor) != a_index)
+                    return;
+                V entry = a_value;
+                cursorBodyID = UIntMember(entry, "uBodyID");
+            }
+
+            std::int32_t cursor{ -1 };
+            std::uint32_t count{ 0 };
+            std::uint32_t cursorBodyID{ 0 };
+        };
+
+        // Read-only mirror of vanilla's Quick Select state. It is the one native
+        // statement of galaxy system selection that does not depend on the
+        // physical cursor, so the remote driver can prove a selection without
+        // touching it.
+        class QuickSelectHandler : public RE::Scaleform::GFx::FunctionHandler
+        {
+        public:
+            void Call(const Params& a_params) override
+            {
+                V data;
+                if (!Payload(a_params, data))
+                    return;
+
+                if (!shapeLogged.exchange(true, std::memory_order_acq_rel))
+                    REX::INFO("[ui] StarMapMenuQuickSelectData members: {}",
+                        JoinMemberNames(data, 48));
+
+                V entries;
+                if (!data.GetMember("entryList", &entries))
+                    data.GetMember("aEntryList", &entries);
+                if (entries.IsObject() && !entries.IsArray()) {
+                    V inner;
+                    if (entries.GetMember("dataA", &inner) && inner.IsArray())
+                        entries = inner;
+                }
+
+                std::int32_t cursor = -1;
+                V cursorValue;
+                if (data.GetMember("uCursorSelectionIndex", &cursorValue) &&
+                    !cursorValue.IsUndefined())
+                    cursor = static_cast<std::int32_t>(AsNumber(cursorValue));
+
+                QuickSelectCollector visitor{ cursor };
+                if (entries.IsArray())
+                    entries.VisitElements(&visitor);
+
+                {
+                    std::lock_guard lock{ g_mapMutex };
+                    g_map.quickSelectPublished = true;
+                    g_map.quickSelectCount = visitor.count;
+                    g_map.quickSelectCursorIndex = cursor;
+                    g_map.quickSelectCursorBodyID = visitor.cursorBodyID;
+                }
+                if (Settings::Verbose())
+                    REX::INFO("[ui] quick select cursor={} of {} entries bodyID={:08X}",
+                        cursor, visitor.count, visitor.cursorBodyID);
+                g_mapUiDirty.store(true, std::memory_order_release);
+            }
+
+        private:
+            std::atomic<bool> shapeLogged{ false };
+        } g_quickSelectHandler;
 
         class DossierHandler : public RE::Scaleform::GFx::FunctionHandler
         {
@@ -3360,6 +3814,7 @@ namespace CFS::Bridge
             { &g_mapMovie, kMapMenu, "StarMapMenuSystemBodyInfoData", &g_bodyInfoHandler, 1u << 1 },
             { &g_mapMovie, kMapMenu, "StarMapMenuMarkersData", &g_markersHandler, 1u << 2 },
             { &g_mapMovie, kMapMenu, "StarmapSystemBodyInfoProvider", &g_dossierHandler, 1u << 3 },
+            { &g_mapMovie, kMapMenu, "StarMapMenuQuickSelectData", &g_quickSelectHandler, 1u << 4 },
             { &g_hudMovie, kHudMenu, "TargetLowFrequencyProvider", &g_lowHandler, 1u << 0 },
             { &g_hudMovie, kHudMenu, "TargetHighFrequencyProvider", &g_highHandler, 1u << 1 },
         };

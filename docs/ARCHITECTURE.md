@@ -8,6 +8,7 @@ GalaxyStarMapMenu movie
   StarMapMenuSystemBodyInfoData ------ system/star identity (not selected body)
   StarMapMenuMarkersData ------------- unique bIsInHighlightRadius marker row
   StarmapSystemBodyInfoProvider ------ dossier PNDT candidates while browsing
+  StarMapMenuQuickSelectData --------- native galaxy selection readback (read only)
                     |
                     | planets/moons: marker/dossier id+type agreement
                     |   + live PNDT + parsed GNAM
@@ -85,10 +86,27 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   across intermediate system changes and `LoadingMenu`, without constructing or
   altering the vanilla route itself. A remote tap first captures the body as the
   Cruise target plus the browsed system name/root, then emits the exact
-  `StarMapMenu_OnCancel` event used by vanilla Back. Once galaxy view is active,
-  it emits `StarMapMenu_QuickSelectChange {bodyID: captured STDT root}`—the exact
-  event emitted by `QuickSystemSelect.OnSelectionChange`—and then emits
-  `StarMapMenu_OnHintButtonClicked {buttonAction: "SetRouteDestination"}` there.
+  `StarMapMenu_OnCancel` event used by vanilla Back. Reaching galaxy view with
+  the captured root and establishing the galaxy marker context are two separate
+  guarded phases, each with its own five-second window. In the marker-context
+  phase a fixed ladder runs one rung at a time, and only until native publishes
+  a selection. A rung that has just run holds the ladder for a fixed number of
+  completed AS3 advances so native can publish its result before the next rung
+  touches the same state; the unit is advances, not wall clock. Rung 1 emits
+  `StarMapMenu_QuickSelectChange {bodyID: captured STDT root}`—the exact event
+  emitted by `QuickSystemSelect.OnSelectionChange`—and rung 2 invokes the
+  shipped public `SetHoveredSystem` galaxy setter with the same root, found by a
+  bounded exact-name search of the menu root and any galaxy-named container.
+  Neither rung touches the cursor. Set Course is dispatched as
+  `StarMapMenu_OnHintButtonClicked {buttonAction: "SetRouteDestination"}` only
+  once native itself names the captured system: the vanilla Set Course button
+  reporting enabled and visible, the native `StarMapMenuQuickSelectData` cursor
+  resting on the captured root, or exactly one galaxy highlight marker carrying
+  it. The latter two additionally require the vanilla button to be present and
+  visible; none of them writes to it. When the ladder is exhausted with no
+  native selection, one bounded read-only diagnostic pass logs the menu-root and
+  hint-bar member names plus every hint button's enabled/visible/text/action
+  before the phase fails closed.
   During guarded five-second stages, the route-end system text must match the
   captured name and the public Execute hint must remain visible continuously for
   500 ms. Transient mismatch states receive the full five-second route-build
@@ -103,8 +121,9 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   not foreground; focus return restarts the current phase timeout and clears any
   partial Execute-readiness dwell. The exact STDT root proven at acceptance is
   carried through stock Back and pinned against transient star-feed rows until
-  system-scope Set Course. The one-shot Quick Select change establishes the
-  native galaxy selection without mouse hover. Repeat presses of the
+  system-scope Set Course. The marker-context ladder establishes the native
+  galaxy selection without mouse hover, and Set Course waits for a native
+  selection authority rather than for elapsed time. Repeat presses of the
   Cruise-bound control are
   consumed while this handoff is active. The later route-system text gate remains
   authoritative before Execute. If the map closes early, movie/session
@@ -197,10 +216,10 @@ replacement.
   GNAM system ID, plus the live public
   `SetRouteDestinationButtonData` enabled/visible state. Acceptance captures
   `SystemNameHeader_mc` for later route-display comparison, emits stock Back,
-  carries the exact captured STDT/DNAM root into galaxy view, and emits the
-  stock Quick Select change payload with that root. Once native publishes an
-  enabled/visible Set Course state, it emits the same custom event as stock Set
-  Course. The post-advance driver watches
+  carries the exact captured STDT/DNAM root into galaxy view, and then runs the
+  cursor-independent marker-context ladder against that root. Once a native
+  selection authority names the captured system, it emits the same custom event
+  as stock Set Course. The post-advance driver watches
   `JumpData_mc`: `ExecuteButton_mc.ExecuteButtonHint_mc.Visible` is the shipped
   `bCanExecuteRoute` result, and the displayed route-end system must exactly
   match the captured name continuously for 500 ms before
@@ -225,6 +244,12 @@ replacement.
   STDT rows update the cached root; zero/transient rows cannot erase it. The root
   is cleared on entry to galaxy view but retained across galaxy-to-system entry
   because the star feed may publish before the view feed.
+- `StarMapMenuQuickSelectData` is subscribed read-only. It supplies
+  `uCursorSelectionIndex` and the `uBodyID` of that entry, which is the one
+  native statement of galaxy system selection that does not depend on the
+  physical cursor. The plugin only reads it; it never sets a cursor index,
+  writes an entry, or opens the Quick Select panel. Its member names are logged
+  once per session so the payload shape stays pinned to observed evidence.
 - Feed callbacks copy passed GFx payloads into plain C++ snapshots or queue a
   value action, then return without fetching another root or invoking AS3.
   HUD object construction, forwarded Cruise edges, fixed target status, marker

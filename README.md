@@ -64,9 +64,15 @@ than being reported as confirmed.
 - A remote planet or moon uses a tap-only `JUMP THEN CRUISE` action. It is
   enabled only when the system/star root is exact and vanilla **Set Course** is
   available. The tap records the body as the Cruise target, dispatches stock
-  `StarMapMenu_OnCancel`, and waits for galaxy view. It then primes vanilla's
-  system selection with the captured STDT root and dispatches stock
-  `SetRouteDestination` at system scope. After
+  `StarMapMenu_OnCancel`, and waits for galaxy view. It then establishes the
+  galaxy marker context without the cursor: it emits the stock
+  `StarMapMenu_QuickSelectChange` payload with the captured STDT root and, if
+  native still reports no selection a fixed number of UI advances later,
+  invokes the shipped public galaxy hover setter with that same root. Stock
+  `SetRouteDestination` is dispatched at system scope only after native itself
+  names the captured system — through the
+  vanilla **Set Course** button, the native Quick Select cursor, or a unique
+  galaxy highlight marker. The plugin never writes or forces that button. After
   vanilla builds the route, the plugin requires matching route-end system text
   plus the public `bCanExecuteRoute` gate continuously for 500 ms, then calls
   `JumpDataPanel.SendExecuteEvent()`. That method rechecks the Execute gate and

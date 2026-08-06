@@ -808,3 +808,67 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   the mouse. Require `primed stock Quick Select`, system-level Set Course,
   continuous-ready Execute, and player grav-jump states `0`, `1`, and `2` in
   order.
+
+## 2026-08-06 cursor-independent galaxy marker context
+
+- [x] The `215B3C07...F58A3` run isolated the remaining failure exactly. Remote
+  Gagarin `0005E311` was accepted with system root `0005E60A` (Alpha Centauri),
+  the log confirmed `primed stock Quick Select system bodyID=0005E60A ...
+  without cursor input`, and the request then failed closed at five seconds with
+  `vanilla Set Course is disabled or hidden (enabled=false visible=true)`.
+  Moving the physical mouse over the destination system had previously allowed
+  the same flow to continue. `StarMapMenu_QuickSelectChange` alone therefore
+  does not establish the galaxy marker context native requires.
+- [x] Reaching galaxy view with the captured STDT root and establishing the
+  galaxy marker context are now separate phases (`kAwaitGalaxy` ->
+  `kEstablishSelection` -> `kAwaitRoute`), each with its own five-second window.
+  A slow Back transition can no longer consume the selection budget, and the
+  failure log now names which of the two stages ran out.
+- [x] The marker-context phase runs a fixed ladder, one rung per post-advance
+  pass and only while native still reports no selection:
+  rung 1 emits the shipped `StarMapMenu_QuickSelectChange {bodyID}` payload;
+  rung 2 invokes the shipped public `SetHoveredSystem` galaxy setter with the
+  same root, located by a bounded exact-name search of the menu root plus any
+  galaxy-named container. Rung 2 failing is not fatal and mutates nothing.
+- [x] `StarMapMenuQuickSelectData` is now subscribed read-only through the same
+  proven `BSUIDataManager.Subscribe` path. It publishes
+  `uCursorSelectionIndex` and the selected entry's `uBodyID`; the payload's
+  member names are logged once per session so the shape stays evidence-pinned
+  rather than assumed. Nothing is written back to the feed.
+- [x] Stock Set Course is dispatched only after native itself names the captured
+  system, through one of three native-published authorities: the vanilla Set
+  Course button reporting enabled and visible, the Quick Select cursor resting
+  on the captured root, or exactly one galaxy highlight marker carrying it. The
+  two weaker authorities additionally require the vanilla button to be present
+  and visible. The plugin never writes, forces, or infers that button's state,
+  and the authority that unblocked the dispatch is named in the log.
+- [x] When the ladder is exhausted with no native selection, one bounded
+  read-only diagnostic pass logs the menu-root and hint-bar member names plus
+  every hint button's `bEnabled`/`bVisible`/text/action. This is intended to
+  identify the true vanilla seam from a single failing run instead of another
+  guessed event name.
+- [x] Route-end system identity, the public `bCanExecuteRoute` gate, the 500 ms
+  continuous readiness dwell, map session/movie generation, the foreground pause,
+  and the player-filtered grav-jump acknowledgement are all unchanged. Every
+  failure path still clears only the Cruise mark, leaves the map open, and
+  preserves vanilla route/warning state.
+- [x] Log phrasing now distinguishes the stages explicitly: `marker context
+  established by <authority>`, `Set Course enabled`, `Set Course dispatched`,
+  `route identity confirmed`, and `Execute dispatched`.
+- [ ] Local `xmake f -m releasedbg -y && xmake -y` compile/link and MO2
+  deployment were **not** performed for this change: it was authored in a Linux
+  cloud container with no Windows toolchain, no game install, and no checked-out
+  `lib/commonlibsf` submodule. Static validation only: the new galaxy-focus
+  helpers and the Quick Select handler were extracted and compiled clean under
+  GCC 13 and Clang with `-std=c++23 -Wall -Wextra` against a stub mirroring the
+  pinned CommonLibSF `Scaleform::GFx::Value` API (`VisitMembers` is
+  `REL::ID{169753}` at submodule commit `856774a`, so it is bound and non-zero).
+  Releasedbg compilation and in-game testing remain required.
+- [ ] Restart Starfield and trigger one remote planet/moon `JUMP THEN CRUISE`
+  **without moving the mouse after the press**. Require, in order: `marker
+  context established by <authority>`, `Set Course dispatched`, `route identity
+  confirmed`, `Execute dispatched`, then player grav-jump states `0`, `1`, `2`,
+  and finally the arrival Cruise lock on the marked body.
+- [ ] If it still fails closed, capture the `galaxy diagnostics` lines and the
+  `StarMapMenuQuickSelectData members` line: together they name the real
+  vanilla galaxy-selection seam without another speculative event.
