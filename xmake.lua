@@ -23,7 +23,7 @@ target("CruiseFromStarmap", function()
     add_rules("commonlibsf.plugin", {
         name = "CruiseFromStarmap",
         author = "NICKLEBACK",
-        description = "Fail-closed Starmap bridge with vanilla-route handoff and jump-persistent Cruise targeting."
+        description = "Fail-closed Starmap bridge with system-level vanilla jump handoff and body-level Cruise targeting."
     })
 
     add_files("src/**.cpp")

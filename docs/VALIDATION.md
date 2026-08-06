@@ -497,19 +497,32 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   invoking `JumpDataPanel.SendExecuteEvent()`. Session/movie changes, early map
   close, mismatch, timeout, or invocation failure clear only the Cruise mark;
   vanilla route/warning state is preserved.
-- [x] With live MO2 deployment disabled, `xmake -r` compiled, linked, and
-  installed the corrected releasedbg package with inherited CommonLibSF
-  warnings only. Build and local deploy-package DLL hashes match:
-  `0A1083AE9E918953ED78660E5C25426529B21534DC445F7650B3A251276397A9`.
-  MO2 and the running process still contain the rejected `BCB4631...B715`
-  build, so this is static/build evidence only.
-- [ ] After Starfield exits, deploy the exact `56492783...0041` DLL/PDB/default
-  INI, restart, and confirm the revised build loaded.
-- [ ] From a remote system-view body with stock **Set Course** available,
-  confirm one `JUMP THEN CRUISE` tap logs both stock stages, moves through galaxy
-  view automatically, and visibly begins the Grav Jump without a second action.
-  At final arrival, require automatic stock Cruise plus exact marked-target
-  course-lock readback.
+- [x] Releasedbg `0A1083AE...97A9` was deployed and loaded in PID `19716`.
+  At `09:13:46`, one Jupiter tap dispatched stock Set Course and Execute Route;
+  arrival resolved Sol and automatic Cruise locked Jupiter `0005DEBA`. The user
+  confirmed vanilla had already delivered the ship directly to Jupiter, so the
+  Cruise leg was redundant. A second remote Chawla run showed the same direct-body
+  boundary. This proves the one-tap route handoff but rejects body-scoped Set
+  Course as the product behavior.
+- [x] Further shipped-SWF inspection identifies the stock system-to-galaxy seam:
+  `GalaxyStarMapMenu.OnCancelEvent()` emits `StarMapMenu_OnCancel`. Back from
+  system view leaves the same system focused in galaxy view, where the unchanged
+  Set Course callback can create a system-scoped route.
+- [x] The replacement implementation keeps the highlighted PNDT only as the
+  Cruise target. It requires the system/star tree PNDT to be the parsed GNAM root,
+  emits stock Back, verifies galaxy view's focused-system name, and only then
+  emits stock Set Course. Execute additionally rejects any route whose displayed
+  body endpoint is neither empty nor the captured system name.
+- [x] With live MO2 deployment disabled, clean releasedbg `xmake -r -y` compiled,
+  linked, and installed with inherited CommonLibSF warnings only. Build and local
+  deploy-package DLL hashes match:
+  `0B78083F829B724BB9564B9BF92DE235FC044467877334BEF404132B78DB8BD2`.
+- [ ] After Starfield exits, deploy exact `0B78083F...B8BD2`, restart, and confirm
+  the Back -> system Set Course -> Execute chain loads.
+- [ ] From a remote system-view body, confirm one `JUMP THEN CRUISE` tap returns
+  to the matching galaxy-system node, creates a route with no different body
+  endpoint, and visibly begins the Grav Jump. At settled system arrival, require
+  a meaningful automatic Cruise leg plus exact marked-body course-lock readback.
 - [ ] Confirm an unexplored/out-of-range route remains on vanilla's galaxy-view
   warning after five seconds and does not retain a Cruise mark or begin travel.
 - [ ] Re-run one current-system completed-hold regression to prove the local

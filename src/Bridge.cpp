@@ -36,6 +36,7 @@ namespace CFS::Bridge
 
         constexpr const char* kMapMenu = "GalaxyStarMapMenu";
         constexpr const char* kHudMenu = "SpaceshipHudMenu";
+        constexpr std::int32_t kGalaxyView = 0;
         constexpr std::int32_t kSystemView = 1;
         constexpr std::uint32_t kPlanetType = 2;
         constexpr std::uint32_t kMoonType = 3;
@@ -152,13 +153,22 @@ namespace CFS::Bridge
         std::atomic<std::uint64_t> g_mapActionHintSignature{ 0 };
         std::atomic<bool> g_mapUiDirty{ false };
 
+        enum class RemoteRoutePhase : std::uint8_t
+        {
+            kNone,
+            kAwaitGalaxy,
+            kAwaitRoute,
+        };
+
         struct RemoteRouteRequest
         {
-            bool active{ false };
+            RemoteRoutePhase phase{ RemoteRoutePhase::kNone };
             std::uint32_t session{ 0 };
             std::uint32_t generation{ 0 };
             std::uint32_t targetFormID{ 0 };
+            std::uint32_t systemBodyID{ 0 };
             std::string expectedSystemName;
+            std::string targetName;
             Clock::time_point started{};
         };
         std::mutex g_remoteRouteMutex;
@@ -1105,6 +1115,7 @@ namespace CFS::Bridge
             bool ready{ false };
             EligibilityCode code{ EligibilityCode::kRemoteCourseUnavailable };
             std::string detail{ "vanilla travel data is unavailable" };
+            std::string destinationBodyName;
         };
 
         bool GetLiveMapMenuRoot(const MapSnapshot& a_snapshot,
@@ -1167,6 +1178,20 @@ namespace CFS::Bridge
             return StringMember(textField, "text");
         }
 
+        std::string GalaxyFocusedSystemName(V& a_menuRoot)
+        {
+            V systemInfo;
+            V systemNameHeader;
+            V header;
+            V textField;
+            if (!ObjectMember(a_menuRoot, "SystemInfo_mc", systemInfo) ||
+                !ObjectMember(systemInfo, "SystemNameHeader_mc", systemNameHeader) ||
+                !ObjectMember(systemNameHeader, "Header_mc", header) ||
+                !ObjectMember(header, "text_tf", textField))
+                return {};
+            return StringMember(textField, "text");
+        }
+
         RemoteRouteGate InspectRemoteRoute(V& a_menuRoot,
             const std::string& a_expectedSystemName, V* a_jumpDataOut = nullptr)
         {
@@ -1187,6 +1212,9 @@ namespace CFS::Bridge
                 return gate;
             }
             const auto routeSystem = StringMember(routeSystemField, "text");
+            V routeBodyField;
+            if (ObjectMember(routeEnd, "bodyName_tf", routeBodyField))
+                gate.destinationBodyName = StringMember(routeBodyField, "text");
             if (routeSystem.empty()) {
                 gate.detail = "vanilla route destination system is empty";
                 return gate;
@@ -1260,6 +1288,14 @@ namespace CFS::Bridge
                 return false;
             return DispatchHudEvent(a_root,
                 "StarMapMenu_OnHintButtonClicked", &params);
+        }
+
+        bool DispatchVanillaMapCancel(RE::Scaleform::GFx::ASMovieRootBase* a_root)
+        {
+            // This is the exact Event emitted by GalaxyStarMapMenu's visible
+            // Back button. From system view, native returns to galaxy view with
+            // that system focused; it does not close the Starmap.
+            return DispatchHudEvent(a_root, "StarMapMenu_OnCancel", nullptr);
         }
 
         bool InvokeHudCruiseUserEvent(RE::Scaleform::GFx::ASMovieRootBase* a_root,
@@ -1387,6 +1423,7 @@ namespace CFS::Bridge
 
             RE::Scaleform::GFx::ASMovieRootBase* mapRoot = nullptr;
             std::string expectedSystemName;
+            std::uint32_t expectedSystemBodyID = 0;
             if (remotePlanetary) {
                 V menuRoot;
                 if (!GetLiveMapMenuRoot(snapshot, mapRoot, menuRoot)) {
@@ -1408,6 +1445,17 @@ namespace CFS::Bridge
                     REX::WARN("[jump] remote action rejected: browsed system identity is unavailable");
                     return;
                 }
+                const auto systemBody = BodyIndex::Lookup(snapshot.treeBodyID);
+                if (!systemBody ||
+                    systemBody->galaxy.system != selected.galaxy.system ||
+                    systemBody->galaxy.parent != 0 ||
+                    systemBody->galaxy.planet != 0) {
+                    g_mapUiDirty.store(true, std::memory_order_release);
+                    REX::WARN("[jump] remote action rejected: focused system root {:08X} does not identify system {}",
+                        snapshot.treeBodyID, selected.galaxy.system);
+                    return;
+                }
+                expectedSystemBodyID = snapshot.treeBodyID;
             }
 
             const auto existing = Destination();
@@ -1442,32 +1490,35 @@ namespace CFS::Bridge
             }
             g_selectionAcceptedThisOpen.store(true, std::memory_order_release);
             if (remotePlanetary) {
-                // First dispatch the exact CustomEvent emitted by the visible
-                // vanilla Set Course callback. Vanilla owns route construction
-                // and moves the same Starmap movie to galaxy view. A later
-                // post-advance pass validates its route and executes it.
+                // Preserve the body only as our Cruise destination. First emit
+                // the exact stock Back event so native returns from the body
+                // system view to the focused system node in galaxy view. A
+                // later post-advance pass proves that focus before asking
+                // vanilla to Set Course at system scope.
                 g_state.store(NavState::kMapSelection, std::memory_order_release);
                 {
                     std::lock_guard lock{ g_remoteRouteMutex };
                     g_remoteRouteRequest = {
-                        .active = true,
+                        .phase = RemoteRoutePhase::kAwaitGalaxy,
                         .session = snapshot.session,
                         .generation = snapshot.generation,
                         .targetFormID = selected.formID,
+                        .systemBodyID = expectedSystemBodyID,
                         .expectedSystemName = expectedSystemName,
+                        .targetName = selected.localizedName,
                         .started = Clock::now(),
                     };
                 }
-                if (!DispatchVanillaSetCourse(mapRoot)) {
+                if (!DispatchVanillaMapCancel(mapRoot)) {
                     g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                    ClearDestination("vanilla Set Course handoff failed");
+                    ClearDestination("vanilla system-view Back handoff failed");
                     g_mapUiDirty.store(true, std::memory_order_release);
-                    REX::WARN("[jump] stock SetRouteDestination dispatch failed; remote mark cleared");
+                    REX::WARN("[jump] stock StarMapMenu_OnCancel dispatch failed; remote mark cleared");
                     return;
                 }
-                REX::INFO("[jump] accepted tap map={:08X}/{} target={:08X} system='{}'; dispatched stock SetRouteDestination and awaiting vanilla route gate",
+                REX::INFO("[jump] accepted tap map={:08X}/{} target={:08X} systemRoot={:08X} system='{}'; dispatched stock Back and awaiting matching galaxy focus",
                     selected.mapFormID, selected.mapType, selected.formID,
-                    expectedSystemName);
+                    expectedSystemBodyID, expectedSystemName);
                 return;
             }
 
@@ -1480,7 +1531,7 @@ namespace CFS::Bridge
         bool RemoteRouteRequestActive()
         {
             std::lock_guard lock{ g_remoteRouteMutex };
-            return g_remoteRouteRequest.active;
+            return g_remoteRouteRequest.phase != RemoteRoutePhase::kNone;
         }
 
         void DriveRemoteRouteRequest()
@@ -1490,7 +1541,7 @@ namespace CFS::Bridge
                 std::lock_guard lock{ g_remoteRouteMutex };
                 request = g_remoteRouteRequest;
             }
-            if (!request.active)
+            if (request.phase == RemoteRoutePhase::kNone)
                 return;
 
             MapSnapshot snapshot;
@@ -1517,9 +1568,82 @@ namespace CFS::Bridge
             if (!GetLiveMapMenuRoot(snapshot, root, menuRoot))
                 return;
 
+            if (request.phase == RemoteRoutePhase::kAwaitGalaxy) {
+                std::string gateDetail;
+                bool stableMismatch = false;
+                V hintBar;
+                V setCourseData;
+                if (snapshot.view != kGalaxyView) {
+                    gateDetail = std::format("Starmap view is {} rather than galaxy view",
+                        snapshot.view);
+                } else {
+                    const auto focusedSystemName = GalaxyFocusedSystemName(menuRoot);
+                    if (focusedSystemName.empty()) {
+                        gateDetail = "focused galaxy-system identity is unavailable";
+                    } else if (focusedSystemName != request.expectedSystemName) {
+                        stableMismatch = age >= kRemoteRouteIdentitySettleTime;
+                        gateDetail = std::format("galaxy focus is '{}' but marked system is '{}'",
+                            focusedSystemName, request.expectedSystemName);
+                    } else if (!GetVanillaSetCourseData(menuRoot, hintBar,
+                                   setCourseData, gateDetail)) {
+                        // The stock button state is native-owned and can trail
+                        // the view transition by several UI advances.
+                    } else {
+                        {
+                            std::lock_guard lock{ g_remoteRouteMutex };
+                            if (g_remoteRouteRequest.phase != RemoteRoutePhase::kAwaitGalaxy ||
+                                g_remoteRouteRequest.targetFormID != request.targetFormID ||
+                                g_remoteRouteRequest.generation != request.generation)
+                                return;
+                            g_remoteRouteRequest.phase = RemoteRoutePhase::kAwaitRoute;
+                            g_remoteRouteRequest.started = Clock::now();
+                        }
+                        if (!DispatchVanillaSetCourse(root)) {
+                            g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                            ClearDestination("vanilla system-level Set Course handoff failed");
+                            g_mapUiDirty.store(true, std::memory_order_release);
+                            REX::WARN("[jump] stock system-level SetRouteDestination dispatch failed; remote mark cleared");
+                            return;
+                        }
+                        REX::INFO("[jump] matching galaxy focus '{}' reached after {} ms; dispatched stock system-level SetRouteDestination for root {:08X}",
+                            request.expectedSystemName,
+                            std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
+                            request.systemBodyID);
+                        return;  // Never consume a route that predates this dispatch.
+                    }
+                }
+
+                if (!stableMismatch && age < kRemoteRouteTimeout)
+                    return;
+                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                const auto reason = std::format("vanilla Back did not produce a matching executable galaxy focus: {}",
+                    gateDetail);
+                ClearDestination(reason.c_str());
+                g_mapUiDirty.store(true, std::memory_order_release);
+                REX::WARN("[jump] {}; remote mark cleared", reason);
+                return;
+            }
+
+            if (snapshot.view != kGalaxyView) {
+                if (age < kRemoteRouteTimeout)
+                    return;
+                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                ClearDestination("system-level Set Course left galaxy view before producing a route");
+                g_mapUiDirty.store(true, std::memory_order_release);
+                REX::WARN("[jump] system-level route gate timed out outside galaxy view; remote mark cleared");
+                return;
+            }
+
             V jumpData;
-            const auto gate = InspectRemoteRoute(menuRoot,
+            auto gate = InspectRemoteRoute(menuRoot,
                 request.expectedSystemName, &jumpData);
+            if (gate.ready && !gate.destinationBodyName.empty() &&
+                gate.destinationBodyName != request.expectedSystemName) {
+                gate.ready = false;
+                gate.code = EligibilityCode::kRemoteCourseMismatch;
+                gate.detail = std::format("route still names body '{}' instead of a system-only endpoint",
+                    gate.destinationBodyName);
+            }
             if (!gate.ready) {
                 const bool stableMismatch =
                     gate.code == EligibilityCode::kRemoteCourseMismatch &&
@@ -1539,11 +1663,11 @@ namespace CFS::Bridge
 
             {
                 std::lock_guard lock{ g_remoteRouteMutex };
-                if (!g_remoteRouteRequest.active ||
+                if (g_remoteRouteRequest.phase != RemoteRoutePhase::kAwaitRoute ||
                     g_remoteRouteRequest.targetFormID != request.targetFormID ||
                     g_remoteRouteRequest.generation != request.generation)
                     return;
-                g_remoteRouteRequest.active = false;
+                g_remoteRouteRequest.phase = RemoteRoutePhase::kNone;
             }
 
             // SendExecuteEvent is the callback behind the visible vanilla
@@ -1557,8 +1681,9 @@ namespace CFS::Bridge
                 REX::WARN("[jump] JumpDataPanel.SendExecuteEvent invocation failed; remote mark cleared");
                 return;
             }
-            REX::INFO("[jump] vanilla route ready for '{}' after {} ms; dispatched stock StarMapMenu_ExecuteRoute for marked target {:08X}",
+            REX::INFO("[jump] vanilla system-only route ready for '{}' body='{}' after {} ms; dispatched stock StarMapMenu_ExecuteRoute while retaining Cruise target {:08X}",
                 request.expectedSystemName,
+                gate.destinationBodyName,
                 std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
                 request.targetFormID);
         }
@@ -2050,11 +2175,23 @@ namespace CFS::Bridge
             if (!(hintBar.IsObject() || hintBar.IsDisplayObject()) ||
                 !(buttonData.IsObject() || buttonData.IsDisplayObject()))
                 return;
-            if (remotePlanetary && eligibility.enabled && !setCourseReady) {
-                eligibility.code = EligibilityCode::kRemoteCourseUnavailable;
-                eligibility.enabled = false;
-                eligibility.label = "VANILLA SET COURSE UNAVAILABLE";
-                eligibility.detail = setCourseDetail;
+            if (remotePlanetary && eligibility.enabled) {
+                const auto systemBody = BodyIndex::Lookup(snapshot.treeBodyID);
+                const bool systemRootReady = systemBody && eligibility.destination &&
+                    systemBody->galaxy.system == eligibility.destination->galaxy.system &&
+                    systemBody->galaxy.parent == 0 && systemBody->galaxy.planet == 0;
+                if (!systemRootReady) {
+                    eligibility.code = EligibilityCode::kRemoteCourseUnavailable;
+                    eligibility.enabled = false;
+                    eligibility.label = "SYSTEM ROUTE IDENTITY UNAVAILABLE";
+                    eligibility.detail = std::format("focused system root {:08X} is not the root of system {}",
+                        snapshot.treeBodyID, eligibility.destination->galaxy.system);
+                } else if (!setCourseReady) {
+                    eligibility.code = EligibilityCode::kRemoteCourseUnavailable;
+                    eligibility.enabled = false;
+                    eligibility.label = "VANILLA SET COURSE UNAVAILABLE";
+                    eligibility.detail = setCourseDetail;
+                }
             }
 
             const auto signature = EligibilitySignature(snapshot, eligibility);
@@ -3352,6 +3489,6 @@ namespace CFS::Bridge
         StartFocusWatcher();
         g_lastUnsettledTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
         tasks->AddPermanentTask(&OnFrame);
-        REX::INFO("bridge initialized: current-system Cruise plus guarded remote stock SetCourse/ExecuteRoute handoff, no serialization or public API");
+        REX::INFO("bridge initialized: current-system Cruise plus guarded remote stock Back/system-SetCourse/ExecuteRoute handoff, no serialization or public API");
     }
 }

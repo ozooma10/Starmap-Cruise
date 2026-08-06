@@ -19,8 +19,10 @@ GalaxyStarMapMenu movie
                     v
               BodyDestination value (map id/type + target id)
                     |
-                    +---- remote planet/moon: stock SetRouteDestination
-                    |       + vanilla builds route / enters galaxy view
+                    +---- remote planet/moon: stock Back to galaxy
+                    |       + verify same focused system/root
+                    |       + stock system-level SetRouteDestination
+                    |       + vanilla builds route
                     |       + matching visible vanilla Execute gate
                     |       + JumpDataPanel.SendExecuteEvent()
                     |       + PendingJump until target system
@@ -51,9 +53,9 @@ light master mappings are respected. No cache is read or written.
 ```text
 Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
           |       |                          |                 |
-          |       +-> stock Set Course       |                 |
-          |                 | route verified |                 |
-          |                 +-> stock Execute -> PendingJump --+
+          |       +-> stock Back -> system Set Course           |
+          |                 | system route verified             |
+          |                 +-> stock Execute -> PendingJump ---+
           | invalid                 | intermediate jumps       | manual exit or
           +-> vanilla               | and LoadingMenu           +-> interruption
 ```
@@ -71,14 +73,15 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   current-feed non-planets already have a course-addressable target ID.
 - `Marked` owns the process-local destination but not autopilot.
 - `PendingJump` is used only for a remote planet or moon. It preserves the mark
-  across intermediate system changes and `LoadingMenu`, without plotting or
-  altering the vanilla route itself. A remote tap first captures the browsed
-  system name and dispatches the exact
-  `StarMapMenu_OnHintButtonClicked {buttonAction: "SetRouteDestination"}` custom
-  event used by vanilla **Set Course**. Vanilla builds the route and moves the
-  same movie to galaxy view. During a five-second guarded window, the route-end
-  system text must match the captured name and the public Execute hint must be
-  visible. The plugin then enters `PendingJump` and invokes public
+  across intermediate system changes and `LoadingMenu`, without constructing or
+  altering the vanilla route itself. A remote tap first captures the body as the
+  Cruise target plus the browsed system name/root, then emits the exact
+  `StarMapMenu_OnCancel` event used by vanilla Back. Once galaxy view focuses the
+  same system, it emits
+  `StarMapMenu_OnHintButtonClicked {buttonAction: "SetRouteDestination"}` there.
+  During guarded five-second stages, the route-end system text must match the
+  captured name, it must not identify a different body endpoint, and the public
+  Execute hint must be visible. The plugin then enters `PendingJump` and invokes public
   `JumpDataPanel.SendExecuteEvent()`, which rechecks the same Execute visibility
   before dispatching `StarMapMenu_ExecuteRoute`.
   If the map closes early, movie/session identity changes, the route mismatches,
@@ -157,13 +160,16 @@ replacement.
   after the UI call. The vanilla `SetRouteDestination`
   button is never changed. Each variant is created at most once per movie and
   hidden when inactive; no SWF bytecode is replaced.
-- For a remote planet/moon, the tap-only control is additionally gated by the
-  live public `SetRouteDestinationButtonData` enabled/visible state. Acceptance
-  captures `SystemNameHeader_mc`, then emits the same custom event as that stock
-  button. After vanilla changes to galaxy view, the post-advance driver watches
+- For a remote planet/moon, the tap-only control is additionally gated by an
+  exact parsed GNAM system root and the live public
+  `SetRouteDestinationButtonData` enabled/visible state. Acceptance captures
+  `SystemNameHeader_mc`, emits stock Back, then waits for galaxy view's
+  `SystemInfo_mc.SystemNameHeader_mc` to name that same system. Only then does it
+  emit the same custom event as stock Set Course. The post-advance driver watches
   `JumpData_mc`: `ExecuteButton_mc.ExecuteButtonHint_mc.Visible` is the shipped
   `bCanExecuteRoute` result, and the displayed route-end system must exactly
-  match the captured name before `JumpDataPanel.SendExecuteEvent()` is invoked.
+  match the captured name and the body endpoint must be empty or the system name
+  before `JumpDataPanel.SendExecuteEvent()` is invoked.
   The plugin does not dispatch a native far-travel event, construct a route,
   change an exploration flag, or hide the map itself on this path. Vanilla owns
   SetRouteDestination, route construction, ExecuteRoute, and normal menu/travel
@@ -176,8 +182,9 @@ replacement.
   `CruiseModeHUDActive` members. Getter failure is fail-closed to tap-only and
   does not synthesize a Cruise exit. While the Starmap is open, fallback polls
   reach Scaleform only after the HUD movie has settled.
-- The system/star tree provider is diagnostic-only. It never invalidates or
-  participates in the marker/dossier body join.
+- The system/star tree provider never participates in the marker/dossier body
+  join. For a remote action only, its parsed root identity separately proves
+  which system node vanilla must retain when returning to galaxy view.
 - Feed callbacks copy passed GFx payloads into plain C++ snapshots or queue a
   value action, then return without fetching another root or invoking AS3.
   HUD object construction, forwarded Cruise edges, fixed target status, marker

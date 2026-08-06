@@ -5,7 +5,7 @@ other addressable current-system marker—and use the separate Cruise action. Fo
 a current-system target, tap/release remembers it and returns to the cockpit, or
 a completed Starmap hold enters vanilla Cruise immediately and locks it. For a
 remote planet or moon with an executable matching vanilla route, the tap starts
-that route and remembers which body Cruise should lock at final arrival. The key
+a system-level route and remembers which body Cruise should lock after arrival. The key
 may be released once a local hold completes. In flight system view, the action
 remains visible but disabled with a short reason when the highlighted marker
 cannot be accepted. A fixed cockpit label confirms the marked target even when
@@ -33,12 +33,13 @@ inter-plugin API.
 - Keyboard/mouse for the separate Starmap action; controller UI remains pending
 
 Native grav-jump route construction or modification remains outside this
-plugin's scope. For a remote planet or moon, one tap arms the process-local mark
-and dispatches the exact custom event emitted by vanilla **Set Course** for the
-highlighted body. Vanilla moves to galaxy view and builds the route. The plugin
-then waits for the visible vanilla travel panel, verifies that its destination
-system matches the system captured with the mark, and invokes the same public
-method as the vanilla Execute button. Vanilla still owns fuel, range,
+plugin's scope. For a remote planet or moon, one tap arms the process-local body
+mark and emits vanilla Back from system view. After vanilla focuses the same
+system in galaxy view, the plugin verifies that focus and dispatches the exact
+custom event emitted by vanilla **Set Course** there. The plugin then waits for
+the visible vanilla travel panel, verifies that it is an executable system-only
+route to the captured system, and invokes the same public method as the vanilla
+Execute button. Vanilla still owns fuel, range,
 exploration, travel, and every route leg. The mark survives intermediate jumps and is
 reconciled only after arrival in the target system. A remote station or other
 non-planet marker remains unavailable. A station marker must be a live station reference
@@ -53,10 +54,12 @@ than being reported as confirmed.
 - Tap/release marks the target and returns to the cockpit. Starting Cruise
   normally afterward locks that marked target.
 - A remote planet or moon uses a tap-only `JUMP THEN CRUISE` action. It is
-  enabled only when vanilla **Set Course** is enabled and visible for the exact
-  highlighted body. The tap records the target/system and dispatches stock
-  `SetRouteDestination`. After vanilla builds the route and moves to galaxy
-  view, the plugin requires matching route-end text plus the public
+  enabled only when the system/star root is exact and vanilla **Set Course** is
+  available. The tap records the body as the Cruise target, dispatches stock
+  `StarMapMenu_OnCancel`, and waits for galaxy view to focus the captured
+  system. It then dispatches stock `SetRouteDestination` at system scope. After
+  vanilla builds the route, the plugin requires matching route-end text, no
+  different body endpoint, plus the public
   `bCanExecuteRoute` gate, then calls `JumpDataPanel.SendExecuteEvent()`. That
   method rechecks the Execute gate and dispatches stock
   `StarMapMenu_ExecuteRoute`. A missing, mismatched, or non-executable route
@@ -102,11 +105,14 @@ A Starmap press may be consumed only when all of these gates pass:
 4. A planet/moon marker must match the dossier id/type; that dossier id must be a
    live PNDT with a parsed GNAM tuple. Remote targets additionally require the
    byte/source/vtable-guarded `TESLoadGameEvent` sink so a save load cannot retain
-   a stale process-local mark. At acceptance they require vanilla **Set Course**
-   to be enabled/visible and the browsed-system header to resolve. After stock
-   route creation they require the public Execute hint to be visible
+   a stale process-local mark. At acceptance they require the tree focus to be
+   the parsed GNAM root of the destination system, vanilla **Set Course** to be
+   available, and the browsed-system header to resolve. After stock Back they
+   require galaxy focus to retain that system name. After system-scope route
+   creation they require the public Execute hint to be visible
    (`bCanExecuteRoute=true`) and its destination-system text to match the system
-   name captured with the mark.
+   name captured with the mark, and reject a route that still names a different
+   body endpoint.
 5. A station marker must be a live reference whose base carries `IsStarstation`,
    or a cell that resolves to exactly one persistent reference with such a base.
    Other non-planet markers must match exactly one current cockpit HUD row by ID.
