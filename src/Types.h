@@ -40,6 +40,7 @@ namespace CFS
         kIdle,
         kMapSelection,
         kMarked,
+        kPendingJump,
         kAwaitingCruise,
         kAutopilotLocked,
     };

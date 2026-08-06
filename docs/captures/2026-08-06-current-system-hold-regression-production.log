@@ -1,0 +1,427 @@
+[00:48:46.141] [9948 ] [I] CruiseFromStarmap v0.1.0.0
+[00:48:46.141] [9948 ] [I] CruiseFromStarmap v0.1.0.0 loading; supported runtime 1.16.244.0, current runtime 1.16.244.0
+[00:48:46.141] [9948 ] [I] load complete
+[00:49:19.572] [27828] [I] config: mode=TapHoldCruise marker=false destinationName=true targetStatus=true verbose=true
+[00:49:19.576] [27828] [I] [space] IsInSpace(false) binding validated: Address Library ID 63482, RVA=0xB58D50, fingerprint=16 bytes
+[00:49:19.576] [27828] [I] [target] native ship-target setter validated: Address Library ID 97892, RVA=0x17DE9B0
+[00:49:19.576] [27828] [I] [safety] TESLoadGameEvent guard prologue=[48 83 EC 28 65 48 8B 04 25 58 00 00 00 BA B8 00] source=00007FF694948080/00007FF694948080 match=true vtable=00007FF693B68070/00007FF693B68070 match=true
+[00:49:19.576] [27828] [I] [safety] TESLoadGameEvent sink registered; jump-persistent remote targets enabled
+[00:49:19.577] [27828] [I] MainThreadUiPump: armed at UI_AdvanceActiveMenus entry; Scaleform work runs post-advance on the owning game thread
+[00:49:20.049] [27828] [I] [input] Starmap Cruise action follows live Cruise binding: VK=0x54 modifier=none
+[00:49:20.049] [27828] [I] [bodies] active plugin tiers: full=8 small=9 medium=10 total=27
+[00:49:20.049] [27828] [I] [input] UI::PerformInputProcessing hook installed (physical device/id tracking)
+[00:49:20.049] [27828] [I] bridge initialized: bodies/stations-first, current-system only, no serialization or public API
+[00:49:20.282] [44336] [I] [bodies] 1765 PNDT records from Starfield.esm
+[00:49:20.852] [44336] [I] [bodies] 5 persistent station references added/updated from Starfield.esm
+[00:49:20.854] [44336] [I] [bodies] 11 PNDT records from ShatteredSpace.esm
+[00:49:21.104] [44336] [I] [bodies] 4 PNDT records from SFBGS00D.esm
+[00:49:21.139] [44336] [I] [bodies] 5 PNDT records from SFBGS050.esm
+[00:49:21.165] [44336] [I] [bodies] 1 persistent station references added/updated from SFBGS050.esm
+[00:49:21.283] [44336] [I] [bodies] 1 PNDT records from SFBGS003.esm
+[00:49:21.290] [44336] [I] [bodies] 1 persistent station references added/updated from SFBGS003.esm
+[00:49:21.298] [44336] [I] [bodies] 2 PNDT records from sfta01.esm
+[00:49:21.311] [44336] [I] [bodies] 2 PNDT records from sfta03.esm
+[00:49:21.315] [44336] [I] [bodies] 1 PNDT records from sfta04.esm
+[00:49:21.319] [44336] [I] [bodies] 1 PNDT records from sfta05.esm
+[00:49:21.323] [44336] [I] [bodies] 2 PNDT records from sfta06.esm
+[00:49:21.329] [44336] [I] [bodies] 3 PNDT records from kgcdoom.esm
+[00:49:21.330] [44336] [I] [bodies] load-order index ready: 1788 PNDT bodies, 37 station bases, 7 persistent station refs in 7 cells, 1280 ms
+[00:49:25.125] [27828] [I] [safety] TESLoadGameEvent received; queued destination clear
+[00:52:23.750] [ 976 ] [I] [ui] movie created: SpaceshipHudMenu generation=1
+[00:52:24.006] [3200 ] [I] [ui] subscribed SpaceshipHudMenu -> TargetLowFrequencyProvider
+[00:52:24.006] [3200 ] [I] [system] cockpit feed resolves current system 118818
+[00:52:24.015] [35608] [I] [ui] subscribed SpaceshipHudMenu -> TargetHighFrequencyProvider
+[00:52:25.258] [32484] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:03:40.840] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=1
+[01:03:40.840] [9948 ] [I] [map] action hint -> HIDDEN TAP/UNAVAILABLE '' (not an active-flight system-view map session, session=0 generation=0)
+[01:03:40.857] [9948 ] [I] [map] open session=1 generation=1 flying=true cruise=false cruiseAvailable=true currentSystem=118818
+[01:03:40.859] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=1 generation=1)
+[01:03:41.092] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:03:41.096] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:03:41.099] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:03:41.103] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:03:41.398] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:03:41.398] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=1 generation=1)
+[01:03:41.431] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:03:41.431] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E547 'Bolivar I' system=118818, session=1 generation=1)
+[01:03:41.665] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:03:41.665] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=1 generation=1)
+[01:03:42.925] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:03:42.925] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=1 generation=1)
+[01:03:58.058] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:03:58.058] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=1 generation=1)
+[01:03:58.982] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:03:58.982] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E3A5 'Volii Alpha' system=64720, session=1 generation=1)
+[01:03:59.004] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:03:59.004] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=1 generation=1)
+[01:03:59.284] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:03:59.285] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E3A5 'Volii Alpha' system=64720, session=1 generation=1)
+[01:04:02.112] [9948 ] [I] [input] natural context handoff: device=0 id=84 now reports 'Cruise' value=1.00 held=0.003
+[01:04:03.249] [9948 ] [I] [input] physical hold released (device=0 id=84 event='Cruise')
+[01:04:03.250] [9948 ] [I] [destination] marked 0005E3A5 'Volii Alpha' (system=64720 parent=0 planet=2 kind=planet)
+[01:04:03.250] [9948 ] [I] [map] accepted tap map=0005E3A5/2 target=0005E3A5 remotePending=true; requested normal menu hide
+[01:04:03.251] [9948 ] [I] [status] cockpit Cruise target confirmation ready
+[01:04:03.253] [9948 ] [I] [destination] pending grav-jump arrival for 0005E3A5 'Volii Alpha' system=64720
+[01:04:03.253] [9948 ] [I] [map] close accepted=true holdCompleted=false physicalHeld=false state=3
+[01:04:54.052] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=2
+[01:04:54.063] [9948 ] [I] [map] open session=2 generation=2 flying=true cruise=false cruiseAvailable=true currentSystem=118818
+[01:04:54.066] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=2 generation=2)
+[01:04:54.304] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:04:54.307] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:04:54.311] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:04:54.314] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:04:55.294] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:04:55.294] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=2 generation=2)
+[01:04:55.304] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:04:55.304] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E547 'Bolivar I' system=118818, session=2 generation=2)
+[01:04:55.493] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:04:55.493] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=2 generation=2)
+[01:04:57.040] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:04:57.040] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=2 generation=2)
+[01:05:02.933] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:05:02.933] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=2 generation=2)
+[01:05:04.119] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:05:04.119] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E3A5 'Volii Alpha' system=64720, session=2 generation=2)
+[01:05:05.158] [9948 ] [I] [input] natural context handoff: device=0 id=84 now reports 'Cruise' value=1.00 held=0.003
+[01:05:05.375] [9948 ] [I] [input] physical hold released (device=0 id=84 event='Cruise')
+[01:05:05.375] [9948 ] [I] [destination] cleared 0005E3A5 'Volii Alpha': explicit same-target toggle
+[01:05:05.375] [9948 ] [I] [map] accepted tap map=0005E3A5/2 target=0005E3A5 remotePending=true; requested normal menu hide
+[01:05:05.378] [9948 ] [I] [map] close accepted=true holdCompleted=false physicalHeld=false state=0
+[01:07:20.424] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=3
+[01:07:20.432] [9948 ] [I] [map] open session=3 generation=3 flying=true cruise=false cruiseAvailable=true currentSystem=118818
+[01:07:20.435] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=3 generation=3)
+[01:07:20.677] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:07:20.681] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:07:20.684] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:07:20.687] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:07:21.207] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:07:21.207] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=3 generation=3)
+[01:07:21.219] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:07:21.219] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E547 'Bolivar I' system=118818, session=3 generation=3)
+[01:07:21.487] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:07:21.487] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=3 generation=3)
+[01:07:22.876] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:07:22.876] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=3 generation=3)
+[01:07:29.117] [9948 ] [I] [map] close accepted=false holdCompleted=false physicalHeld=false state=0
+[01:07:29.120] [9948 ] [I] [hud] stock Cruise engage availability -> false (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:07:34.662] [32484] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:07:41.806] [9948 ] [I] [system] cockpit feed resolves current system 64720
+[01:08:52.914] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=4
+[01:08:52.914] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=3 generation=3)
+[01:08:52.958] [9948 ] [I] [map] open session=4 generation=4 flying=true cruise=false cruiseAvailable=true currentSystem=64720
+[01:08:52.975] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=4 generation=4)
+[01:08:53.167] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:08:53.171] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:08:53.175] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:08:53.179] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:08:54.773] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:54.773] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:08:54.788] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:54.788] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E3A5 'Volii Alpha' system=64720, session=4 generation=4)
+[01:08:54.978] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:54.978] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:08:55.967] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:55.967] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible moon 0005E3AA 'Volii Phi' system=64720, session=4 generation=4)
+[01:08:56.030] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:56.030] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'TARGET IS NOT AVAILABLE TO CRUISE' (non-planet marker FF01C432/4 has neither a station reference nor a current HUD target row, session=4 generation=4)
+[01:08:56.070] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:56.070] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E3A8 'Volii Tau' system=64720, session=4 generation=4)
+[01:08:56.825] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:56.825] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible moon 0005E3AA 'Volii Phi' system=64720, session=4 generation=4)
+[01:08:56.838] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:56.838] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:08:56.975] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:56.975] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E3A3 'Volii Beta' system=64720, session=4 generation=4)
+[01:08:57.570] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:57.571] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:08:57.752] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:57.752] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E3AB 'Volii Omega' system=64720, session=4 generation=4)
+[01:08:59.061] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:59.061] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:08:59.090] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:59.090] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible moon 0005E3AC 'Volii Upsilon' system=64720, session=4 generation=4)
+[01:08:59.109] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:59.109] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:08:59.784] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:08:59.784] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=4 generation=4)
+[01:09:11.771] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:11.771] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:09:13.535] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:13.535] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E547 'Bolivar I' system=118818, session=4 generation=4)
+[01:09:13.602] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:13.602] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:09:13.851] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:13.851] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E547 'Bolivar I' system=118818, session=4 generation=4)
+[01:09:22.318] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:22.318] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=4 generation=4)
+[01:09:30.605] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:30.605] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:09:31.453] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:31.453] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E547 'Bolivar I' system=118818, session=4 generation=4)
+[01:09:32.504] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:32.504] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=4 generation=4)
+[01:09:46.858] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:46.858] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=4 generation=4)
+[01:09:47.905] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:09:47.905] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E547 'Bolivar I' system=118818, session=4 generation=4)
+[01:09:49.379] [9948 ] [I] [input] natural context handoff: device=0 id=84 now reports 'Cruise' value=1.00 held=0.003
+[01:09:49.466] [9948 ] [I] [input] physical hold released (device=0 id=84 event='Cruise')
+[01:09:49.467] [9948 ] [I] [destination] marked 0005E547 'Bolivar I' (system=118818 parent=0 planet=1 kind=planet)
+[01:09:49.467] [9948 ] [I] [map] accepted tap map=0005E547/2 target=0005E547 remotePending=true; requested normal menu hide
+[01:09:49.470] [9948 ] [I] [destination] pending grav-jump arrival for 0005E547 'Bolivar I' system=118818
+[01:09:49.470] [9948 ] [I] [map] close accepted=true holdCompleted=false physicalHeld=false state=3
+[01:10:28.902] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=5
+[01:10:28.939] [9948 ] [I] [map] open session=5 generation=5 flying=true cruise=false cruiseAvailable=true currentSystem=64720
+[01:10:28.955] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=5 generation=5)
+[01:10:29.153] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:10:29.157] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:10:29.161] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:10:29.165] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:10:30.349] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:10:30.349] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=5 generation=5)
+[01:10:30.365] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:10:30.365] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E3A5 'Volii Alpha' system=64720, session=5 generation=5)
+[01:10:30.526] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:10:30.526] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=5 generation=5)
+[01:10:31.202] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:10:31.202] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=5 generation=5)
+[01:10:40.902] [9948 ] [I] [map] close accepted=false holdCompleted=false physicalHeld=false state=3
+[01:10:40.904] [9948 ] [I] [hud] stock Cruise engage availability -> false (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:10:46.245] [27828] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:10:51.349] [9948 ] [I] [destination] preserving pending remote mark across LoadingMenu
+[01:10:51.910] [29496] [I] [system] cockpit feed resolves current system 118818
+[01:10:54.408] [26836] [I] [destination] pending jump arrived in system 118818; queued latched stock HUD Cruise press for 0005E547 'Bolivar I'
+[01:10:54.410] [31208] [I] [input] forwarded stock HUD 'Cruise' press invoked=true handled=false
+[01:10:55.442] [27828] [I] [hud] stock Cruise engage availability -> false (activeResolved=true resolved=true monocleResolved=true active=true)
+[01:10:55.442] [27828] [I] [input] HUD Cruise queued release: CruiseModeHUDActive confirmed
+[01:10:55.442] [27828] [I] [course] queued lock for 0005E547
+[01:10:55.442] [27828] [I] [course] dispatched lock uBodyID=0005E547
+[01:10:55.451] [29496] [I] [course] engine confirmed lock on 0005E547 'Bolivar I'
+[01:10:55.452] [29496] [I] [input] forwarded stock HUD 'Cruise' release invoked=true handled=true
+[01:10:58.744] [3200 ] [I] [arrival] Cruise lock left 0005E547; waiting for arrival evidence
+[01:11:00.746] [3200 ] [I] [arrival] no arrival evidence after lock transition; preserving mark 0005E547
+[01:11:03.763] [31208] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:12:54.885] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=6
+[01:12:54.886] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=5 generation=5)
+[01:12:54.901] [9948 ] [I] [map] open session=6 generation=6 flying=true cruise=false cruiseAvailable=true currentSystem=118818
+[01:12:54.904] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=6 generation=6)
+[01:12:55.137] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:12:55.141] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:12:55.144] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:12:55.148] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:12:55.496] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:12:55.497] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=6 generation=6)
+[01:12:55.508] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:12:55.508] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E547 'Bolivar I' system=118818, session=6 generation=6)
+[01:12:55.766] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:12:55.766] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=6 generation=6)
+[01:12:56.823] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:12:56.823] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=6 generation=6)
+[01:13:07.390] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:13:07.390] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=6 generation=6)
+[01:13:08.933] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:13:08.933] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E311 'Gagarin' system=71456, session=6 generation=6)
+[01:13:08.993] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:13:08.993] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=6 generation=6)
+[01:13:09.178] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:13:09.178] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E311 'Gagarin' system=71456, session=6 generation=6)
+[01:13:18.837] [9948 ] [I] [input] natural context handoff: device=0 id=84 now reports 'Cruise' value=1.00 held=0.003
+[01:13:18.925] [9948 ] [I] [input] physical hold released (device=0 id=84 event='Cruise')
+[01:13:18.925] [9948 ] [I] [destination] replaced 0005E547 'Bolivar I' with 0005E311 'Gagarin'
+[01:13:18.925] [9948 ] [I] [map] accepted tap map=0005E311/2 target=0005E311 remotePending=true; requested normal menu hide
+[01:13:18.928] [9948 ] [I] [destination] pending grav-jump arrival for 0005E311 'Gagarin' system=71456
+[01:13:18.928] [9948 ] [I] [map] close accepted=true holdCompleted=false physicalHeld=false state=3
+[01:15:33.977] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=7
+[01:15:33.978] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=6 generation=6)
+[01:15:33.994] [9948 ] [I] [map] open session=7 generation=7 flying=true cruise=false cruiseAvailable=true currentSystem=118818
+[01:15:33.997] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=7 generation=7)
+[01:15:34.229] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:15:34.233] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:15:34.237] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:15:34.240] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:15:35.326] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:15:35.326] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=7 generation=7)
+[01:15:35.337] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:15:35.337] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E547 'Bolivar I' system=118818, session=7 generation=7)
+[01:15:35.597] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:15:35.597] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=7 generation=7)
+[01:15:37.318] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:15:37.318] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=7 generation=7)
+[01:16:45.051] [9948 ] [I] [map] close accepted=false holdCompleted=false physicalHeld=false state=3
+[01:16:45.055] [9948 ] [I] [hud] stock Cruise engage availability -> false (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:16:50.276] [27828] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:16:55.296] [9948 ] [I] [destination] preserving pending remote mark across LoadingMenu
+[01:16:57.228] [32484] [I] [system] cockpit feed resolves current system 64720
+[01:17:08.064] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=8
+[01:17:08.065] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=7 generation=7)
+[01:17:08.108] [9948 ] [I] [map] open session=8 generation=8 flying=true cruise=false cruiseAvailable=true currentSystem=64720
+[01:17:08.125] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=8 generation=8)
+[01:17:08.315] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:17:08.319] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:17:08.323] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:17:08.328] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:17:08.730] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:08.730] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=8 generation=8)
+[01:17:08.748] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:08.748] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E3A5 'Volii Alpha' system=64720, session=8 generation=8)
+[01:17:08.952] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:08.952] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=8 generation=8)
+[01:17:10.727] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:10.727] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=8 generation=8)
+[01:17:19.994] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:19.995] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=8 generation=8)
+[01:17:21.812] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:21.813] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote moon 0005E312 'Kurtz' system=71456, session=8 generation=8)
+[01:17:22.019] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:22.019] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0003F5A1 'Jemison' system=71456, session=8 generation=8)
+[01:17:23.147] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:23.147] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote moon 0005E312 'Kurtz' system=71456, session=8 generation=8)
+[01:17:23.192] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:23.192] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=8 generation=8)
+[01:17:23.450] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:23.450] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005E311 'Gagarin' system=71456, session=8 generation=8)
+[01:17:25.915] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:25.915] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=8 generation=8)
+[01:17:34.370] [9948 ] [I] [map] close accepted=false holdCompleted=false physicalHeld=false state=3
+[01:17:34.382] [9948 ] [I] [hud] stock Cruise engage availability -> false (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:17:39.752] [3200 ] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:17:44.922] [9948 ] [I] [destination] preserving pending remote mark across LoadingMenu
+[01:17:45.877] [37440] [I] [system] cockpit feed resolves current system 72957
+[01:17:57.617] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=9
+[01:17:57.617] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=8 generation=8)
+[01:17:57.663] [9948 ] [I] [map] open session=9 generation=9 flying=true cruise=false cruiseAvailable=true currentSystem=72957
+[01:17:57.682] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=9 generation=9)
+[01:17:57.868] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:17:57.872] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:17:57.875] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:17:57.880] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:17:58.552] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:58.552] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=9 generation=9)
+[01:17:58.571] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:58.571] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E294 'Nesoi' system=72957, session=9 generation=9)
+[01:17:58.745] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:58.745] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=9 generation=9)
+[01:17:59.594] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:59.594] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E294 'Nesoi' system=72957, session=9 generation=9)
+[01:17:59.626] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:59.626] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'TARGET IS NOT AVAILABLE TO CRUISE' (non-planet marker 0016728F/4 has neither a station reference nor a current HUD target row, session=9 generation=9)
+[01:17:59.633] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:17:59.633] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=9 generation=9)
+[01:18:10.417] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:18:10.417] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=9 generation=9)
+[01:18:24.319] [9948 ] [I] [map] close accepted=false holdCompleted=false physicalHeld=false state=3
+[01:18:24.323] [9948 ] [I] [hud] stock Cruise engage availability -> false (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:18:29.553] [26836] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:18:34.753] [9948 ] [I] [destination] preserving pending remote mark across LoadingMenu
+[01:18:36.770] [44676] [I] [system] cockpit feed resolves current system 71456
+[01:18:39.267] [37440] [I] [destination] pending jump arrived in system 71456; queued latched stock HUD Cruise press for 0005E311 'Gagarin'
+[01:18:39.272] [44676] [I] [input] forwarded stock HUD 'Cruise' press invoked=true handled=false
+[01:18:40.290] [32484] [I] [hud] stock Cruise engage availability -> false (activeResolved=true resolved=true monocleResolved=true active=true)
+[01:18:40.290] [32484] [I] [input] HUD Cruise queued release: CruiseModeHUDActive confirmed
+[01:18:40.290] [32484] [I] [course] queued lock for 0005E311
+[01:18:40.290] [32484] [I] [course] dispatched lock uBodyID=0005E311
+[01:18:40.302] [31208] [I] [course] engine confirmed lock on 0005E311 'Gagarin'
+[01:18:40.303] [31208] [I] [input] forwarded stock HUD 'Cruise' release invoked=true handled=true
+[01:19:43.391] [52284] [I] [arrival] Cruise lock left 0005E311; waiting for arrival evidence
+[01:19:45.392] [31208] [I] [arrival] no arrival evidence after lock transition; preserving mark 0005E311
+[01:19:48.646] [26836] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:20:26.569] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=10
+[01:20:26.569] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=9 generation=9)
+[01:20:26.631] [9948 ] [I] [map] open session=10 generation=10 flying=true cruise=false cruiseAvailable=true currentSystem=71456
+[01:20:26.649] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=10 generation=10)
+[01:20:26.862] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:20:26.865] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:20:26.917] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:20:26.921] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:20:28.430] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:20:28.430] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=10 generation=10)
+[01:20:28.446] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:20:28.446] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0003F5A1 'Jemison' system=71456, session=10 generation=10)
+[01:20:28.641] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:20:28.642] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=10 generation=10)
+[01:20:31.458] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:20:31.458] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=10 generation=10)
+[01:20:59.191] [9948 ] [I] [map] close accepted=false holdCompleted=false physicalHeld=false state=2
+[01:21:01.983] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=11
+[01:21:01.984] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=10 generation=10)
+[01:21:02.035] [9948 ] [I] [map] open session=11 generation=11 flying=true cruise=false cruiseAvailable=true currentSystem=71456
+[01:21:02.051] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=11 generation=11)
+[01:21:02.234] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:21:02.237] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:21:02.241] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:21:02.244] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:21:04.072] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:04.072] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=11 generation=11)
+[01:21:04.087] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:04.087] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0003F5A1 'Jemison' system=71456, session=11 generation=11)
+[01:21:04.306] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:04.306] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=11 generation=11)
+[01:21:05.109] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:05.109] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E311 'Gagarin' system=71456, session=11 generation=11)
+[01:21:05.139] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:05.139] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=11 generation=11)
+[01:21:05.429] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:05.429] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0005E311 'Gagarin' system=71456, session=11 generation=11)
+[01:21:06.202] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:06.202] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=11 generation=11)
+[01:21:07.965] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:07.965] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=11 generation=11)
+[01:21:48.099] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:48.099] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=11 generation=11)
+[01:21:49.014] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:49.014] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote moon 0005DEBE 'Callisto' system=0, session=11 generation=11)
+[01:21:49.050] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:21:49.050] [9948 ] [I] [map] action hint -> ENABLED TAP/REMOTE 'CRUISE AFTER JUMP' (eligible remote planet 0005DEBA 'Jupiter' system=0, session=11 generation=11)
+[01:21:52.764] [9948 ] [I] [input] natural context handoff: device=0 id=84 now reports 'Cruise' value=1.00 held=0.003
+[01:21:52.841] [9948 ] [I] [input] physical hold released (device=0 id=84 event='Cruise')
+[01:21:52.842] [9948 ] [I] [destination] replaced 0005E311 'Gagarin' with 0005DEBA 'Jupiter'
+[01:21:52.842] [9948 ] [I] [map] accepted tap map=0005DEBA/2 target=0005DEBA remotePending=true; requested normal menu hide
+[01:21:52.845] [9948 ] [I] [destination] pending grav-jump arrival for 0005DEBA 'Jupiter' system=0
+[01:21:52.845] [9948 ] [I] [map] close accepted=true holdCompleted=false physicalHeld=false state=3
+[01:22:52.856] [9948 ] [I] [destination] preserving pending remote mark across LoadingMenu
+[01:22:57.178] [37440] [I] [safety] TESLoadGameEvent received; queued destination clear
+[01:22:57.331] [29496] [I] [destination] cleared 0005DEBA 'Jupiter': save load
+[01:22:57.555] [ 976 ] [I] [ui] movie created: SpaceshipHudMenu generation=2
+[01:22:59.823] [26836] [I] [ui] subscribed SpaceshipHudMenu -> TargetLowFrequencyProvider
+[01:22:59.823] [26836] [I] [system] cockpit feed resolves current system 71456
+[01:22:59.824] [26836] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)
+[01:22:59.834] [50872] [I] [ui] subscribed SpaceshipHudMenu -> TargetHighFrequencyProvider
+[01:24:57.364] [ 976 ] [I] [ui] movie created: GalaxyStarMapMenu generation=12
+[01:24:57.409] [9948 ] [I] [map] open session=12 generation=12 flying=true cruise=false cruiseAvailable=true currentSystem=71456
+[01:24:57.426] [9948 ] [I] [map] action hint -> HIDDEN TAP/HOLD '' (not an active-flight system-view map session, session=12 generation=12)
+[01:24:57.616] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuData
+[01:24:57.619] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuSystemBodyInfoData
+[01:24:57.623] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarMapMenuMarkersData
+[01:24:57.626] [9948 ] [I] [ui] subscribed GalaxyStarMapMenu -> StarmapSystemBodyInfoProvider
+[01:24:59.710] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:24:59.710] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=12 generation=12)
+[01:24:59.726] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:24:59.726] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0003F5A1 'Jemison' system=71456, session=12 generation=12)
+[01:24:59.942] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:24:59.942] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=12 generation=12)
+[01:25:00.018] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:25:00.018] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0003F5A1 'Jemison' system=71456, session=12 generation=12)
+[01:25:00.298] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:25:00.298] [9948 ] [I] [map] action hint -> DISABLED TAP/HOLD 'HIGHLIGHT A DESTINATION' (system view has no highlight-radius target marker, session=12 generation=12)
+[01:25:00.625] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:25:00.625] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0003F5A1 'Jemison' system=71456, session=12 generation=12)
+[01:25:00.696] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:25:00.696] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible moon 0005E312 'Kurtz' system=71456, session=12 generation=12)
+[01:25:00.706] [9948 ] [W] [map] action data rejected dynamic labels (tap=true hold=false)
+[01:25:00.706] [9948 ] [I] [map] action hint -> ENABLED TAP/HOLD 'SET CRUISE TARGET' (eligible planet 0003F5A1 'Jemison' system=71456, session=12 generation=12)
+[01:25:05.311] [9948 ] [I] [input] natural context handoff: device=0 id=84 now reports 'Cruise' value=1.00 held=0.003
+[01:25:06.323] [9948 ] [I] [destination] marked 0003F5A1 'Jemison' (system=71456 parent=0 planet=3 kind=planet)
+[01:25:06.323] [9948 ] [I] [map] accepted hold map=0003F5A1/2 target=0003F5A1 remotePending=false; requested normal menu hide
+[01:25:06.324] [9948 ] [I] [status] cockpit Cruise target confirmation ready
+[01:25:06.326] [9948 ] [I] [input] completed Starmap hold queued latched stock HUD Cruise press
+[01:25:06.326] [9948 ] [I] [map] close accepted=true holdCompleted=true physicalHeld=true state=4
+[01:25:06.331] [9948 ] [I] [input] forwarded stock HUD 'Cruise' press invoked=true handled=false
+[01:25:07.367] [27828] [I] [hud] stock Cruise engage availability -> false (activeResolved=true resolved=true monocleResolved=true active=true)
+[01:25:07.367] [27828] [I] [input] HUD Cruise queued release: CruiseModeHUDActive confirmed
+[01:25:07.367] [27828] [I] [course] queued lock for 0003F5A1
+[01:25:07.367] [27828] [I] [course] dispatched lock uBodyID=0003F5A1
+[01:25:07.380] [27828] [I] [course] engine confirmed lock on 0003F5A1 'Jemison'
+[01:25:07.381] [27828] [I] [input] forwarded stock HUD 'Cruise' release invoked=true handled=true
+[01:25:45.894] [52284] [I] [arrival] Cruise lock left 0003F5A1; waiting for arrival evidence
+[01:25:47.904] [3200 ] [I] [arrival] no arrival evidence after lock transition; preserving mark 0003F5A1
+[01:25:50.897] [32484] [I] [hud] stock Cruise engage availability -> true (activeResolved=true resolved=true monocleResolved=true active=false)

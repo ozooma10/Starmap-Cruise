@@ -43,12 +43,19 @@ namespace CFS::Bridge
         constexpr std::uint32_t kNavigationColor = 0x66CCFF;
         constexpr std::uint32_t kCruiseColor = 0xF5A04E;
         constexpr const char* kCruiseMapActionLabel = "SET CRUISE TARGET";
+        constexpr const char* kRemoteCruiseMapActionLabel = "JUMP THEN CRUISE";
         constexpr const char* kCruiseMapActionHoldLabel = "HOLD TO CRUISE";
         constexpr const char* kCruiseMapUserEvent = "Cruise";
         constexpr auto kHudMovieSettleTime = std::chrono::milliseconds(1500);
+        constexpr auto kMapRoutePollTime = std::chrono::milliseconds(250);
+        constexpr auto kRemoteRouteIdentitySettleTime = std::chrono::milliseconds(750);
+        constexpr auto kRemoteRouteTimeout = std::chrono::seconds(5);
         constexpr REL::ID kControlMapSingletonPtr{ 938003 };
         constexpr REL::ID kSetShipHudTarget{ 97892 };
         constexpr REL::ID kCurrentShipHudTarget{ 883585 };
+        constexpr REL::ID kLoadGameGetEventSource{ 64149 };
+        constexpr REL::ID kLoadGameSourceStatic{ 838425 };
+        constexpr REL::ID kLoadGameSourceVtable{ 413741 };
         constexpr std::size_t kControlMapSize = 0x3A0;
         constexpr std::size_t kControlMapContextSlotsOffset = 0x10;
         constexpr std::size_t kControlMapMappingStride = 0x28;
@@ -60,6 +67,10 @@ namespace CFS::Bridge
         };
         constexpr std::array<std::uint8_t, 6> kSetShipHudTarget116244Prefix{
             0x48, 0x83, 0xEC, 0x48, 0x89, 0x0D,
+        };
+        constexpr std::array<std::uint8_t, 16> kLoadGameGetEventSource116244Prologue{
+            0x48, 0x83, 0xEC, 0x28, 0x65, 0x48, 0x8B, 0x04,
+            0x25, 0x58, 0x00, 0x00, 0x00, 0xBA, 0xB8, 0x00,
         };
 
         using IsInSpace_t = bool (*)(RE::TESObjectREFR*, bool);
@@ -116,7 +127,9 @@ namespace CFS::Bridge
             kTargetTypeUnsupported,
             kTargetDataUpdating,
             kTargetNotIndexed,
-            kOtherSystem,
+            kRemoteSafetyUnavailable,
+            kRemoteCourseUnavailable,
+            kRemoteCourseMismatch,
             kEligible,
         };
 
@@ -138,6 +151,18 @@ namespace CFS::Bridge
         std::atomic<bool> g_selectionAcceptedThisOpen{ false };
         std::atomic<std::uint64_t> g_mapActionHintSignature{ 0 };
         std::atomic<bool> g_mapUiDirty{ false };
+
+        struct RemoteRouteRequest
+        {
+            bool active{ false };
+            std::uint32_t session{ 0 };
+            std::uint32_t generation{ 0 };
+            std::uint32_t targetFormID{ 0 };
+            std::string expectedSystemName;
+            Clock::time_point started{};
+        };
+        std::mutex g_remoteRouteMutex;
+        RemoteRouteRequest g_remoteRouteRequest;
 
         struct MapActionHintState
         {
@@ -162,6 +187,12 @@ namespace CFS::Bridge
         std::atomic<bool> g_cruiseActive{ false };
         std::atomic<bool> g_cruiseEngageAvailable{ false };
         std::atomic<std::uint32_t> g_confirmedCourseID{ 0 };
+        std::atomic<RE::InputEvent::DeviceType> g_pendingJumpDevice{
+            RE::InputEvent::DeviceType::kNone
+        };
+        std::atomic<bool> g_loadGameSinkAttempted{ false };
+        std::atomic<bool> g_loadGameSinkReady{ false };
+        std::atomic<bool> g_loadClearPending{ false };
 
         struct PhysicalHold
         {
@@ -270,6 +301,12 @@ namespace CFS::Bridge
             }
         }
 
+        bool IsPlanetary(const BodyDestination& a_destination)
+        {
+            return a_destination.kind == BodyKind::kPlanet ||
+                   a_destination.kind == BodyKind::kMoon;
+        }
+
         struct ControlMapArray
         {
             std::uint32_t size;
@@ -355,6 +392,21 @@ namespace CFS::Bridge
             return text ? text : "";
         }
 
+        bool ObjectMember(V& a_object, const char* a_name, V& a_member)
+        {
+            return a_object.GetMember(a_name, &a_member) &&
+                   (a_member.IsObject() || a_member.IsDisplayObject());
+        }
+
+        bool BooleanMember(V& a_object, const char* a_name, bool& a_value)
+        {
+            V member;
+            if (!a_object.GetMember(a_name, &member) || !member.IsBoolean())
+                return false;
+            a_value = member.GetBoolean();
+            return true;
+        }
+
         bool IsReadableRange(std::uintptr_t a_address, std::size_t a_size)
         {
             if (!a_address || !a_size || a_address > UINTPTR_MAX - a_size)
@@ -385,6 +437,15 @@ namespace CFS::Bridge
                 return false;
             std::memcpy(&a_value, reinterpret_cast<const void*>(a_address), sizeof(T));
             return true;
+        }
+
+        template <std::size_t N>
+        std::string HexBytes(const std::array<std::uint8_t, N>& a_bytes)
+        {
+            std::string result;
+            for (const auto byte : a_bytes)
+                result += std::format("{}{:02X}", result.empty() ? "" : " ", byte);
+            return result;
         }
 
         std::string ReadControlMapEvent(std::uintptr_t a_entry)
@@ -755,12 +816,18 @@ namespace CFS::Bridge
                 std::lock_guard lock{ g_courseMutex };
                 g_courseRequest = {};
             }
+            {
+                std::lock_guard lock{ g_remoteRouteMutex };
+                g_remoteRouteRequest = {};
+            }
             g_courseAskedID.store(0, std::memory_order_release);
             g_courseAskedClearing.store(false, std::memory_order_release);
             g_state.store(NavState::kIdle, std::memory_order_release);
             g_markedDistance.store(-1.0, std::memory_order_release);
             g_courseWasLocked.store(false, std::memory_order_release);
             g_arrivalCheckID.store(0, std::memory_order_release);
+            g_pendingJumpDevice.store(RE::InputEvent::DeviceType::kNone,
+                std::memory_order_release);
             g_hudUiDirty.store(true, std::memory_order_release);
             if (old)
                 REX::INFO("[destination] cleared {:08X} '{}': {}", old->formID,
@@ -785,6 +852,8 @@ namespace CFS::Bridge
             g_markedDistance.store(-1.0, std::memory_order_release);
             g_courseWasLocked.store(false, std::memory_order_release);
             g_arrivalCheckID.store(0, std::memory_order_release);
+            g_pendingJumpDevice.store(RE::InputEvent::DeviceType::kNone,
+                std::memory_order_release);
             g_hudUiDirty.store(true, std::memory_order_release);
             if (old && old->formID != a_destination.formID)
                 REX::INFO("[destination] replaced {:08X} '{}' with {:08X} '{}'",
@@ -796,6 +865,58 @@ namespace CFS::Bridge
                     a_destination.galaxy.system, a_destination.galaxy.parent,
                     a_destination.galaxy.planet,
                     DestinationKindName(a_destination.kind));
+        }
+
+        class LoadGameSink final : public RE::BSTEventSink<RE::TESLoadGameEvent>
+        {
+        public:
+            RE::BSEventNotifyControl ProcessEvent(const RE::TESLoadGameEvent&,
+                RE::BSTEventSource<RE::TESLoadGameEvent>*) override
+            {
+                // Event delivery is not assumed to be the main game thread.
+                // Publish only a value signal; the verified BSService frame
+                // owns the actual navigation/input reset.
+                g_loadClearPending.store(true, std::memory_order_release);
+                REX::INFO("[safety] TESLoadGameEvent received; queued destination clear");
+                return RE::BSEventNotifyControl::kContinue;
+            }
+        } g_loadGameSink;
+
+        void TryInstallLoadGameSink()
+        {
+            if (g_loadGameSinkAttempted.exchange(true, std::memory_order_acq_rel))
+                return;
+
+            const auto function = kLoadGameGetEventSource.address();
+            std::array<std::uint8_t, kLoadGameGetEventSource116244Prologue.size()> prologue{};
+            const bool readable = ReadMemory(function, prologue);
+            const bool prologueMatches = readable &&
+                prologue == kLoadGameGetEventSource116244Prologue;
+            if (!prologueMatches) {
+                REX::ERROR("[safety] TESLoadGameEvent ID 64149 fingerprint failed at {:016X}: [{}]; remote targets disabled",
+                    function, readable ? HexBytes(prologue) : "unreadable");
+                return;
+            }
+
+            const auto source = RE::TESLoadGameEvent::GetEventSource();
+            std::uintptr_t vtable = 0;
+            const bool sourceReadable = source &&
+                ReadMemory(reinterpret_cast<std::uintptr_t>(source), vtable);
+            const auto expectedSource = kLoadGameSourceStatic.address();
+            const auto expectedVtable = kLoadGameSourceVtable.address();
+            const bool sourceMatches = reinterpret_cast<std::uintptr_t>(source) == expectedSource;
+            const bool vtableMatches = sourceReadable && vtable == expectedVtable;
+            REX::INFO("[safety] TESLoadGameEvent guard prologue=[{}] source={:016X}/{:016X} match={} vtable={:016X}/{:016X} match={}",
+                HexBytes(prologue), reinterpret_cast<std::uintptr_t>(source), expectedSource,
+                sourceMatches, vtable, expectedVtable, vtableMatches);
+            if (!source || !sourceMatches || !vtableMatches) {
+                REX::ERROR("[safety] TESLoadGameEvent identity guard failed; remote targets disabled");
+                return;
+            }
+
+            source->RegisterSink(&g_loadGameSink);
+            g_loadGameSinkReady.store(true, std::memory_order_release);
+            REX::INFO("[safety] TESLoadGameEvent sink registered; jump-persistent remote targets enabled");
         }
 
         MapEligibility EvaluateMapSelection(MapSnapshot a_snapshot)
@@ -949,13 +1070,11 @@ namespace CFS::Bridge
                     std::format("dossier PNDT {:08X} has no parsed GNAM identity",
                         a_snapshot.dossierBodyID));
             }
-            if (body->galaxy.system != a_snapshot.capturedSystem) {
-                return unavailable(EligibilityCode::kOtherSystem,
-                    "CURRENT SYSTEM TARGETS ONLY",
-                    std::format("dossier PNDT {:08X} system {} differs from cockpit system {}",
-                        a_snapshot.dossierBodyID, body->galaxy.system,
-                        a_snapshot.capturedSystem));
-            }
+            const bool remote = body->galaxy.system != a_snapshot.capturedSystem;
+            if (remote && !g_loadGameSinkReady.load(std::memory_order_acquire))
+                return unavailable(EligibilityCode::kRemoteSafetyUnavailable,
+                    "REMOTE CRUISE SAFETY UNAVAILABLE",
+                    "guarded TESLoadGameEvent sink is unavailable; refusing a mark that could survive a save load");
 
             auto destination = BodyDestination{
                 .kind = a_snapshot.dossierBodyType == kMoonType ? BodyKind::kMoon : BodyKind::kPlanet,
@@ -971,12 +1090,133 @@ namespace CFS::Bridge
                 .code = EligibilityCode::kEligible,
                 .show = true,
                 .enabled = true,
-                .label = kCruiseMapActionLabel,
-                .detail = std::format("eligible {} {:08X} '{}'",
+                .label = remote ? kRemoteCruiseMapActionLabel : kCruiseMapActionLabel,
+                .detail = std::format("eligible {}{} {:08X} '{}' system={}",
+                    remote ? "remote " : "",
                     DestinationKindName(destination.kind),
-                    destination.formID, destination.localizedName),
+                    destination.formID, destination.localizedName,
+                    destination.galaxy.system),
                 .destination = std::move(destination),
             };
+        }
+
+        struct RemoteRouteGate
+        {
+            bool ready{ false };
+            EligibilityCode code{ EligibilityCode::kRemoteCourseUnavailable };
+            std::string detail{ "vanilla travel data is unavailable" };
+        };
+
+        bool GetLiveMapMenuRoot(const MapSnapshot& a_snapshot,
+            RE::Scaleform::GFx::ASMovieRootBase*& a_root, V& a_menuRoot)
+        {
+            const auto ui = RE::UI::GetSingleton();
+            const RE::BSFixedString mapName{ kMapMenu };
+            const auto menu = ui ? ui->GetMenu(mapName) : nullptr;
+            if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot ||
+                a_snapshot.generation !=
+                    g_mapMovie.generation.load(std::memory_order_acquire))
+                return false;
+
+            a_root = menu->uiMovie->asMovieRoot.get();
+            const char* path = menu->GetRootPath();
+            const std::string rootPath = path && *path ? path : "root";
+            return a_root->GetVariable(&a_menuRoot, rootPath.c_str()) &&
+                   (a_menuRoot.IsObject() || a_menuRoot.IsDisplayObject()) &&
+                   menu->uiMovie && menu->uiMovie->asMovieRoot &&
+                   menu->uiMovie->asMovieRoot.get() == a_root &&
+                   a_snapshot.generation ==
+                       g_mapMovie.generation.load(std::memory_order_acquire);
+        }
+
+        bool GetVanillaSetCourseData(V& a_menuRoot, V& a_hintBar,
+            V& a_buttonData, std::string& a_detail)
+        {
+            if (!ObjectMember(a_menuRoot, "ButtonHintBar_mc", a_hintBar) ||
+                !ObjectMember(a_hintBar, "SetRouteDestinationButtonData",
+                    a_buttonData)) {
+                a_detail = "vanilla Set Course button data is unavailable";
+                return false;
+            }
+
+            bool enabled = false;
+            bool visible = false;
+            if (!BooleanMember(a_buttonData, "bEnabled", enabled) ||
+                !BooleanMember(a_buttonData, "bVisible", visible)) {
+                a_detail = "vanilla Set Course button state is unresolved";
+                return false;
+            }
+            if (!enabled || !visible) {
+                a_detail = std::format("vanilla Set Course is disabled or hidden (enabled={} visible={})",
+                    enabled, visible);
+                return false;
+            }
+            a_detail = "vanilla Set Course is enabled and visible";
+            return true;
+        }
+
+        std::string BrowsedSystemName(V& a_menuRoot)
+        {
+            V systemHeader;
+            V header;
+            V textField;
+            if (!ObjectMember(a_menuRoot, "SystemNameHeader_mc", systemHeader) ||
+                !ObjectMember(systemHeader, "Header_mc", header) ||
+                !ObjectMember(header, "text_tf", textField))
+                return {};
+            return StringMember(textField, "text");
+        }
+
+        RemoteRouteGate InspectRemoteRoute(V& a_menuRoot,
+            const std::string& a_expectedSystemName, V* a_jumpDataOut = nullptr)
+        {
+            RemoteRouteGate gate;
+            V jumpData;
+            bool panelVisible = false;
+            if (!ObjectMember(a_menuRoot, "JumpData_mc", jumpData) ||
+                !BooleanMember(jumpData, "visible", panelVisible) ||
+                !panelVisible) {
+                gate.detail = "vanilla travel panel is not showing a plotted route";
+                return gate;
+            }
+            V routeEnd;
+            V routeSystemField;
+            if (!ObjectMember(jumpData, "PlotPointDisplayEnd_mc", routeEnd) ||
+                !ObjectMember(routeEnd, "systemName_tf", routeSystemField)) {
+                gate.detail = "vanilla route destination identity is unavailable";
+                return gate;
+            }
+            const auto routeSystem = StringMember(routeSystemField, "text");
+            if (routeSystem.empty()) {
+                gate.detail = "vanilla route destination system is empty";
+                return gate;
+            }
+            if (a_expectedSystemName.empty() ||
+                routeSystem != a_expectedSystemName) {
+                gate.code = EligibilityCode::kRemoteCourseMismatch;
+                gate.detail = std::format("vanilla route ends in '{}' but marked system is '{}'",
+                    routeSystem, a_expectedSystemName);
+                return gate;
+            }
+
+            V executeContainer;
+            V executeButton;
+            bool executeVisible = false;
+            if (!ObjectMember(jumpData, "ExecuteButton_mc", executeContainer) ||
+                !ObjectMember(executeContainer, "ExecuteButtonHint_mc", executeButton) ||
+                !BooleanMember(executeButton, "Visible", executeVisible) ||
+                !executeVisible) {
+                gate.detail = "vanilla bCanExecuteRoute gate is false";
+                return gate;
+            }
+
+            gate.ready = true;
+            gate.code = EligibilityCode::kEligible;
+            gate.detail = std::format("vanilla executable route ends in '{}'",
+                routeSystem);
+            if (a_jumpDataOut)
+                *a_jumpDataOut = std::move(jumpData);
+            return gate;
         }
 
         void QueueCourse(std::uint32_t a_id, bool a_clearing)
@@ -1009,6 +1249,17 @@ namespace CFS::Bridge
             if (event.IsObject() && manager.Invoke("dispatchEvent", nullptr, &event, 1))
                 return true;
             return manager.Invoke("dispatchCustomEvent", nullptr, args, a_params ? 2 : 1);
+        }
+
+        bool DispatchVanillaSetCourse(RE::Scaleform::GFx::ASMovieRootBase* a_root)
+        {
+            V params;
+            a_root->CreateObject(&params);
+            if (!params.IsObject() ||
+                !params.SetMember("buttonAction", V{ "SetRouteDestination" }))
+                return false;
+            return DispatchHudEvent(a_root,
+                "StarMapMenu_OnHintButtonClicked", &params);
         }
 
         bool InvokeHudCruiseUserEvent(RE::Scaleform::GFx::ASMovieRootBase* a_root,
@@ -1123,19 +1374,47 @@ namespace CFS::Bridge
                 std::lock_guard lock{ g_mapMutex };
                 snapshot = g_map;
             }
-            const auto eligibility = EvaluateMapSelection(std::move(snapshot));
+            const auto eligibility = EvaluateMapSelection(snapshot);
             if (!eligibility.enabled || !eligibility.destination) {
                 if (Settings::Verbose())
                     REX::INFO("[map] Cruise action rejected: {}", eligibility.detail);
                 return;
             }
             const auto& selected = *eligibility.destination;
+            const bool remotePlanetary = IsPlanetary(selected) &&
+                g_haveCurrentSystem.load(std::memory_order_acquire) &&
+                selected.galaxy.system != g_currentSystem.load(std::memory_order_acquire);
+
+            RE::Scaleform::GFx::ASMovieRootBase* mapRoot = nullptr;
+            std::string expectedSystemName;
+            if (remotePlanetary) {
+                V menuRoot;
+                if (!GetLiveMapMenuRoot(snapshot, mapRoot, menuRoot)) {
+                    REX::WARN("[jump] remote action rejected: live Starmap root is unavailable");
+                    return;
+                }
+                V hintBar;
+                V setCourseData;
+                std::string setCourseDetail;
+                if (!GetVanillaSetCourseData(menuRoot, hintBar,
+                        setCourseData, setCourseDetail)) {
+                    g_mapUiDirty.store(true, std::memory_order_release);
+                    REX::INFO("[jump] remote action rejected: {}", setCourseDetail);
+                    return;
+                }
+                expectedSystemName = BrowsedSystemName(menuRoot);
+                if (expectedSystemName.empty()) {
+                    g_mapUiDirty.store(true, std::memory_order_release);
+                    REX::WARN("[jump] remote action rejected: browsed system identity is unavailable");
+                    return;
+                }
+            }
 
             const auto existing = Destination();
             const bool same = existing && existing->mapFormID == selected.mapFormID &&
                 existing->mapType == selected.mapType &&
                 existing->formID == selected.formID;
-            if (same && a_action == MapAction::kTap) {
+            if (same && a_action == MapAction::kTap && !remotePlanetary) {
                 const bool courseMatches = g_confirmedCourseID.load(std::memory_order_acquire) == selected.formID;
                 ClearDestination("explicit same-target toggle");
                 if (courseMatches && g_cruiseActive.load(std::memory_order_acquire))
@@ -1144,8 +1423,10 @@ namespace CFS::Bridge
                 StoreDestination(selected);
             }
 
+            auto selectionDevice = RE::InputEvent::DeviceType::kNone;
             {
                 std::lock_guard lock{ g_holdMutex };
+                selectionDevice = g_hold.device;
                 const bool liveHold = a_action == MapAction::kHold && g_hold.active &&
                     g_hold.session == g_mapSession.load(std::memory_order_acquire);
                 if (a_action == MapAction::kHold && !liveHold) {
@@ -1154,11 +1435,132 @@ namespace CFS::Bridge
                 g_hold.completed = liveHold;
                 g_claimMapKey = liveHold;
             }
+            if (remotePlanetary && Destination()) {
+                if (selectionDevice == RE::InputEvent::DeviceType::kNone)
+                    selectionDevice = RE::InputEvent::DeviceType::kKeyboard;
+                g_pendingJumpDevice.store(selectionDevice, std::memory_order_release);
+            }
             g_selectionAcceptedThisOpen.store(true, std::memory_order_release);
+            if (remotePlanetary) {
+                // First dispatch the exact CustomEvent emitted by the visible
+                // vanilla Set Course callback. Vanilla owns route construction
+                // and moves the same Starmap movie to galaxy view. A later
+                // post-advance pass validates its route and executes it.
+                g_state.store(NavState::kMapSelection, std::memory_order_release);
+                {
+                    std::lock_guard lock{ g_remoteRouteMutex };
+                    g_remoteRouteRequest = {
+                        .active = true,
+                        .session = snapshot.session,
+                        .generation = snapshot.generation,
+                        .targetFormID = selected.formID,
+                        .expectedSystemName = expectedSystemName,
+                        .started = Clock::now(),
+                    };
+                }
+                if (!DispatchVanillaSetCourse(mapRoot)) {
+                    g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                    ClearDestination("vanilla Set Course handoff failed");
+                    g_mapUiDirty.store(true, std::memory_order_release);
+                    REX::WARN("[jump] stock SetRouteDestination dispatch failed; remote mark cleared");
+                    return;
+                }
+                REX::INFO("[jump] accepted tap map={:08X}/{} target={:08X} system='{}'; dispatched stock SetRouteDestination and awaiting vanilla route gate",
+                    selected.mapFormID, selected.mapType, selected.formID,
+                    expectedSystemName);
+                return;
+            }
+
             g_closeRequested.store(true, std::memory_order_release);
             REX::INFO("[map] accepted {} map={:08X}/{} target={:08X}; requested normal menu hide",
                 a_action == MapAction::kHold ? "hold" : "tap", selected.mapFormID,
                 selected.mapType, selected.formID);
+        }
+
+        bool RemoteRouteRequestActive()
+        {
+            std::lock_guard lock{ g_remoteRouteMutex };
+            return g_remoteRouteRequest.active;
+        }
+
+        void DriveRemoteRouteRequest()
+        {
+            RemoteRouteRequest request;
+            {
+                std::lock_guard lock{ g_remoteRouteMutex };
+                request = g_remoteRouteRequest;
+            }
+            if (!request.active)
+                return;
+
+            MapSnapshot snapshot;
+            {
+                std::lock_guard lock{ g_mapMutex };
+                snapshot = g_map;
+            }
+            const auto age = Clock::now() - request.started;
+            const auto destination = Destination();
+            if (!g_mapOpen.load(std::memory_order_acquire) ||
+                !destination || destination->formID != request.targetFormID ||
+                request.session != snapshot.session ||
+                request.generation != snapshot.generation) {
+                if (!g_mapOpen.load(std::memory_order_acquire))
+                    return;  // The menu-close sink owns cancellation or success.
+                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                ClearDestination("remote Set Course session or destination changed");
+                REX::WARN("[jump] remote route request lost its guarded map identity; mark cleared");
+                return;
+            }
+
+            RE::Scaleform::GFx::ASMovieRootBase* root = nullptr;
+            V menuRoot;
+            if (!GetLiveMapMenuRoot(snapshot, root, menuRoot))
+                return;
+
+            V jumpData;
+            const auto gate = InspectRemoteRoute(menuRoot,
+                request.expectedSystemName, &jumpData);
+            if (!gate.ready) {
+                const bool stableMismatch =
+                    gate.code == EligibilityCode::kRemoteCourseMismatch &&
+                    age >= kRemoteRouteIdentitySettleTime;
+                if (!stableMismatch && age < kRemoteRouteTimeout)
+                    return;
+
+                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                const auto reason = std::format("vanilla Set Course did not produce an executable matching route: {}",
+                    gate.detail);
+                ClearDestination(reason.c_str());
+                g_mapUiDirty.store(true, std::memory_order_release);
+                REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
+                    reason);
+                return;
+            }
+
+            {
+                std::lock_guard lock{ g_remoteRouteMutex };
+                if (!g_remoteRouteRequest.active ||
+                    g_remoteRouteRequest.targetFormID != request.targetFormID ||
+                    g_remoteRouteRequest.generation != request.generation)
+                    return;
+                g_remoteRouteRequest.active = false;
+            }
+
+            // SendExecuteEvent is the callback behind the visible vanilla
+            // Execute hold. It rechecks ExecuteButtonHint.Visible before
+            // dispatching StarMapMenu_ExecuteRoute.
+            g_state.store(NavState::kPendingJump, std::memory_order_release);
+            if (!jumpData.Invoke("SendExecuteEvent")) {
+                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                ClearDestination("vanilla Execute Route handoff failed");
+                g_mapUiDirty.store(true, std::memory_order_release);
+                REX::WARN("[jump] JumpDataPanel.SendExecuteEvent invocation failed; remote mark cleared");
+                return;
+            }
+            REX::INFO("[jump] vanilla route ready for '{}' after {} ms; dispatched stock StarMapMenu_ExecuteRoute for marked target {:08X}",
+                request.expectedSystemName,
+                std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
+                request.targetFormID);
         }
 
         class MapActionHandler : public RE::Scaleform::GFx::FunctionHandler
@@ -1628,30 +2030,37 @@ namespace CFS::Bridge
                 std::lock_guard lock{ g_mapMutex };
                 snapshot = g_map;
             }
-            const auto eligibility = EvaluateMapSelection(snapshot);
-            const bool tapOnly = snapshot.wasCruising ||
+            auto eligibility = EvaluateMapSelection(snapshot);
+            const bool remotePlanetary = eligibility.destination &&
+                IsPlanetary(*eligibility.destination) &&
+                eligibility.destination->galaxy.system != snapshot.capturedSystem;
+            const bool tapOnly = remotePlanetary || snapshot.wasCruising ||
                                  !snapshot.cruiseEngageAvailable;
+
+            RE::Scaleform::GFx::ASMovieRootBase* root = nullptr;
+            V menuRoot;
+            if (!GetLiveMapMenuRoot(snapshot, root, menuRoot))
+                return;
+
+            V hintBar;
+            V buttonData;
+            std::string setCourseDetail;
+            const bool setCourseReady = GetVanillaSetCourseData(menuRoot,
+                hintBar, buttonData, setCourseDetail);
+            if (!(hintBar.IsObject() || hintBar.IsDisplayObject()) ||
+                !(buttonData.IsObject() || buttonData.IsDisplayObject()))
+                return;
+            if (remotePlanetary && eligibility.enabled && !setCourseReady) {
+                eligibility.code = EligibilityCode::kRemoteCourseUnavailable;
+                eligibility.enabled = false;
+                eligibility.label = "VANILLA SET COURSE UNAVAILABLE";
+                eligibility.detail = setCourseDetail;
+            }
+
             const auto signature = EligibilitySignature(snapshot, eligibility);
             const bool signatureChanged =
                 g_mapActionHintSignature.load(std::memory_order_acquire) != signature;
             if (!signatureChanged)
-                return;
-
-            const auto ui = RE::UI::GetSingleton();
-            const RE::BSFixedString mapName{ kMapMenu };
-            const auto menu = ui ? ui->GetMenu(mapName) : nullptr;
-            if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot)
-                return;
-            auto* root = menu->uiMovie->asMovieRoot.get();
-            const char* rootPath = menu->GetRootPath();
-            const std::string hintPath = std::format("{}.ButtonHintBar_mc",
-                rootPath && *rootPath ? rootPath : "root");
-            V hintBar;
-            V buttonData;
-            if (!root->GetVariable(&hintBar, hintPath.c_str()) ||
-                !(hintBar.IsObject() || hintBar.IsDisplayObject()) ||
-                !hintBar.GetMember("SetRouteDestinationButtonData", &buttonData) ||
-                !(buttonData.IsObject() || buttonData.IsDisplayObject()))
                 return;
 
             V buttonBar;
@@ -1692,7 +2101,8 @@ namespace CFS::Bridge
             if (Settings::Verbose() && signatureChanged)
                 REX::INFO("[map] action hint -> {} {} '{}' ({}, session={} generation={})",
                     eligibility.show ? (eligibility.enabled ? "ENABLED" : "DISABLED") : "HIDDEN",
-                    snapshot.wasCruising ? "TAP/ACTIVE" :
+                    remotePlanetary ? "TAP/REMOTE" :
+                        snapshot.wasCruising ? "TAP/ACTIVE" :
                         (snapshot.cruiseEngageAvailable ? "TAP/HOLD" : "TAP/UNAVAILABLE"),
                     eligibility.show ? eligibility.label : "",
                     eligibility.detail, snapshot.session, snapshot.generation);
@@ -2456,7 +2866,10 @@ namespace CFS::Bridge
                     g_lastUnsettledTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
                     if (a_event.opening) {
                         ResetHold("loading transition");
-                        ClearDestination("loading transition");
+                        if (g_state.load(std::memory_order_acquire) != NavState::kPendingJump)
+                            ClearDestination("loading transition");
+                        else if (Settings::Verbose())
+                            REX::INFO("[destination] preserving pending remote mark across LoadingMenu");
                     }
                     return RE::BSEventNotifyControl::kContinue;
                 }
@@ -2493,6 +2906,11 @@ namespace CFS::Bridge
                         std::lock_guard lock{ g_mapMutex };
                         wasCruising = g_map.wasCruising;
                     }
+                    if (accepted && RemoteRouteRequestActive()) {
+                        ClearDestination("Starmap closed before vanilla route became executable");
+                        accepted = false;
+                        REX::WARN("[jump] Starmap closed during remote Set Course handoff; mark cleared");
+                    }
                     if (accepted) {
                         const auto destination = Destination();
                         if (destination && destination->kind == BodyKind::kStation &&
@@ -2501,6 +2919,12 @@ namespace CFS::Bridge
                             accepted = false;
                         }
                     }
+                    const auto acceptedDestination = accepted ? Destination() : std::nullopt;
+                    const bool pendingJump = acceptedDestination &&
+                        IsPlanetary(*acceptedDestination) &&
+                        g_haveCurrentSystem.load(std::memory_order_acquire) &&
+                        acceptedDestination->galaxy.system !=
+                            g_currentSystem.load(std::memory_order_acquire);
                     bool held = false;
                     bool holdCompleted = false;
                     auto heldDevice = RE::InputEvent::DeviceType::kNone;
@@ -2513,12 +2937,19 @@ namespace CFS::Bridge
                         // A completed pre-Cruise fill or an already-cruising
                         // BasicButton press can close the map while the physical
                         // key is still down. Suppress that carried cockpit input
-                        // until release; only the former queues a latched HUD edge.
+                        // until release. A remote completed hold is deferred to
+                        // arrival rather than replayed in the origin system.
                         g_hold.suppressUntilRelease = accepted && held &&
                                                       (holdCompleted || wasCruising);
                     }
                     if (accepted) {
-                        if (wasCruising) {
+                        if (pendingJump) {
+                            g_state.store(NavState::kPendingJump, std::memory_order_release);
+                            REX::INFO("[destination] pending grav-jump arrival for {:08X} '{}' system={}",
+                                acceptedDestination->formID,
+                                acceptedDestination->localizedName,
+                                acceptedDestination->galaxy.system);
+                        } else if (wasCruising) {
                             if (const auto destination = Destination())
                                 QueueCourse(destination->formID, false);
                             g_state.store(Destination() ? NavState::kAwaitingCruise : NavState::kIdle,
@@ -2560,6 +2991,62 @@ namespace CFS::Bridge
                     wasForeground = foreground;
                 }
             } }.detach();
+        }
+
+        void ReconcilePendingJump(const BodyDestination& a_destination)
+        {
+            if (!IsPlanetary(a_destination)) {
+                ClearDestination("invalid non-planet pending-jump state");
+                return;
+            }
+
+            const auto player = RE::PlayerCharacter::GetSingleton();
+            const auto ship = player ? player->GetSpaceship() : nullptr;
+            if (!IsShipInSpace(ship)) {
+                // Do not sample transient travel/load state. Once the world is
+                // settled, leaving space is a real cancellation boundary.
+                if (WorldSettled())
+                    ClearDestination("landing, docking, or leaving the pilot seat during pending jump");
+                return;
+            }
+            if (!g_haveCurrentSystem.load(std::memory_order_acquire) ||
+                g_currentSystem.load(std::memory_order_acquire) != a_destination.galaxy.system ||
+                g_mapOpen.load(std::memory_order_acquire) || !WorldSettled())
+                return;
+
+            // Resolver agreement alone is not enough: require the marked body
+            // to be present exactly once in the settled cockpit target feed.
+            // This also keeps remote station/POI identities out of this path.
+            if (CurrentHudTargets(a_destination.formID).size() != 1)
+                return;
+
+            if (g_cruiseActive.load(std::memory_order_acquire)) {
+                auto expected = NavState::kPendingJump;
+                if (g_state.compare_exchange_strong(expected, NavState::kAwaitingCruise,
+                        std::memory_order_acq_rel)) {
+                    QueueCourse(a_destination.formID, false);
+                    REX::INFO("[destination] pending jump arrived in system {}; Cruise already active, queued course {:08X}",
+                        a_destination.galaxy.system, a_destination.formID);
+                }
+                return;
+            }
+            if (!g_cruiseEngageAvailable.load(std::memory_order_acquire))
+                return;
+
+            auto expected = NavState::kPendingJump;
+            if (!g_state.compare_exchange_strong(expected, NavState::kAwaitingCruise,
+                    std::memory_order_acq_rel))
+                return;
+            auto device = g_pendingJumpDevice.load(std::memory_order_acquire);
+            if (device == RE::InputEvent::DeviceType::kNone)
+                device = RE::InputEvent::DeviceType::kKeyboard;
+            if (!QueueHudCruisePress(device)) {
+                g_state.store(NavState::kPendingJump, std::memory_order_release);
+                return;
+            }
+            REX::INFO("[destination] pending jump arrived in system {}; queued latched stock HUD Cruise press for {:08X} '{}'",
+                a_destination.galaxy.system, a_destination.formID,
+                a_destination.localizedName);
         }
 
         void CheckArrival()
@@ -2630,6 +3117,12 @@ namespace CFS::Bridge
 
         void RunMainThreadFrame()
         {
+            if (g_loadClearPending.exchange(false, std::memory_order_acq_rel)) {
+                ResetHold("save load");
+                ClearDestination("save load");
+                return;
+            }
+
             if (BodyIndex::Ready() && !g_haveCurrentSystem.load(std::memory_order_acquire)) {
                 std::vector<HudRow> rows;
                 {
@@ -2647,13 +3140,23 @@ namespace CFS::Bridge
 
             const auto destination = Destination();
             if (destination) {
-                const auto player = RE::PlayerCharacter::GetSingleton();
-                const auto ship = player ? player->GetSpaceship() : nullptr;
-                if (!IsShipInSpace(ship)) {
-                    ClearDestination("landing, docking, or leaving the pilot seat");
-                } else if (g_haveCurrentSystem.load(std::memory_order_acquire) &&
-                    g_currentSystem.load(std::memory_order_acquire) != destination->galaxy.system) {
-                    ClearDestination("system change");
+                const auto state = g_state.load(std::memory_order_acquire);
+                const bool remoteMapSelection = state == NavState::kMapSelection &&
+                    IsPlanetary(*destination) &&
+                    g_haveCurrentSystem.load(std::memory_order_acquire) &&
+                    g_currentSystem.load(std::memory_order_acquire) !=
+                        destination->galaxy.system;
+                if (state == NavState::kPendingJump) {
+                    ReconcilePendingJump(*destination);
+                } else if (!remoteMapSelection) {
+                    const auto player = RE::PlayerCharacter::GetSingleton();
+                    const auto ship = player ? player->GetSpaceship() : nullptr;
+                    if (!IsShipInSpace(ship)) {
+                        ClearDestination("landing, docking, or leaving the pilot seat");
+                    } else if (g_haveCurrentSystem.load(std::memory_order_acquire) &&
+                        g_currentSystem.load(std::memory_order_acquire) != destination->galaxy.system) {
+                        ClearDestination("system change");
+                    }
                 }
             }
 
@@ -2777,6 +3280,7 @@ namespace CFS::Bridge
     void OnUiSafeFrame()
     {
         static std::atomic<bool> faulted{ false };
+        static auto nextMapRoutePoll = Clock::time_point{};
         if (faulted.load(std::memory_order_acquire))
             return;
 
@@ -2789,6 +3293,19 @@ namespace CFS::Bridge
                 MapAction::kNone, std::memory_order_acq_rel);
             if (action != MapAction::kNone)
                 AcceptSelection(action);
+
+            DriveRemoteRouteRequest();
+
+            const auto now = Clock::now();
+            if (g_mapOpen.load(std::memory_order_acquire) &&
+                now >= nextMapRoutePoll) {
+                // Plot-route state is native-pushed directly into JumpData_mc
+                // and is not guaranteed to publish one of our subscribed feeds.
+                // Poll only in the verified post-advance window; signatures
+                // keep unchanged button state mutation-free.
+                nextMapRoutePoll = now + kMapRoutePollTime;
+                g_mapUiDirty.store(true, std::memory_order_release);
+            }
 
             if (g_mapUiDirty.load(std::memory_order_acquire)) {
                 const auto ui = RE::UI::GetSingleton();
@@ -2821,6 +3338,7 @@ namespace CFS::Bridge
 
         if (!ValidateIsInSpaceBinding() || !ValidateShipTargetBinding())
             return;
+        TryInstallLoadGameSink();
         if (!MainThreadUiPump::Install()) {
             REX::ERROR("post-advance UI pump unavailable; bridge disabled to prevent off-thread Scaleform access");
             return;
@@ -2834,6 +3352,6 @@ namespace CFS::Bridge
         StartFocusWatcher();
         g_lastUnsettledTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
         tasks->AddPermanentTask(&OnFrame);
-        REX::INFO("bridge initialized: bodies/stations-first, current-system only, no serialization or public API");
+        REX::INFO("bridge initialized: current-system Cruise plus guarded remote stock SetCourse/ExecuteRoute handoff, no serialization or public API");
     }
 }

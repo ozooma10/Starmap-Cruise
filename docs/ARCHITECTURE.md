@@ -10,13 +10,20 @@ GalaxyStarMapMenu movie
   StarmapSystemBodyInfoProvider ------ dossier PNDT candidates while browsing
                     |
                     | planets/moons: marker/dossier id+type agreement
-                    |   + live PNDT + parsed GNAM + current system
+                    |   + live PNDT + parsed GNAM
+                    |   + guarded load sink when system is remote
                     | stations: marker live reference or CELL
                     |   + active-load-order IsStarstation base
                     |   + exactly one persistent live reference
                     | other non-planets: exact current HUD target ID
                     v
               BodyDestination value (map id/type + target id)
+                    |
+                    +---- remote planet/moon: stock SetRouteDestination
+                    |       + vanilla builds route / enters galaxy view
+                    |       + matching visible vanilla Execute gate
+                    |       + JumpDataPanel.SendExecuteEvent()
+                    |       + PendingJump until target system
                     |
                     +---- station map close: native ship-target assignment
                     |
@@ -42,16 +49,20 @@ light master mappings are respected. No cache is read or written.
 ## State machine
 
 ```text
-Idle -> MapSelection -> Marked -> AwaitingCruise -> AutopilotLocked
-          |               ^             |                 |
-          | invalid       | release /    | timeout         | manual exit or
-          +-> vanilla     | no Cruise    +-----------------+ interruption
+Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
+          |       |                          |                 |
+          |       +-> stock Set Course       |                 |
+          |                 | route verified |                 |
+          |                 +-> stock Execute -> PendingJump --+
+          | invalid                 | intermediate jumps       | manual exit or
+          +-> vanilla               | and LoadingMenu           +-> interruption
 ```
 
 - `MapSelection` begins only after the selection gate passes: one nonzero
   highlight-radius marker, captured current system, active flight, and current
   session/movie generation. Planet/moon markers additionally require matching
-  dossier id/type, a live PNDT, and parsed GNAM in that system. A station marker
+  dossier id/type, a live PNDT, and parsed GNAM. A remote planet/moon also
+  requires the guarded load-event sink. A station marker
   must be a live station reference or a CELL resolving to exactly one persistent
   live reference whose base carries `IsStarstation`. Another non-planet marker
   must match exactly one row in the current cockpit target feed.
@@ -59,6 +70,24 @@ Idle -> MapSelection -> Marked -> AwaitingCruise -> AutopilotLocked
   native ship target before any Cruise input or course event is issued. Exact
   current-feed non-planets already have a course-addressable target ID.
 - `Marked` owns the process-local destination but not autopilot.
+- `PendingJump` is used only for a remote planet or moon. It preserves the mark
+  across intermediate system changes and `LoadingMenu`, without plotting or
+  altering the vanilla route itself. A remote tap first captures the browsed
+  system name and dispatches the exact
+  `StarMapMenu_OnHintButtonClicked {buttonAction: "SetRouteDestination"}` custom
+  event used by vanilla **Set Course**. Vanilla builds the route and moves the
+  same movie to galaxy view. During a five-second guarded window, the route-end
+  system text must match the captured name and the public Execute hint must be
+  visible. The plugin then enters `PendingJump` and invokes public
+  `JumpDataPanel.SendExecuteEvent()`, which rechecks the same Execute visibility
+  before dispatching `StarMapMenu_ExecuteRoute`.
+  If the map closes early, movie/session identity changes, the route mismatches,
+  or it never becomes executable, only the Cruise mark is cleared; vanilla's
+  route and warning remain untouched.
+  After the resolver reports the target system, the map is closed, the world has
+  settled, and exactly one matching cockpit target row exists, it requests
+  Cruise through the existing stock HUD press and course path. If Cruise is
+  already active, it queues the course directly.
 - A quick release leaves the destination
   `Marked`. Completing the Starmap button's fill latches a stock HUD Cruise down
   edge after map close, independent of physical release. The HUD callback sends
@@ -83,7 +112,9 @@ The mark survives manual Cruise exits and interruptions. A lost Cruise lock
 starts a two-second arrival audit; the mark clears only when the prior lock and
 close-distance evidence agree. Landing/docking, leaving the pilot seat, a
 system change, a loading transition, explicit toggle, or replacement also
-clears it.
+clears a normal mark. `PendingJump` instead survives expected travel transitions
+but clears on a guarded `TESLoadGameEvent`, settled non-space state, or
+replacement.
 
 ## Threading and movie lifetime
 
@@ -95,6 +126,11 @@ clears it.
 - SFSE permanent tasks run on rotating render-graph workers. They only coalesce
   and post ordinary per-frame work through the engine's `BSService::TaskQueue`,
   which drains on the game main thread; they never touch UI or Scaleform.
+- `TESLoadGameEvent` registration is enabled only when the 1.16.244 getter
+  prologue, source address, and source vtable all match. Its callback publishes
+  one atomic clear signal; destination and input state are reset by the next
+  main-thread service frame. If any identity check fails, remote targets fail
+  closed while current-system behavior remains available.
 - Scaleform work is driven by a byte-verified 1.16.244 entry hook around
   `UI_AdvanceActiveMenus` (Address Library ID 130455). The original function
   runs first; subscriptions and mutations run after it returns, on the owning
@@ -121,6 +157,19 @@ clears it.
   after the UI call. The vanilla `SetRouteDestination`
   button is never changed. Each variant is created at most once per movie and
   hidden when inactive; no SWF bytecode is replaced.
+- For a remote planet/moon, the tap-only control is additionally gated by the
+  live public `SetRouteDestinationButtonData` enabled/visible state. Acceptance
+  captures `SystemNameHeader_mc`, then emits the same custom event as that stock
+  button. After vanilla changes to galaxy view, the post-advance driver watches
+  `JumpData_mc`: `ExecuteButton_mc.ExecuteButtonHint_mc.Visible` is the shipped
+  `bCanExecuteRoute` result, and the displayed route-end system must exactly
+  match the captured name before `JumpDataPanel.SendExecuteEvent()` is invoked.
+  The plugin does not dispatch a native far-travel event, construct a route,
+  change an exploration flag, or hide the map itself on this path. Vanilla owns
+  SetRouteDestination, route construction, ExecuteRoute, and normal menu/travel
+  transitions. A 250 ms post-advance poll also keeps button eligibility current
+  when route/button state changes without publishing a subscribed data feed;
+  the eligibility signature prevents unchanged button mutations.
 - Hold availability mirrors the shipped `ShipReticle.UpdateCruiseButton` rule by
   resolving and type-checking `Reticle_mc` once after the HUD movie guard, then
   reading its public `CanActivateCruiseMode`, `MonocleModeActive`, and

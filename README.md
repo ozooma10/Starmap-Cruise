@@ -1,10 +1,12 @@
 # Cruise From Starmap
 
-Highlight a current-system destination—including a planet, moon, station, or
-other addressable non-planet marker—and use the separate **Set Cruise Target** action.
-Tap/release to remember the target and return to the cockpit, or complete its
-Starmap hold fill to enter vanilla Cruise immediately and lock that target. The
-key may be released once the fill completes. In flight system view, the action
+Highlight a destination—including a planet, moon, current-system station, or
+other addressable current-system marker—and use the separate Cruise action. For
+a current-system target, tap/release remembers it and returns to the cockpit, or
+a completed Starmap hold enters vanilla Cruise immediately and locks it. For a
+remote planet or moon with an executable matching vanilla route, the tap starts
+that route and remembers which body Cruise should lock at final arrival. The key
+may be released once a local hold completes. In flight system view, the action
 remains visible but disabled with a short reason when the highlighted marker
 cannot be accepted. A fixed cockpit label confirms the marked target even when
 its optional positional marker is unavailable. Live 1.16.244 evidence identifies
@@ -25,12 +27,21 @@ inter-plugin API.
 - Starfield 1.16.244.0 (Steam)
 - Matching SFSE
 - Address Library v21 (`versionlib-1-16-244-0.bin`)
-- Highlighted planets, moons, stations, and addressable non-planet markers in the
-  currently loaded system
+- Highlighted planets and moons in the current or another system
+- Highlighted stations and addressable non-planet markers in the currently
+  loaded system
 - Keyboard/mouse for the separate Starmap action; controller UI remains pending
 
-Another system, surface/galaxy views, and grav-jump route integration remain
-outside this plugin's scope. A station marker must be a live station reference
+Native grav-jump route construction or modification remains outside this
+plugin's scope. For a remote planet or moon, one tap arms the process-local mark
+and dispatches the exact custom event emitted by vanilla **Set Course** for the
+highlighted body. Vanilla moves to galaxy view and builds the route. The plugin
+then waits for the visible vanilla travel panel, verifies that its destination
+system matches the system captured with the mark, and invokes the same public
+method as the vanilla Execute button. Vanilla still owns fuel, range,
+exploration, travel, and every route leg. The mark survives intermediate jumps and is
+reconciled only after arrival in the target system. A remote station or other
+non-planet marker remains unavailable. A station marker must be a live station reference
 or a cell that resolves to exactly one persistent live station reference. On map
 close, that reference becomes the native ship target before Cruise is requested.
 Another non-planet marker must already expose exactly one matching current HUD
@@ -41,6 +52,18 @@ than being reported as confirmed.
 
 - Tap/release marks the target and returns to the cockpit. Starting Cruise
   normally afterward locks that marked target.
+- A remote planet or moon uses a tap-only `JUMP THEN CRUISE` action. It is
+  enabled only when vanilla **Set Course** is enabled and visible for the exact
+  highlighted body. The tap records the target/system and dispatches stock
+  `SetRouteDestination`. After vanilla builds the route and moves to galaxy
+  view, the plugin requires matching route-end text plus the public
+  `bCanExecuteRoute` gate, then calls `JumpDataPanel.SendExecuteEvent()`. That
+  method rechecks the Execute gate and dispatches stock
+  `StarMapMenu_ExecuteRoute`. A missing, mismatched, or non-executable route
+  times out fail-closed: the Cruise mark is cleared, the map stays open, and
+  vanilla's route/warning remains untouched. On settled arrival in the target
+  system, one exact cockpit target-feed row is required before the plugin
+  requests stock Cruise and queues the marked course.
 - When the cockpit's stock Cruise action is currently available, completing the
   Starmap hold fill marks the target, closes the map, and latches a held state
   through the stock `SpaceshipHudMenu.ProcessUserEvent` path. Vanilla owns the
@@ -61,9 +84,10 @@ and use `TapHoldCruise` behavior. If Cruise is already active when the map opens
 an accepted selection retargets it immediately. The custom blue marker remains
 optional and is not the ship target or Cruise itself.
 
-Selecting the marked target again clears the mark. It only toggles an existing
-autopilot lock off if the cockpit feed confirms that the same target id is the
-active `bIsCruiseTargetLock` target.
+Selecting a marked current-system target again clears the mark. It only toggles
+an existing autopilot lock off if the cockpit feed confirms that the same target
+id is the active `bIsCruiseTargetLock` target. A remote `JUMP THEN CRUISE` tap
+always represents travel intent rather than this local toggle.
 
 ## Safety gates
 
@@ -76,7 +100,13 @@ A Starmap press may be consumed only when all of these gates pass:
    target ID. The tree still identifies the system/star and does not participate
    in destination identity.
 4. A planet/moon marker must match the dossier id/type; that dossier id must be a
-   live PNDT with a parsed GNAM tuple in the captured cockpit system.
+   live PNDT with a parsed GNAM tuple. Remote targets additionally require the
+   byte/source/vtable-guarded `TESLoadGameEvent` sink so a save load cannot retain
+   a stale process-local mark. At acceptance they require vanilla **Set Course**
+   to be enabled/visible and the browsed-system header to resolve. After stock
+   route creation they require the public Execute hint to be visible
+   (`bCanExecuteRoute=true`) and its destination-system text to match the system
+   name captured with the mark.
 5. A station marker must be a live reference whose base carries `IsStarstation`,
    or a cell that resolves to exactly one persistent reference with such a base.
    Other non-planet markers must match exactly one current cockpit HUD row by ID.
@@ -89,7 +119,7 @@ analysis verifies the station resolution and native ship-target assignment path.
 Station and generic non-planet gameplay confirmation remains pending.
 
 No raw `TESForm*` survives a menu transition. Destination state is a value
-containing only kind, map id/type, resolved target id, current-system identity,
+containing only kind, map id/type, resolved target id, target-system identity,
 localized name, and menu generation.
 
 ## Configuration

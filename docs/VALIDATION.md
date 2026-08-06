@@ -414,3 +414,103 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   to stacked hold after cooldown without a crash or close/reopen.
 - [ ] With OSF UI enabled, repeat active-Cruise targeting, completed hold,
   course-lock readback, and rapid map open/close cycles.
+
+## 2026-08-06 remote pending-jump campaign and implementation
+
+- [x] Six remote planet/moon selections retained exact-one highlighted-marker
+  joins to nonzero dossier PNDT id/type. Parsed GNAM identified Alpha Centauri,
+  Sol, and Narion while `uSystemLocationID` continued to identify the player's
+  current system rather than the browsed system.
+- [x] With the seamless-jump mod disabled, a vanilla single hop and both legs of
+  a vanilla two-hop route produced player-ship GravJump states `0`, `1`, and `2`.
+  Resolver convergence followed `LoadingMenu` close by about 4.1-4.5 ms; the
+  stock Cruise action became available about 0.71-0.88 seconds later. The
+  intermediate system remained stable for about 44.3 seconds before the second
+  leg, proving that arrival cannot mean the first system change.
+- [x] Quickload, pause-menu load, and main-menu load each produced exactly one
+  `TESLoadGameEvent`. Neither vanilla grav-jump leg produced one. The guarded
+  binding is Address Library ID `64149`, source static `838425`, source vtable
+  `413741`, with verified 1.16.244 prologue
+  `48 83 EC 28 65 48 8B 04 25 58 00 00 00 BA B8 00`.
+- [x] Production adds a planet/moon-only `PendingJump` state. It preserves a
+  remote mark across intermediate systems and `LoadingMenu`, never changes the
+  vanilla route, and waits for the target system, a settled world, and exactly
+  one matching cockpit row before using the existing stock HUD Cruise/course
+  path. Remote stations and non-planets remain unavailable.
+- [x] The load callback publishes only an atomic clear request; the verified
+  main-thread frame owns destination and input mutation. If any load-event
+  fingerprint/source identity check fails, remote selection fails closed while
+  current-system targeting stays enabled.
+- [x] Local releasedbg `xmake -r` completed with inherited CommonLibSF warnings
+  only. The built and local deploy-package DLL SHA-256 hashes match:
+  `9E51DB5B2FCA71E03A74B555EB49D98E82960ED635D41A82706F825C44B1BF72`.
+- [x] After Starfield exited, that exact package was copied to the active MO2
+  mod and the deployed DLL hash matched. The `Default` profile enables
+  CruiseFromStarmap and disables both OSF RE and True Seamless Grav Jumps for
+  the production smoke test. Deployment is not in-game proof.
+- [x] With the production plugin enabled and the OSF RE sandbox probe disabled,
+  a remote tap armed Bolivar I `0005E547` from Volii. The pending mark survived
+  the vanilla map reopen/close and `LoadingMenu`; after resolver arrival in
+  system `0001D022` and the 2.5-second settle gate, the plugin forwarded the
+  stock HUD Cruise press, dispatched the course, and received matching engine
+  lock readback. The operator visibly confirmed automatic Cruise activation and
+  targeting on 2026-08-06.
+- [x] A manually executed three-leg vanilla route from Bolivar to Gagarin kept
+  the original pending target through Volii `0000FCD0` and Olympus `00011CFD`
+  without engaging Cruise. At final Alpha Centauri `00011720` arrival, the same
+  target passed the settle/unique-row gates, activated stock Cruise, dispatched
+  `0005E311`, and received exact Gagarin lock readback.
+- [x] A production quickload with remote Jupiter `0005DEBA` pending emitted the
+  guarded `TESLoadGameEvent`; its callback queued only the atomic signal, and
+  the next main-thread frame cleared Jupiter before the replacement HUD movie
+  subscribed or the current-system resolver recovered. No Cruise engagement or
+  course dispatch occurred after load. Pause-menu and main-menu load paths share
+  this same event and were separately proven by the OSF RE campaign.
+- [x] Current-system planetary regression: a completed Jemison hold latched the
+  stock HUD press, activated Cruise, dispatched `0003F5A1`, and received exact
+  engine lock readback after the remote-pending changes.
+- [ ] Recheck current-system station and generic non-planet flows; controller
+  binding/glyph validation remains pending.
+
+## 2026-08-06 remote mark plus vanilla ExecuteRoute handoff
+
+- [x] Decompilation of the shipped 1.16.244 `galaxystarmapmenu.swf` identifies
+  the vanilla-owned seam. `JumpDataPanel.SetPlotPointData()` copies
+  `bCanExecuteRoute` into the public Execute hint's `Visible` property, and
+  public `SendExecuteEvent()` checks that property again before dispatching
+  `StarMapMenu_ExecuteRoute` through `BSUIDataManager`.
+- [x] The first `BCB4631...B715` implementation required an already executable
+  route while the remote body was highlighted. Live vanilla testing disproved
+  that UX: **Set Course** immediately returns to galaxy view, and the destination
+  system cannot be re-entered until the route is cleared. The implementation was
+  therefore unreachable despite loading and passing every startup guard in PID
+  `36092`; it is rejected rather than counted as gameplay proof.
+- [x] Shipped `StarMapButtonHintBar.as` provides the missing vanilla-owned first
+  stage. Its **Set Course** callback dispatches
+  `StarMapMenu_OnHintButtonClicked` as a `CustomEvent` with
+  `{buttonAction:"SetRouteDestination"}`. The revised remote tap dispatches that
+  exact event only while the stock button data is enabled and visible.
+- [x] The corrected implementation captures the browsed system name and marked
+  PNDT, lets vanilla build the route and change to galaxy view, then waits up to
+  five seconds in the verified post-advance window. It requires route-end text
+  to match the captured system and `bCanExecuteRoute` to expose Execute before
+  invoking `JumpDataPanel.SendExecuteEvent()`. Session/movie changes, early map
+  close, mismatch, timeout, or invocation failure clear only the Cruise mark;
+  vanilla route/warning state is preserved.
+- [x] With live MO2 deployment disabled, `xmake -r` compiled, linked, and
+  installed the corrected releasedbg package with inherited CommonLibSF
+  warnings only. Build and local deploy-package DLL hashes match:
+  `0A1083AE9E918953ED78660E5C25426529B21534DC445F7650B3A251276397A9`.
+  MO2 and the running process still contain the rejected `BCB4631...B715`
+  build, so this is static/build evidence only.
+- [ ] After Starfield exits, deploy the exact `56492783...0041` DLL/PDB/default
+  INI, restart, and confirm the revised build loaded.
+- [ ] From a remote system-view body with stock **Set Course** available,
+  confirm one `JUMP THEN CRUISE` tap logs both stock stages, moves through galaxy
+  view automatically, and visibly begins the Grav Jump without a second action.
+  At final arrival, require automatic stock Cruise plus exact marked-target
+  course-lock readback.
+- [ ] Confirm an unexplored/out-of-range route remains on vanilla's galaxy-view
+  warning after five seconds and does not retain a Cruise mark or begin travel.
+- [ ] Re-run one current-system completed-hold regression to prove the local
+  map-close/HUD-Cruise path remains unchanged.
