@@ -91,6 +91,7 @@ namespace CFS::BodyIndex
 
         std::mutex g_mutex;
         std::unordered_map<std::uint32_t, Entry> g_entries;
+        std::unordered_map<std::uint32_t, std::uint32_t> g_systemRoots;
         std::unordered_set<std::uint32_t> g_stationBases;
         std::unordered_map<std::uint32_t, std::vector<StationTarget>> g_stationTargets;
         std::atomic<bool> g_started{ false };
@@ -303,7 +304,7 @@ namespace CFS::BodyIndex
         }
 
         void ParseStationReferenceGroup(std::ifstream& a_file, std::uint64_t a_end,
-            std::uint32_t a_currentCell, bool a_persistent,
+            std::uint32_t a_currentCell, bool a_placedChild,
             const PluginInfo& a_plugin, const std::vector<PluginInfo>& a_masters,
             const std::unordered_set<std::uint32_t>& a_stationBases,
             std::unordered_map<std::uint32_t, StationPlacement>& a_out)
@@ -322,21 +323,22 @@ namespace CFS::BodyIndex
                         return;
                     const auto groupEnd = start + record.dataSize;
                     const auto groupType = record.formID;
-                    if (groupType == kCellTemporaryChildren) {
-                        a_file.seekg(static_cast<std::streamoff>(groupEnd), std::ios::beg);
-                        continue;
-                    }
 
                     auto nextCell = a_currentCell;
-                    auto nextPersistent = a_persistent;
+                    auto nextPlacedChild = a_placedChild;
                     if (groupType == kCellChildren) {
                         nextCell = ResolveFormID(record.flagsOrLabel, a_masters, a_plugin);
-                        nextPersistent = false;
-                    } else if (groupType == kCellPersistentChildren) {
+                        nextPlacedChild = false;
+                    } else if (groupType == kCellPersistentChildren ||
+                               groupType == kCellTemporaryChildren) {
+                        // Starfield places course-addressable stations in both
+                        // child groups: The Eye/Nova are persistent, while
+                        // Deimos Staryard is temporary. Selection still requires
+                        // this indexed placement to resolve to a live reference.
                         nextCell = ResolveFormID(record.flagsOrLabel, a_masters, a_plugin);
-                        nextPersistent = true;
+                        nextPlacedChild = true;
                     }
-                    ParseStationReferenceGroup(a_file, groupEnd, nextCell, nextPersistent,
+                    ParseStationReferenceGroup(a_file, groupEnd, nextCell, nextPlacedChild,
                         a_plugin, a_masters, a_stationBases, a_out);
                     a_file.seekg(static_cast<std::streamoff>(groupEnd), std::ios::beg);
                     continue;
@@ -344,7 +346,7 @@ namespace CFS::BodyIndex
 
                 if (start + sizeof(RecordHeader) + record.dataSize > a_end)
                     return;
-                if (!a_currentCell || !a_persistent ||
+                if (!a_currentCell || !a_placedChild ||
                     std::memcmp(record.signature, "REFR", 4) != 0) {
                     a_file.seekg(record.dataSize, std::ios::cur);
                     continue;
@@ -423,8 +425,73 @@ namespace CFS::BodyIndex
                 file.seekg(static_cast<std::streamoff>(groupEnd), std::ios::beg);
             }
             if (a_out.size() > before)
-                REX::INFO("[bodies] {} persistent station references added/updated from {}",
+                REX::INFO("[bodies] {} placed station references added/updated from {}",
                     a_out.size() - before, a_plugin.name);
+        }
+
+        void ParseSystemRoots(const PluginInfo& a_plugin,
+            const std::vector<PluginInfo>& a_masters,
+            std::unordered_map<std::uint32_t, std::uint32_t>& a_out)
+        {
+            const auto path = std::filesystem::path{ "Data" } / a_plugin.name;
+            std::ifstream file{ path, std::ios::binary };
+            RecordHeader header{};
+            if (!ReadExact(file, &header, sizeof(header)) ||
+                std::memcmp(header.signature, "TES4", 4) != 0)
+                return;
+            file.seekg(header.dataSize, std::ios::cur);
+            const auto end = SeekGroup(file, "STDT");
+            if (!end)
+                return;
+
+            std::vector<std::byte> raw;
+            std::vector<std::byte> scratch;
+            std::size_t count = 0;
+            while (file &&
+                   static_cast<std::uint64_t>(file.tellg()) + sizeof(RecordHeader) < end) {
+                const auto start = static_cast<std::uint64_t>(file.tellg());
+                RecordHeader record{};
+                if (!ReadExact(file, &record, sizeof(record)))
+                    break;
+                if (std::memcmp(record.signature, "GRUP", 4) == 0) {
+                    file.seekg(static_cast<std::streamoff>(start + record.dataSize),
+                        std::ios::beg);
+                    continue;
+                }
+                raw.resize(record.dataSize);
+                if (record.dataSize && !ReadExact(file, raw.data(), raw.size()))
+                    break;
+                if (std::memcmp(record.signature, "STDT", 4) != 0)
+                    continue;
+
+                const auto runtimeID = ResolveFormID(record.formID, a_masters, a_plugin);
+                if ((record.flagsOrLabel & kDeleted) != 0) {
+                    a_out.erase(runtimeID);
+                    continue;
+                }
+
+                std::uint32_t systemID = 0;
+                bool haveSystemID = false;
+                const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
+                ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
+                    const std::byte* a_payload, std::size_t a_length) {
+                    if (a_sig == "DNAM" && a_length >= sizeof(systemID)) {
+                        std::memcpy(&systemID, a_payload, sizeof(systemID));
+                        haveSystemID = true;
+                        return false;
+                    }
+                    return true;
+                });
+                if (!haveSystemID)
+                    continue;
+                const auto form = RE::TESForm::LookupByID(runtimeID);
+                if (!form || form->GetFormType() != RE::FormType::kSTDT)
+                    continue;
+                a_out.insert_or_assign(runtimeID, systemID);
+                ++count;
+            }
+            if (count)
+                REX::INFO("[bodies] {} STDT system roots from {}", count, a_plugin.name);
         }
 
         void ParsePlugin(const PluginInfo& a_plugin, const std::vector<PluginInfo>& a_masters,
@@ -497,6 +564,7 @@ namespace CFS::BodyIndex
         std::thread{ [plugins] {
             const auto started = std::chrono::steady_clock::now();
             std::unordered_map<std::uint32_t, Entry> entries;
+            std::unordered_map<std::uint32_t, std::uint32_t> systemRoots;
             std::unordered_set<std::uint32_t> stationBases;
             std::unordered_map<std::uint32_t, StationPlacement> stationPlacements;
             std::unordered_map<std::string, PluginInfo> pluginByName;
@@ -536,6 +604,7 @@ namespace CFS::BodyIndex
                 ParseStationBases(context.plugin, context.masters, stationBases);
             for (const auto& context : contexts) {
                 ParsePlugin(context.plugin, context.masters, entries);
+                ParseSystemRoots(context.plugin, context.masters, systemRoots);
                 ParseStationPlacements(context.plugin, context.masters, stationBases,
                     stationPlacements);
             }
@@ -559,18 +628,21 @@ namespace CFS::BodyIndex
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - started).count();
             const auto count = entries.size();
+            const auto systemRootCount = systemRoots.size();
             const auto stationBaseCount = stationBases.size();
             const auto stationCellCount = stationTargets.size();
             {
                 std::lock_guard lock{ g_mutex };
                 g_entries = std::move(entries);
+                g_systemRoots = std::move(systemRoots);
                 g_stationBases = std::move(stationBases);
                 g_stationTargets = std::move(stationTargets);
             }
             g_ready.store(true, std::memory_order_release);
-            REX::INFO("[bodies] load-order index ready: {} PNDT bodies, {} station bases, "
-                      "{} persistent station refs in {} cells, {} ms",
-                count, stationBaseCount, stationReferenceCount, stationCellCount, elapsed);
+            REX::INFO("[bodies] load-order index ready: {} PNDT bodies, {} STDT system roots, "
+                      "{} station bases, {} placed station refs in {} cells, {} ms",
+                count, systemRootCount, stationBaseCount, stationReferenceCount,
+                stationCellCount, elapsed);
         } }.detach();
     }
 
@@ -586,6 +658,15 @@ namespace CFS::BodyIndex
     {
         std::lock_guard lock{ g_mutex };
         if (const auto found = g_entries.find(a_formID); found != g_entries.end())
+            return found->second;
+        return std::nullopt;
+    }
+
+    std::optional<std::uint32_t> LookupSystemRoot(std::uint32_t a_formID)
+    {
+        std::lock_guard lock{ g_mutex };
+        if (const auto found = g_systemRoots.find(a_formID);
+            found != g_systemRoots.end())
             return found->second;
         return std::nullopt;
     }

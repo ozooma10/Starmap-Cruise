@@ -20,11 +20,30 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
   `bIsInHighlightRadius=true` and a nonzero id. Planet/moon rows must also
   exactly match the dossier PNDT and its GNAM/current-system identity.
   A station-backed non-planet row may be a live station reference or a CELL that
-  resolves through persistent children to exactly one live reference whose base
-  carries `IsStarstation`. Another non-planet row must match exactly one current
+  resolves through placed children to exactly one currently live reference
+  whose base carries `IsStarstation`. A Ship POI row may resolve only when its
+  CELL contains exactly one live, in-space, non-station GBFM reference after
+  excluding the player ship. Any non-planet marker in a browsed system other
+  than the cockpit system is hidden before station/ship resolution rather than
+  advertised as an unavailable Cruise target. Another non-planet row must match exactly one current
   cockpit target-feed row by the same ID. Keep the map id/type and resolved
   target reference separate. Unmatched generic POIs, tree focus, `bIsFocused`,
   timing heuristics, and last-dossier-wins are invalid.
+- A remote planet/moon handoff must prove the captured STDT/DNAM system root
+  after stock Back, then allow every non-ready route state the full five-second
+  build window. Route-end system identity and public `bCanExecuteRoute` must
+  remain continuously ready for 500 ms before invoking stock Execute Route.
+  Physical-hold/focus cleanup must not demote `MapSelection`, and an active
+  remote-route request is authoritative against ordinary system-change cleanup.
+  While Starfield is not foreground, do not advance or expire the remote-route
+  driver; restart the current phase timeout and readiness dwell on focus return.
+  Carry the already-proven STDT root through stock Back, pin it against transient
+  star-feed rows until system-scope Set Course, establish native galaxy selection
+  with the shipped Quick Select `bodyID` change event rather than mouse hover,
+  and consume repeat presses of the Cruise-bound control while the guarded
+  handoff remains active.
+  An ActionScript invocation is not proof that travel began; only the guarded,
+  player-filtered `GravJumpEvent` stream provides jump acknowledgement.
 - Anything outside the currently loaded system's system view is vanilla-owned.
 - SFSE permanent tasks are worker-thread producers only. Marshal ordinary
   engine work through `RE::BSService::TaskQueue`; enter Scaleform only from the

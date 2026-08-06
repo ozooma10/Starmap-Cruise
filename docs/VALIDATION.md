@@ -346,17 +346,17 @@ relaunched-game visual and input check:
 
 The first runtime attempt disproved the assumption that a station's Starmap ID
 is already present in the cockpit target feed. The Eye is exposed by the map as
-CELL `0001285A`, while its persistent ship reference is `00012894`:
+CELL `0001285A`, while its placed ship reference is `00012894`:
 
 - [x] Preserved the exact-one `bIsInHighlightRadius` discriminator and nonzero-ID
   requirement for every system-view destination.
 - [x] Left the planet/moon path unchanged: exact dossier id/type agreement, live
   PNDT, parsed GNAM, and captured-current-system equality remain required.
-- [x] Static 1.16.244 plugin inspection established these map-cell to persistent
+- [x] Static 1.16.244 plugin inspection established these map-cell to placed
   reference mappings: The Eye `0001285A -> 00012894`, Nova Galactic Staryard
   `00219520 -> 00216F51`, and Deimos Staryard `00219DFF -> 003120D6`.
 - [x] Station ship bases are discovered across the active full/medium/light load
-  order by the vanilla `IsStarstation` keyword (`003402A3`). Only persistent CELL
+  order by the vanilla `IsStarstation` keyword (`003402A3`). Placed references in both persistent and temporary CELL
   children are indexed; deleted overrides and ambiguous results fail closed.
 - [x] A direct dynamic marker is accepted only when it is a live reference whose
   live base is in that station-base set.
@@ -509,10 +509,11 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   system view leaves the same system focused in galaxy view, where the unchanged
   Set Course callback can create a system-scoped route.
 - [x] The replacement implementation keeps the highlighted PNDT only as the
-  Cruise target. It requires the system/star tree PNDT to be the parsed GNAM root,
-  emits stock Back, verifies galaxy view's focused-system name, and only then
-  emits stock Set Course. Execute additionally rejects any route whose displayed
-  body endpoint is neither empty nor the captured system name.
+  Cruise target. It requires the system/star tree form to be a live STDT whose
+  parsed DNAM system ID matches the target PNDT's parsed GNAM system ID, emits
+  stock Back, verifies galaxy view republishes the exact STDT/DNAM root, and
+  only then emits stock Set Course. Execute requires the displayed route system
+  to match; vanilla may select a body within that system as the jump entry point.
 - [x] With live MO2 deployment disabled, clean releasedbg `xmake -r -y` compiled,
   linked, and installed with inherited CommonLibSF warnings only. Build and local
   deploy-package DLL hashes match:
@@ -520,13 +521,115 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
 - [ ] After Starfield exits, deploy exact `0B78083F...B8BD2`, restart, and confirm
   the Back -> system Set Course -> Execute chain loads.
 - [ ] From a remote system-view body, confirm one `JUMP THEN CRUISE` tap returns
-  to the matching galaxy-system node, creates a route with no different body
-  endpoint, and visibly begins the Grav Jump. At settled system arrival, require
-  a meaningful automatic Cruise leg plus exact marked-body course-lock readback.
+  to the matching galaxy-system node, accepts vanilla's in-system entry body, and
+  visibly begins the Grav Jump. At settled system arrival, require a meaningful
+  automatic Cruise leg plus exact marked-body course-lock readback.
 - [ ] Confirm an unexplored/out-of-range route remains on vanilla's galaxy-view
   warning after five seconds and does not retain a Cruise mark or begin travel.
 - [ ] Re-run one current-system completed-hold regression to prove the local
   map-close/HUD-Cruise path remains unchanged.
+
+### 2026-08-06 STDT system-root corrections
+
+- [x] Live production log first captured remote Sol selection failing closed
+  with tree root `0005E5CB` and expected system `0`. Read-only `Starfield.esm`
+  inspection identifies that form as STDT `SolStar` with `DNAM=0`; the prior
+  PNDT/GNAM lookup could never resolve a star form.
+- [x] The first correction incorrectly assumed CommonLibSF's
+  `BGSStar::uniqueID` exposed STDT `DNAM`. Its build/package/MO2 DLLs matched at
+  `8B35AC11379CA0C6E023854E1654B49A79140C935EA155BBCA834FDBB18DF4EA`.
+- [x] A restarted run exposed a separate callback-order bug: every Sol gate
+  reported root `00000000`. The cache now clears only on entry to galaxy view,
+  survives galaxy-to-system entry, and accepts updates only from live STDT
+  forms. That build/package/MO2 DLL matched at
+  `FB601F77C5CF3EB98BF0E95459BA4CC618B38A424FC8D376E44D219B41790626`.
+- [x] The next restarted run proved the root cache: it retained Sol STDT
+  `0005E5CB`. It also disproved the runtime-member assumption:
+  `BGSStar::uniqueID` returned decimal `386507` (`0005E5CB`, the form ID), while
+  the selected PNDT correctly expected galaxy system `0`.
+- [x] The load-order-aware background index now parses STDT `DNAM` alongside
+  PNDT `GNAM`, validates each indexed root against a live STDT form, and compares
+  both records in the same galaxy-system ID domain. Direct base-data checks
+  confirm `SolStar DNAM=0` and `AlphaCentauriStar DNAM=71456`.
+- [x] The STDT/DNAM releasedbg build and package install passed with inherited
+  CommonLibSF warnings only. The build, `release/Data`, and active MO2 DLL
+  hashes match:
+  `EFEF8B38CB0A5E954670F592865FC3853753FA7149F6C0C6614066CD468487DA`.
+- [x] The STDT/DNAM build loaded with 124 indexed roots, resolved Sol root
+  `0005E5CB` to system `0`, enabled `JUMP THEN CRUISE`, accepted Neptune, and
+  dispatched stock Back. This proves the complete pre-Back identity path.
+- [x] The post-Back driver then cleared the request after 750 ms because
+  `SystemInfo_mc` exposed the placeholder text `' '` rather than `Sol`. About
+  1.4 seconds after Back, the tree feed republished exact Sol STDT `0005E5CB`.
+- [x] Post-Back focus now uses that exact STDT/DNAM form+system identity instead
+  of animated/localized text and waits the full five-second safety window for
+  the feed/button state to settle. Route-end display text remains independently
+  checked after vanilla Set Course builds the route.
+- [x] The post-Back gate releasedbg build and package install passed with
+  inherited CommonLibSF warnings only. The build, `release/Data`, and active MO2
+  DLL hashes match:
+  `F189C6A1DB8F101953303BE2AB8E10800EAF5C424CF6A50D2C01064CE857B2D6`.
+- [x] The post-Back build reached the exact Sol root, dispatched system-level Set
+  Course, and produced a visible executable Sol route. Vanilla selected Mars as
+  the system entry body while the Cruise mark remained Neptune. The plugin's
+  extra body-name rule rejected that valid route after 750 ms, leaving the map's
+  JUMP panel visible without executing it.
+- [x] Removed only that redundant body-name rejection. Exact pre/post-Back
+  STDT/DNAM identity, matching route-system text, and the public Execute gate
+  remain mandatory before `JumpDataPanel.SendExecuteEvent()`.
+- [x] The valid-entry-body releasedbg build and package install passed with
+  inherited CommonLibSF warnings only. The build, `release/Data`, and active MO2
+  DLL hashes match:
+  `827ED5C9C3E0604E551C02BE3000F9E269B1ADBE199AC81887EDFAA8327E122E`.
+- [x] The next live test completed the remote Sol `JUMP THEN CRUISE` flow
+  through stock Back, system-level Set Course, Execute Route, arrival, and
+  Neptune Cruise lock.
+
+### 2026-08-06 temporary-child station placement correction
+
+- [x] The next live test exposed Deimos Staryard marker CELL `00219DFF/4` as
+  unavailable because it had neither an indexed station reference nor a current
+  HUD target row.
+- [x] Read-only base-ESM inspection confirmed `00219DFF -> 003120D6`, with the
+  REFR's `NAME=000090B3` station base. The Eye and Nova Galactic Staryard
+  references are in type-8 persistent CELL children; Deimos is in a type-9
+  temporary CELL child that the indexer previously skipped.
+- [x] The load-order parser now indexes placed REFRs from both type-8 and type-9
+  CELL children. Selection still requires the indexed form to be a currently
+  live `TESObjectREFR`, revalidates its live base against `IsStarstation`,
+  and rejects zero or multiple live results.
+- [x] A read-only simulation of the revised base-game parser found 23 station
+  references in 23 distinct cells with zero ambiguous cells, including
+  `00219DFF -> 003120D6`.
+- [x] Releasedbg configure/build/install passed with inherited CommonLibSF
+  warnings only. The build, `release/Data`, and active MO2 DLL hashes match:
+  `C89F9DC26F6DF4781047E3BD7B1E996215D2CFA8F51BCB3FDF6854A3B51E8ECC`.
+- [x] The next restarted live test confirmed Deimos Staryard is enabled and its
+  Cruise action works with the temporary-child index correction.
+
+### 2026-08-06 dynamic Ship POI CELL resolution
+
+- [x] The next live test exposed highlighted Ship marker CELL `FF018EB6/4` as
+  unavailable because the former generic path incorrectly required a cockpit
+  target-feed row with that same CELL ID.
+- [x] Read-only base-ESM inspection confirmed the structural analogue
+  `0021C1B2` is also a CELL, not a ship REFR. Its placed children include GBFM
+  ship references, proving the map ID and course-addressable ship ID occupy
+  different identity domains.
+- [x] The local CommonLibSF mirror's 1.16.244 `TESObjectCELL` layout has a
+  byte-derived locked loaded-reference walker at `references+0x80` and
+  `lock+0x118`. The resolver uses that walker only on the main UI thread.
+- [x] A Ship CELL is eligible only when the walker finds exactly one currently
+  live, in-space, non-station GBFM reference after excluding the player ship.
+  Zero or multiple candidates fail closed. Map close repeats the live form,
+  GBFM, in-space, non-station, and not-player checks before native assignment,
+  then requires exact target-global readback.
+- [x] Releasedbg compile/link/install passed with inherited CommonLibSF warnings
+  only. The build, `release/Data`, and active MO2 DLL hashes match:
+  `1ABB3F1652F309FF5CCE444570CE96A79CC0213E7919460555F9655FC8CE8B96`.
+- [ ] Restart Starfield, highlight the same Ship POI, and confirm the log reports
+  one eligible ship CELL/ref/base tuple, exact native target assignment, and
+  Cruise course-lock readback on that resolved reference.
 
 ## 2026-08-06 controller input and glyph repair
 
@@ -569,3 +672,139 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
 - [x] In-game confirmation on 2026-08-06: Start -> character menu -> Starmap ->
   accepted Cruise action closed every menu layer and returned directly to
   gameplay instead of revealing the character menu.
+
+## 2026-08-06 remote ExecuteRoute settle hardening
+
+- [x] The latest Gagarin runtime trace reached the exact STDT/DNAM galaxy root,
+  dispatched system-scope Set Course, observed an executable Alpha Centauri
+  route with Jemison as vanilla's entry body, and invoked stock Execute Route.
+  The map then closed without an observable player-jump acknowledgement, so a
+  successful ActionScript invocation alone is not counted as travel proof.
+- [x] Removed the 750 ms early-final route mismatch. Every non-ready route state
+  now receives the full five-second construction window, covering stale route
+  identity during the native transition.
+- [x] A matching route must remain continuously executable for 500 ms before
+  `JumpDataPanel.SendExecuteEvent()` is invoked. Any missing/mismatched frame
+  resets that dwell, preventing a first-frame `bCanExecuteRoute` race from
+  closing the map before native route state has settled.
+- [x] Added a read-only, player-filtered `Spaceship::GravJumpEvent` sink for
+  travel acknowledgement. Address Library ID `93876` is guarded by the verified
+  1.16.244 global-event getter prologue and source vtable `445846`; ambient NPC
+  ship events are ignored.
+- [x] Releasedbg configure/build/install passes with inherited CommonLibSF
+  warnings only. The built and MO2-deployed DLL SHA-256 hashes match:
+  `B9D2B90D809348173D8B970EFDC7BA9ABCA83B14F24373426A08944F4B3CC995`.
+- [ ] Restart Starfield and repeat several remote `JUMP THEN CRUISE` attempts.
+  Require the continuous-ready log, followed by player grav-jump states `0`,
+  `1`, and `2`; also confirm an unavailable route remains on the galaxy map for
+  the full timeout without retaining the Cruise mark.
+## 2026-08-06 remote route focus-reset correction
+
+- [x] The restarted `B9D2` predecessor trace accepted Gagarin from Sol, reached
+  Alpha Centauri's exact STDT/DNAM root after 3.510 seconds, and dispatched stock
+  system-scope Set Course. No executable-route or Execute log followed.
+- [x] At 2.212 seconds into route construction, application focus loss called
+  the generic physical-hold reset. That reset incorrectly demoted
+  `MapSelection` to `Marked`; the next main-thread reconciliation then cleared
+  Gagarin as a normal system change. A prior successful route required about
+  2.844 seconds to become executable, proving this attempt was cancelled before
+  its normal route-ready window.
+- [x] Physical-hold/focus cleanup now demotes only `AwaitingCruise`, never an
+  accepted `MapSelection`. Main-thread system-change cleanup also treats an
+  active guarded remote-route request as authoritative, independently of the
+  mutable navigation display state.
+- [x] Releasedbg configure/build/install passes with inherited CommonLibSF
+  warnings only. The built and MO2-deployed DLL SHA-256 hashes match:
+  `EFB3A55A0B33C10885E4970492F3F022D29B5347EEEE662B86FFA040F4DFFF81`.
+- [ ] Restart Starfield and repeat the Gagarin remote tap. Require matching-root,
+  continuous-ready, Execute Route, and player grav-jump state logs in order.
+## 2026-08-06 remote dynamic-POI action suppression
+
+- [x] Runtime evidence identifies the unavailable Ship selection as CELL
+  `0021C1B2/4` while the cockpit system was Sol `0` and the browsed live STDT
+  system was Alpha Centauri `71456`. Its loaded-reference walk correctly found
+  no ship because the remote encounter system was not loaded.
+- [x] After exact station resolution, a remaining non-planet marker is now hidden
+  whenever its browsed STDT/DNAM system differs from the captured cockpit system.
+  This is structural and localization-independent; it does not compare the
+  marker text with the English word `Ship`.
+- [x] Current-system Ship CELLs still use the exact-one live, in-space,
+  non-station GBFM resolver. Remote planets/moons retain `JUMP THEN CRUISE`.
+- [x] Releasedbg configure/build/install passes with inherited CommonLibSF
+  warnings only. The built and MO2-deployed DLL SHA-256 hashes match:
+  `77CBC11D78A15FD1C30A45E23503E4D013DAFF2373C1FC2B810468406C4A690F`.
+- [ ] Restart Starfield and confirm the remote Ship marker has no Cruise action,
+  while a current-system exact-one Ship marker still shows `SET CRUISE TARGET`.
+## 2026-08-06 foreground-aware remote route timeout
+
+- [x] The restarted `77CB` trace accepted remote Olivas at `16:58:13.874` and
+  dispatched stock Back. Starfield lost foreground at `16:58:16.659`, before the
+  galaxy STDT feed republished the focused root. The old wall-clock timeout then
+  expired at `16:58:18.875` with `focused galaxy STDT/DNAM identity is
+  unavailable`; neither Set Course nor Execute was reached.
+- [x] The remote-route driver now returns without advancing or expiring while
+  Starfield is not foreground. On focus return, an active request receives a new
+  full phase timeout and its partial Execute-readiness dwell is reset.
+- [x] Releasedbg compile/link passed with inherited CommonLibSF warnings only.
+  Initial install correctly failed while PID `20192` held the DLL open. After
+  Starfield exited, `xmake install -y` succeeded and the built/MO2 DLL SHA-256
+  hashes match:
+  `FBD7188E604C65F23EAD5984A71234BC0189E6E7C046C3B90ABF6A570E369617`.
+- [ ] Restart Starfield and retry one remote planet/moon. Keep the game focused
+  through the initial transition, or deliberately switch away and return;
+  require matching-root, continuous-ready, Execute Route, and player grav-jump
+  state logs in order.
+## 2026-08-06 carried-root and remote-input quarantine
+
+- [x] The restarted `FBD7` trace explains the origin-system Cruise report. Voss
+  was highlighted at `17:46:31.558`, but the marker changed to remote station
+  CELL `0003DBEC` 92 ms later and before the physical press. Because station
+  resolution preceded the remote-system hide gate, the UI exposed a local
+  `SET CRUISE TARGET` hold; its completed one-second hold then correctly engaged
+  Cruise in Sol for reference `000013B8`.
+- [x] All remote non-planet markers are now hidden before station, Ship, or generic
+  target resolution. Highlight jitter therefore cannot turn a remote
+  planet/moon tap into an origin-system station/Ship Cruise hold.
+- [x] The same trace accepted remote Gagarin at `17:47:24.101`, reached galaxy
+  view 661 ms later, then received a map close at `17:47:26.875` before the
+  optional star feed republished the exact root. No Set Course, Execute,
+  LoadingMenu, or player grav-jump event occurred.
+- [x] The already-proven captured STDT/DNAM root now survives stock Back and is
+  pinned against transient valid-star rows until system-scope Set Course. This
+  removes the optional republish delay; exact displayed route-system identity
+  and continuous `bCanExecuteRoute` readiness remain mandatory before Execute.
+- [x] Repeat presses of the Cruise-bound keyboard, mouse, or controller control
+  are removed from the input list while a guarded remote route is active. This
+  prevents an impatient second press from invoking a different galaxy/cockpit
+  context during the asynchronous handoff.
+- [x] Releasedbg configure/build/install passes with inherited CommonLibSF
+  warnings only. The built and MO2-deployed DLL SHA-256 hashes match:
+  `8C57D315586A2F45C67F0A83FE0EF539C783BB1C92E7BF2E24A2F18B5E434490`.
+- [ ] Restart Starfield and test one remote planet/moon with a single tap. Require
+  immediate carried-root Set Course after galaxy view, continuous-ready Execute,
+  then player grav-jump states `0`, `1`, and `2`. Also confirm every remote
+  station/Ship marker has no Cruise action.
+
+## 2026-08-06 cursor-independent galaxy selection
+
+- [x] The next live Sol attempt remained in galaxy view until the mouse moved
+  over the captured system; only then did the driver dispatch Set Course. This
+  isolates the remaining delay to vanilla galaxy-marker selection rather than
+  STDT identity, route construction, or Execute.
+- [x] Shipped 1.16.244 ActionScript confirms
+  `QuickSystemSelect.OnSelectionChange` emits
+  `StarMapMenu_QuickSelectChange {bodyID: entry.uBodyID}` before its
+  Open-for-Plot item emits `SetRouteDestination`. The separate
+  `StarMapMenu_Galaxy_FocusSystem` event is parameterless and would enter system
+  view, so it is not the correct route-plot seam.
+- [x] On the first guarded galaxy-view advance, the driver now emits that exact
+  Quick Select change once with the already-proven captured STDT root. It then
+  waits for native enabled/visible Set Course data and retains every existing
+  route-system, executable, dwell, session, and arrival gate.
+- [x] Releasedbg compilation and xmake installation pass with inherited
+  CommonLibSF warnings only. Built and MO2-deployed DLL SHA-256 hashes match:
+  `215B3C07734F19452C00CC28DDD5E4CDED39F9EAC6169B6F08CBFE54250F58A3`.
+- [ ] Restart after deployment and trigger one remote planet/moon without moving
+  the mouse. Require `primed stock Quick Select`, system-level Set Course,
+  continuous-ready Execute, and player grav-jump states `0`, `1`, and `2` in
+  order.

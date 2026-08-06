@@ -25,6 +25,7 @@ namespace CFS::BodyIndex
     [[nodiscard]] bool Ready();
     [[nodiscard]] std::size_t Size();
     [[nodiscard]] std::optional<Entry> Lookup(std::uint32_t a_formID);
+    [[nodiscard]] std::optional<std::uint32_t> LookupSystemRoot(std::uint32_t a_formID);
     [[nodiscard]] bool IsStationBase(std::uint32_t a_formID);
     [[nodiscard]] std::vector<StationTarget> StationTargets(std::uint32_t a_cellFormID);
 }

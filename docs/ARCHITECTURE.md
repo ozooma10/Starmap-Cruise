@@ -14,7 +14,10 @@ GalaxyStarMapMenu movie
                     |   + guarded load sink when system is remote
                     | stations: marker live reference or CELL
                     |   + active-load-order IsStarstation base
-                    |   + exactly one persistent live reference
+                    |   + exactly one indexed, currently live reference
+                    | ship POIs: CELL loaded-reference walk
+                    |   + exactly one live in-space non-station GBFM reference
+                    |   + player ship excluded
                     | other non-planets: exact current HUD target ID
                     v
               BodyDestination value (map id/type + target id)
@@ -27,7 +30,7 @@ GalaxyStarMapMenu movie
                     |       + JumpDataPanel.SendExecuteEvent()
                     |       + PendingJump until target system
                     |
-                    +---- station map close: native ship-target assignment
+                    +---- station/ship map close: native ship-target assignment
                     |
                     v
 SpaceshipHudMenu movie
@@ -43,8 +46,9 @@ SpaceshipHudMenu movie
 ```
 
 The active load order is parsed in memory on a background thread. Planet records
-retain their PNDT/GNAM identity. Station bases are identified by the vanilla
-`IsStarstation` keyword; CELL persistent-child references are then indexed by
+retain their PNDT/GNAM identity and star records retain their STDT/DNAM system
+identity. Station bases are identified by the vanilla
+`IsStarstation` keyword; CELL placed references are then indexed by
 cell and validated again as live references when selected. Full, medium, and
 light master mappings are respected. No cache is read or written.
 
@@ -65,28 +69,47 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   session/movie generation. Planet/moon markers additionally require matching
   dossier id/type, a live PNDT, and parsed GNAM. A remote planet/moon also
   requires the guarded load-event sink. A station marker
-  must be a live station reference or a CELL resolving to exactly one persistent
-  live reference whose base carries `IsStarstation`. Another non-planet marker
-  must match exactly one row in the current cockpit target feed.
-- For a resolved station CELL/reference, map close assigns the reference as the
-  native ship target before any Cruise input or course event is issued. Exact
+  must be a live station reference or a CELL resolving to exactly one indexed,
+  currently live reference whose base carries `IsStarstation`. A Ship POI must
+  be a CELL resolving through the verified loaded-reference walker to exactly one
+  live, in-space, non-station GBFM reference after excluding the player ship.
+  A non-planet marker whose live STDT system differs from the captured cockpit
+  system is hidden before station/ship resolution: its target is not safe until
+  that system is loaded. Another non-planet marker must
+  match exactly one row in the current cockpit target feed.
+- For a resolved station or ship CELL/reference, map close assigns the reference
+  as the native ship target before any Cruise input or course event is issued. Exact
   current-feed non-planets already have a course-addressable target ID.
 - `Marked` owns the process-local destination but not autopilot.
 - `PendingJump` is used only for a remote planet or moon. It preserves the mark
   across intermediate system changes and `LoadingMenu`, without constructing or
   altering the vanilla route itself. A remote tap first captures the body as the
   Cruise target plus the browsed system name/root, then emits the exact
-  `StarMapMenu_OnCancel` event used by vanilla Back. Once galaxy view focuses the
-  same system, it emits
+  `StarMapMenu_OnCancel` event used by vanilla Back. Once galaxy view is active,
+  it emits `StarMapMenu_QuickSelectChange {bodyID: captured STDT root}`—the exact
+  event emitted by `QuickSystemSelect.OnSelectionChange`—and then emits
   `StarMapMenu_OnHintButtonClicked {buttonAction: "SetRouteDestination"}` there.
   During guarded five-second stages, the route-end system text must match the
-  captured name, it must not identify a different body endpoint, and the public
-  Execute hint must be visible. The plugin then enters `PendingJump` and invokes public
+  captured name and the public Execute hint must remain visible continuously for
+  500 ms. Transient mismatch states receive the full five-second route-build
+  window. Vanilla may choose any body within that matching system as its grav-jump
+  entry point. The plugin then enters `PendingJump` and invokes public
   `JumpDataPanel.SendExecuteEvent()`, which rechecks the same Execute visibility
   before dispatching `StarMapMenu_ExecuteRoute`.
-  If the map closes early, movie/session identity changes, the route mismatches,
-  or it never becomes executable, only the Cruise mark is cleared; vanilla's
-  route and warning remain untouched.
+  Physical-hold and application-focus cleanup does not demote the accepted
+  `MapSelection` state. While either that state or the guarded remote-route
+  request remains active, ordinary current-system reconciliation cannot clear
+  the destination before Execute. The route driver is paused while Starfield is
+  not foreground; focus return restarts the current phase timeout and clears any
+  partial Execute-readiness dwell. The exact STDT root proven at acceptance is
+  carried through stock Back and pinned against transient star-feed rows until
+  system-scope Set Course. The one-shot Quick Select change establishes the
+  native galaxy selection without mouse hover. Repeat presses of the
+  Cruise-bound control are
+  consumed while this handoff is active. The later route-system text gate remains
+  authoritative before Execute. If the map closes early, movie/session
+  identity changes, the route mismatches, or it never becomes executable, only
+  the Cruise mark is cleared; vanilla's route and warning remain untouched.
   After the resolver reports the target system, the map is closed, the world has
   settled, and exactly one matching cockpit target row exists, it requests
   Cruise through the existing stock HUD press and course path. If Cruise is
@@ -170,15 +193,20 @@ replacement.
   button is never changed. Each variant is created at most once per movie and
   hidden when inactive; no SWF bytecode is replaced.
 - For a remote planet/moon, the tap-only control is additionally gated by an
-  exact parsed GNAM system root and the live public
+  exact live STDT star whose parsed DNAM system ID matches the selected PNDT's
+  GNAM system ID, plus the live public
   `SetRouteDestinationButtonData` enabled/visible state. Acceptance captures
-  `SystemNameHeader_mc`, emits stock Back, then waits for galaxy view's
-  `SystemInfo_mc.SystemNameHeader_mc` to name that same system. Only then does it
-  emit the same custom event as stock Set Course. The post-advance driver watches
+  `SystemNameHeader_mc` for later route-display comparison, emits stock Back,
+  carries the exact captured STDT/DNAM root into galaxy view, and emits the
+  stock Quick Select change payload with that root. Once native publishes an
+  enabled/visible Set Course state, it emits the same custom event as stock Set
+  Course. The post-advance driver watches
   `JumpData_mc`: `ExecuteButton_mc.ExecuteButtonHint_mc.Visible` is the shipped
   `bCanExecuteRoute` result, and the displayed route-end system must exactly
-  match the captured name and the body endpoint must be empty or the system name
-  before `JumpDataPanel.SendExecuteEvent()` is invoked.
+  match the captured name continuously for 500 ms before
+  `JumpDataPanel.SendExecuteEvent()` is invoked. Any non-ready observation resets
+  that dwell; route construction still has a five-second timeout. A displayed
+  body is accepted as vanilla's entry point within that system.
   The plugin does not dispatch a native far-travel event, construct a route,
   change an exploration flag, or hide the map itself on this path. Vanilla owns
   SetRouteDestination, route construction, ExecuteRoute, and normal menu/travel
@@ -192,8 +220,11 @@ replacement.
   does not synthesize a Cruise exit. While the Starmap is open, fallback polls
   reach Scaleform only after the HUD movie has settled.
 - The system/star tree provider never participates in the marker/dossier body
-  join. For a remote action only, its parsed root identity separately proves
-  which system node vanilla must retain when returning to galaxy view.
+  join. For a remote action only, its live STDT star identity separately proves
+  which system node vanilla must retain when returning to galaxy view. Only live
+  STDT rows update the cached root; zero/transient rows cannot erase it. The root
+  is cleared on entry to galaxy view but retained across galaxy-to-system entry
+  because the star feed may publish before the view feed.
 - Feed callbacks copy passed GFx payloads into plain C++ snapshots or queue a
   value action, then return without fetching another root or invoking AS3.
   HUD object construction, forwarded Cruise edges, fixed target status, marker

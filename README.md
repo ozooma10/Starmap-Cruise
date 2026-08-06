@@ -14,8 +14,9 @@ the selection as the one `StarMapMenuMarkersData` row whose
 `bIsInHighlightRadius` value is true. Planet and moon rows are joined exactly to
 the dossier PNDT identity. A station marker may identify either its live
 reference or its map cell; the active-plugin index resolves the latter to one
-persistent reference whose ship base carries `IsStarstation`. Other non-planet
-markers must match exactly one row in the current cockpit target feed. Zero,
+indexed, currently live reference whose ship base carries `IsStarstation`.
+Other non-planet markers must match exactly one row in the current cockpit target
+feed. Zero,
 multiple, mismatched, or invalid-view candidates remain entirely vanilla-owned.
 
 This is a standalone native SFSE plugin. It has no ESP, scripts, save data,
@@ -28,26 +29,31 @@ inter-plugin API.
 - Matching SFSE
 - Address Library v21 (`versionlib-1-16-244-0.bin`)
 - Highlighted planets and moons in the current or another system
-- Highlighted stations and addressable non-planet markers in the currently
-  loaded system
+- Highlighted stations, resolvable Ship POIs, and addressable non-planet markers
+  in the currently loaded system
 - Keyboard/mouse and controller for the separate Starmap action, using the
   player's live `Cruise`/`SHMonocle` bindings and native button glyphs
 
 Native grav-jump route construction or modification remains outside this
 plugin's scope. For a remote planet or moon, one tap arms the process-local body
-mark and emits vanilla Back from system view. After vanilla focuses the same
-system in galaxy view, the plugin verifies that focus and dispatches the exact
+mark and emits vanilla Back from system view. Once galaxy view is active, the
+plugin emits vanilla Quick Select's system-selection event with the captured
+STDT root, verifies the resulting **Set Course** state, and dispatches the exact
 custom event emitted by vanilla **Set Course** there. The plugin then waits for
-the visible vanilla travel panel, verifies that it is an executable system-only
-route to the captured system, and invokes the same public method as the vanilla
-Execute button. Vanilla still owns fuel, range,
+the visible vanilla travel panel, verifies that it remains an executable route
+to the captured system for 500 ms, and invokes the same public method as the
+vanilla Execute button. Vanilla still owns fuel, range,
 exploration, travel, and every route leg. The mark survives intermediate jumps and is
 reconciled only after arrival in the target system. A remote station or other
 non-planet marker remains unavailable. A station marker must be a live station reference
-or a cell that resolves to exactly one persistent live station reference. On map
-close, that reference becomes the native ship target before Cruise is requested.
-Another non-planet marker must already expose exactly one matching current HUD
-target row. Targets the HUD/Cruise system itself cannot lock remain marked rather
+or a cell that resolves to exactly one indexed, currently live station reference.
+On map close, that reference becomes the native ship target before Cruise is
+requested. A Ship POI CELL must resolve through its loaded-reference list to
+exactly one live, in-space, non-station ship, excluding the player ship; that
+reference receives the same guarded native assignment. A remote non-planet
+marker exposes no Cruise action until its system is the loaded cockpit system.
+Another non-planet marker must already expose exactly one
+matching current HUD target row. Targets the HUD/Cruise system itself cannot lock remain marked rather
 than being reported as confirmed.
 
 ## Interaction
@@ -58,14 +64,15 @@ than being reported as confirmed.
 - A remote planet or moon uses a tap-only `JUMP THEN CRUISE` action. It is
   enabled only when the system/star root is exact and vanilla **Set Course** is
   available. The tap records the body as the Cruise target, dispatches stock
-  `StarMapMenu_OnCancel`, and waits for galaxy view to focus the captured
-  system. It then dispatches stock `SetRouteDestination` at system scope. After
-  vanilla builds the route, the plugin requires matching route-end text, no
-  different body endpoint, plus the public
-  `bCanExecuteRoute` gate, then calls `JumpDataPanel.SendExecuteEvent()`. That
-  method rechecks the Execute gate and dispatches stock
-  `StarMapMenu_ExecuteRoute`. A missing, mismatched, or non-executable route
-  times out fail-closed: the Cruise mark is cleared, the map stays open, and
+  `StarMapMenu_OnCancel`, and waits for galaxy view. It then primes vanilla's
+  system selection with the captured STDT root and dispatches stock
+  `SetRouteDestination` at system scope. After
+  vanilla builds the route, the plugin requires matching route-end system text
+  plus the public `bCanExecuteRoute` gate continuously for 500 ms, then calls
+  `JumpDataPanel.SendExecuteEvent()`. That method rechecks the Execute gate and
+  dispatches stock `StarMapMenu_ExecuteRoute`. Every transient mismatch gets the
+  full five-second route-build window; a route that is still missing, mismatched,
+  or non-executable then fails closed: the Cruise mark is cleared, the map stays open, and
   vanilla's route/warning remains untouched. On settled arrival in the target
   system, one exact cockpit target-feed row is required before the plugin
   requests stock Cruise and queues the marked course.
@@ -109,23 +116,30 @@ A Starmap press may be consumed only when all of these gates pass:
    live PNDT with a parsed GNAM tuple. Remote targets additionally require the
    byte/source/vtable-guarded `TESLoadGameEvent` sink so a save load cannot retain
    a stale process-local mark. At acceptance they require the tree focus to be
-   the parsed GNAM root of the destination system, vanilla **Set Course** to be
-   available, and the browsed-system header to resolve. After stock Back they
-   require galaxy focus to retain that system name. After system-scope route
-   creation they require the public Execute hint to be visible
+   a live STDT star whose parsed DNAM system ID matches the destination's
+   parsed GNAM system ID, vanilla **Set Course** to be
+   available, and the browsed-system header to resolve. After stock Back the
+   captured STDT/DNAM root is carried into galaxy view and sent through
+   vanilla Quick Select's `bodyID` selection event without requiring mouse
+   movement. After
+   system-scope route
+   creation they require the public Execute hint to remain visible
    (`bCanExecuteRoute=true`) and its destination-system text to match the system
-   name captured with the mark, and reject a route that still names a different
-   body endpoint.
+   name captured with the mark continuously for 500 ms. Vanilla may choose a body within that system as
+   its grav-jump entry point; Cruise still owns the marked final body.
 5. A station marker must be a live reference whose base carries `IsStarstation`,
-   or a cell that resolves to exactly one persistent reference with such a base.
-   Other non-planet markers must match exactly one current cockpit HUD row by ID.
+   or a cell that resolves to exactly one indexed, currently live reference with
+   such a base. A Ship POI must be a CELL containing exactly one live, in-space,
+   non-station GBFM reference after excluding the player ship. Other non-planet
+   markers must match exactly one current cockpit HUD row by ID.
    The map id/type and resolved target ID are retained separately.
 
 The highlight-radius discriminator was proven with planet, moon, revisit,
 rapid-switch, invalid-view, station, empty-space, and movie-reopen controls.
 Planet/moon course dispatch and readback are runtime-proven. Static 1.16.244
-analysis verifies the station resolution and native ship-target assignment path.
-Station and generic non-planet gameplay confirmation remains pending.
+analysis verifies the station resolution and native target-assignment path.
+Station gameplay is runtime-proven; Ship POI and generic non-planet confirmation
+remain pending.
 
 No raw `TESForm*` survives a menu transition. Destination state is a value
 containing only kind, map id/type, resolved target id, target-system identity,

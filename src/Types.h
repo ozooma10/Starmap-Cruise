@@ -11,6 +11,7 @@ namespace CFS
         kPlanet = 2,
         kMoon = 3,
         kStation = 4,
+        kShip = 5,
     };
 
     struct GalaxyIdentity
