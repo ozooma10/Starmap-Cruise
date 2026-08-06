@@ -91,12 +91,16 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   settled, and exactly one matching cockpit target row exists, it requests
   Cruise through the existing stock HUD press and course path. If Cruise is
   already active, it queues the course directly.
-- A quick release leaves the destination
-  `Marked`. Completing the Starmap button's fill latches a stock HUD Cruise down
-  edge after map close, independent of physical release. The HUD callback sends
-  the up edge when Cruise becomes active, with a four-second safety release if
-  activation never arrives. A later vanilla inactive-to-active Cruise transition moves
-  the destination to `AwaitingCruise` and queues its target id.
+- A quick release leaves the destination `Marked`. Accepted current-system taps
+  and holds mirror shipped `StarMapButtonHintBar.onCloseSubMenuToGame`: they
+  dispatch `DataMenu_SetMenuForQuickEntry` followed by
+  `GlobalFunc_CloseAllMenus` from the verified post-advance window. This closes
+  both Starmap and any parent Data Menu instead of revealing the character menu.
+  Completing the Starmap button's fill also latches a stock HUD Cruise down edge
+  after menu close, independent of physical release. The HUD callback sends the
+  up edge when Cruise becomes active, with a four-second safety release if
+  activation never arrives. A later vanilla inactive-to-active Cruise transition
+  moves the destination to `AwaitingCruise` and queues its target id.
 - If Cruise was already active when the map opened, the stacked control is
   replaced by a stock tap-only `BasicButton`. Its accepted tap queues the course
   request immediately; no hold action is exposed or accepted.
@@ -144,20 +148,25 @@ replacement.
   Starmap subscriptions also require the visible map-open event;
   `UI::IsMenuOpen` alone can expose its incomplete background movie after load.
 - During active-flight system view, the native callback shows a separate stock
-  control using the primary live `ShipHUD/Cruise` keyboard binding. A
+  control using the live `ShipHUD/Cruise` keyboard/mouse binding or the stock
+  `SHMonocle` controller binding. A
   `ReleaseHoldComboButton` owns tap/hold before Cruise starts; a `BasicButton`
   owns only tap when the map session began during Cruise or the stock cockpit
-  hold is unavailable. Both variants expose the engine-owned `Cruise` event so
-  the button keybox resolves the player's live binding; only the current one is
-  enabled and visible. Native callback handling also normalizes any stale hold
-  signal to tap while the tap-only variant owns the session.
+  hold is unavailable. Each button has separate MKB `Cruise` and gamepad
+  `SHMonocle` data objects, mirroring stock `ShipReticle`; the active input
+  device's object is installed so the keybox resolves the player's live glyph.
+  Only the current tap/hold variant is enabled and visible. Native callback
+  handling also normalizes any stale hold signal to tap while the tap-only
+  variant owns the session.
   The control is interactive only while the selection gate passes;
   otherwise its disabled label exposes the current rejection reason. The binding
-  is read from the version-gated engine `ControlMap` once at startup. This keeps
-  the validated mapping-array scan off the map-open frame; an in-session control
-  remap takes effect after restarting Starfield. The input hook temporarily
-  presents that physical key as `Cruise`, then restores the engine event string
-  after the UI call. The vanilla `SetRouteDestination`
+  is read from all three device arrays in the version-gated engine `ControlMap`
+  once at startup. This keeps the validated mapping-array scan off the map-open
+  frame; an in-session control remap takes effect after restarting Starfield.
+  The input hook tracks first-down device changes and temporarily presents the
+  matching physical control as the event currently installed on the button,
+  then restores the engine event string after the UI call. The vanilla
+  `SetRouteDestination`
   button is never changed. Each variant is created at most once per movie and
   hidden when inactive; no SWF bytecode is replaced.
 - For a remote planet/moon, the tap-only control is additionally gated by an

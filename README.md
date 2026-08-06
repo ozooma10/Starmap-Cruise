@@ -30,7 +30,8 @@ inter-plugin API.
 - Highlighted planets and moons in the current or another system
 - Highlighted stations and addressable non-planet markers in the currently
   loaded system
-- Keyboard/mouse for the separate Starmap action; controller UI remains pending
+- Keyboard/mouse and controller for the separate Starmap action, using the
+  player's live `Cruise`/`SHMonocle` bindings and native button glyphs
 
 Native grav-jump route construction or modification remains outside this
 plugin's scope. For a remote planet or moon, one tap arms the process-local body
@@ -51,8 +52,9 @@ than being reported as confirmed.
 
 ## Interaction
 
-- Tap/release marks the target and returns to the cockpit. Starting Cruise
-  normally afterward locks that marked target.
+- Tap/release marks the target, closes the complete Starmap/Data Menu stack,
+  and returns to the cockpit. Starting Cruise normally afterward locks that
+  marked target.
 - A remote planet or moon uses a tap-only `JUMP THEN CRUISE` action. It is
   enabled only when the system/star root is exact and vanilla **Set Course** is
   available. The tap records the body as the Cruise target, dispatches stock
@@ -68,10 +70,11 @@ than being reported as confirmed.
   system, one exact cockpit target-feed row is required before the plugin
   requests stock Cruise and queues the marked course.
 - When the cockpit's stock Cruise action is currently available, completing the
-  Starmap hold fill marks the target, closes the map, and latches a held state
-  through the stock `SpaceshipHudMenu.ProcessUserEvent` path. Vanilla owns the
-  cockpit threshold; the latch releases when Cruise becomes active or after a
-  four-second safety limit.
+  Starmap hold fill marks the target, closes the complete Starmap/Data Menu
+  stack, and latches a held state through the stock
+  `SpaceshipHudMenu.ProcessUserEvent` path. Vanilla owns the cockpit threshold;
+  the latch releases when Cruise becomes active or after a four-second safety
+  limit.
 - If Cruise was already active when the map opened, the Starmap instead shows one
   `SET CRUISE TARGET` action. A tap closes the map and queues the selected target
   as the new course; there is no hold action or `HOLD TO CRUISE` affordance.

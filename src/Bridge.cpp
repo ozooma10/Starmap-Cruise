@@ -47,6 +47,7 @@ namespace CFS::Bridge
         constexpr const char* kRemoteCruiseMapActionLabel = "JUMP THEN CRUISE";
         constexpr const char* kCruiseMapActionHoldLabel = "HOLD TO CRUISE";
         constexpr const char* kCruiseMapUserEvent = "Cruise";
+        constexpr const char* kCruiseMapGamepadUserEvent = "SHMonocle";
         constexpr auto kHudMovieSettleTime = std::chrono::milliseconds(1500);
         constexpr auto kMapRoutePollTime = std::chrono::milliseconds(250);
         constexpr auto kRemoteRouteIdentitySettleTime = std::chrono::milliseconds(750);
@@ -121,7 +122,7 @@ namespace CFS::Bridge
         {
             kHidden,
             kTargetDataLoading,
-            kCruiseKeyUnbound,
+            kCruiseControlUnbound,
             kCurrentSystemUnavailable,
             kSelectBody,
             kAmbiguousTarget,
@@ -181,12 +182,16 @@ namespace CFS::Bridge
             bool tapReady{ false };
             bool installed{ false };
             V comboButton;
-            V comboButtonData;
+            V comboMkbButtonData;
+            V comboGamepadButtonData;
             V tapButton;
-            V tapButtonData;
+            V tapMkbButtonData;
+            V tapGamepadButtonData;
         } g_mapActionHint;
         std::atomic<bool> g_mapActionInteractive{ false };
         std::atomic<bool> g_mapActionTapOnly{ false };
+        std::atomic<bool> g_lastInputWasGamepad{ false };
+        std::atomic<bool> g_mapHintUsesGamepad{ false };
 
         std::mutex g_destinationMutex;
         std::optional<BodyDestination> g_destination;
@@ -296,6 +301,8 @@ namespace CFS::Bridge
         std::atomic<bool> g_inputInstalled{ false };
         std::atomic<std::int32_t> g_cruiseMapKey{ -1 };
         std::atomic<std::int32_t> g_cruiseMapModifier{ -1 };
+        std::atomic<std::int32_t> g_cruiseMapMouseButton{ -1 };
+        std::atomic<std::int32_t> g_cruiseMapGamepadButton{ -1 };
 
         const char* DestinationKindName(BodyKind a_kind)
         {
@@ -477,17 +484,25 @@ namespace CFS::Bridge
             return {};
         }
 
-        bool FindCruiseKeyboardBinding(std::uintptr_t a_controlMap,
-            std::uint8_t a_context, std::int32_t& a_key, std::int32_t& a_modifier)
+        bool FindCruiseBinding(std::uintptr_t a_controlMap, std::uint8_t a_context,
+            std::uint32_t a_deviceIndex, const char* a_userEvent,
+            std::int32_t& a_key, std::int32_t& a_modifier)
         {
+            if (a_deviceIndex > 2)
+                return false;
+
             std::uintptr_t context = 0;
             if (!ReadMemory(a_controlMap + kControlMapContextSlotsOffset +
                     static_cast<std::size_t>(a_context) * sizeof(std::uintptr_t), context) ||
                 !context)
                 return false;
 
-            ControlMapArray mappings{};  // keyboard is device array zero
-            if (!ReadMemory(context, mappings) || mappings.size > mappings.capacity ||
+            // A context begins with keyboard, mouse, and gamepad array headers.
+            ControlMapArray mappings{};
+            if (!ReadMemory(context +
+                    static_cast<std::size_t>(a_deviceIndex) * sizeof(ControlMapArray),
+                    mappings) ||
+                mappings.size > mappings.capacity ||
                 mappings.size > kMaxControlMappings ||
                 (mappings.size && !IsReadableRange(mappings.data,
                     static_cast<std::size_t>(mappings.size) * kControlMapMappingStride)))
@@ -501,9 +516,9 @@ namespace CFS::Bridge
                             static_cast<std::size_t>(i) * kControlMapMappingStride),
                         sizeof(mapping));
                     if (mapping.bindingSlot != desiredSlot ||
-                        ReadControlMapEvent(mapping.eventEntry) != kCruiseMapUserEvent ||
+                        ReadControlMapEvent(mapping.eventEntry) != a_userEvent ||
                         mapping.keyCode == 0xFF || mapping.keyCode == 0x7FFFFFFF ||
-                        mapping.keyCode > 0xFE)
+                        (a_deviceIndex == 0 && mapping.keyCode > 0xFE))
                         continue;
 
                     a_key = static_cast<std::int32_t>(mapping.keyCode);
@@ -511,7 +526,7 @@ namespace CFS::Bridge
                                          mapping.modifierCode == 0x7FFFFFFF ?
                                      -1 :
                                      static_cast<std::int32_t>(mapping.modifierCode);
-                    return a_modifier <= 0xFE;
+                    return a_deviceIndex != 0 || a_modifier <= 0xFE;
                 }
             }
             return false;
@@ -528,24 +543,63 @@ namespace CFS::Bridge
                 vtable != RE::VTABLE::ControlMap[0].address()) {
                 g_cruiseMapKey.store(-1, std::memory_order_release);
                 g_cruiseMapModifier.store(-1, std::memory_order_release);
-                REX::WARN("[input] live Cruise keyboard binding unavailable: ControlMap validation failed");
+                g_cruiseMapMouseButton.store(-1, std::memory_order_release);
+                g_cruiseMapGamepadButton.store(-1, std::memory_order_release);
+                REX::WARN("[input] live Cruise bindings unavailable: ControlMap validation failed");
                 return;
             }
 
             std::int32_t key = -1;
             std::int32_t modifier = -1;
+            std::int32_t mouseButton = -1;
+            std::int32_t mouseModifier = -1;
+            std::int32_t gamepadButton = -1;
+            std::int32_t gamepadModifier = -1;
             for (const auto context : kCruiseControlContexts)
-                if (FindCruiseKeyboardBinding(controlMap, context, key, modifier))
+                if (FindCruiseBinding(controlMap, context, 0, kCruiseMapUserEvent,
+                        key, modifier))
                     break;
+            for (const auto context : kCruiseControlContexts)
+                if (FindCruiseBinding(controlMap, context, 1, kCruiseMapUserEvent,
+                        mouseButton, mouseModifier))
+                    break;
+            for (const auto context : kCruiseControlContexts)
+                if (FindCruiseBinding(controlMap, context, 2,
+                        kCruiseMapGamepadUserEvent, gamepadButton, gamepadModifier))
+                    break;
+
+            // The UI hook can identify one physical ButtonEvent at a time. Do
+            // not claim a mouse/gamepad chord unless its second edge can also
+            // be proven; the shipped SHMonocle binding is a single button.
+            if (mouseButton >= 0 && mouseModifier >= 0) {
+                REX::WARN("[input] mouse Cruise chord is unsupported; mouse routing disabled");
+                mouseButton = -1;
+            }
+            if (gamepadButton >= 0 && gamepadModifier >= 0) {
+                REX::WARN("[input] controller '{}' chord is unsupported; controller routing disabled",
+                    kCruiseMapGamepadUserEvent);
+                gamepadButton = -1;
+            }
 
             const auto oldKey = g_cruiseMapKey.exchange(key, std::memory_order_acq_rel);
             const auto oldModifier = g_cruiseMapModifier.exchange(modifier, std::memory_order_acq_rel);
-            if (key < 0) {
-                REX::WARN("[input] Cruise has no keyboard binding in ShipHUD; Starmap Cruise action disabled");
-            } else if (oldKey != key || oldModifier != modifier) {
+            const auto oldMouse = g_cruiseMapMouseButton.exchange(mouseButton,
+                std::memory_order_acq_rel);
+            const auto oldGamepad = g_cruiseMapGamepadButton.exchange(gamepadButton,
+                std::memory_order_acq_rel);
+            if (key >= 0 && (oldKey != key || oldModifier != modifier)) {
                 REX::INFO("[input] Starmap Cruise action follows live Cruise binding: VK=0x{:02X} modifier={}",
                     key, modifier < 0 ? "none" : std::format("0x{:02X}", modifier));
             }
+            if (mouseButton >= 0 && oldMouse != mouseButton)
+                REX::INFO("[input] Starmap Cruise action follows live mouse Cruise binding: id={}",
+                    mouseButton);
+            if (gamepadButton >= 0 && oldGamepad != gamepadButton)
+                REX::INFO("[input] Starmap Cruise action follows live controller '{}' binding: id={} modifier={}",
+                    kCruiseMapGamepadUserEvent, gamepadButton,
+                    gamepadModifier < 0 ? "none" : std::format("{}", gamepadModifier));
+            if (key < 0 && mouseButton < 0 && gamepadButton < 0)
+                REX::WARN("[input] Cruise has no keyboard, mouse, or controller binding; Starmap Cruise action disabled");
         }
 
         bool Payload(const RE::Scaleform::GFx::FunctionHandler::Params& a_params, V& a_data)
@@ -778,7 +832,7 @@ namespace CFS::Bridge
             // ShipReticle installs a different quick/hold combo for controller
             // mode. Both combos reach the same stock Cruise hold callback.
             g_hudCruiseUserEvent = a_device == RE::InputEvent::DeviceType::kGamepad ?
-                                       "SHMonocle" :
+                                       kCruiseMapGamepadUserEvent :
                                        "Cruise";
             g_hudCruiseInputPhase = HudCruiseInputPhase::kPressPending;
             // The Starmap's completed fill is the user's confirmation. Keep
@@ -951,9 +1005,16 @@ namespace CFS::Bridge
                     .detail = "not an active-flight system-view map session",
                 };
             }
-            if (g_cruiseMapKey.load(std::memory_order_acquire) < 0)
-                return unavailable(EligibilityCode::kCruiseKeyUnbound,
-                    "CRUISE KEY IS NOT BOUND", "Cruise has no keyboard binding");
+            const bool usingGamepad = g_lastInputWasGamepad.load(std::memory_order_acquire);
+            const bool cruiseControlBound = usingGamepad ?
+                g_cruiseMapGamepadButton.load(std::memory_order_acquire) >= 0 :
+                g_cruiseMapKey.load(std::memory_order_acquire) >= 0 ||
+                    g_cruiseMapMouseButton.load(std::memory_order_acquire) >= 0;
+            if (!cruiseControlBound)
+                return unavailable(EligibilityCode::kCruiseControlUnbound,
+                    "CRUISE CONTROL IS NOT BOUND",
+                    usingGamepad ? "SHMonocle has no controller binding" :
+                                   "Cruise has no keyboard or mouse binding");
             if (!a_snapshot.haveCapturedSystem)
                 return unavailable(EligibilityCode::kCurrentSystemUnavailable,
                     "CURRENT SYSTEM UNAVAILABLE",
@@ -1298,6 +1359,20 @@ namespace CFS::Bridge
             return DispatchHudEvent(a_root, "StarMapMenu_OnCancel", nullptr);
         }
 
+        bool DispatchVanillaCloseAllMenus(RE::Scaleform::GFx::ASMovieRootBase* a_root)
+        {
+            // StarMapButtonHintBar.onCloseSubMenuToGame emits these events in
+            // this order. The first keeps DataMenu quick-entry state coherent;
+            // the second closes the entire menu stack and returns to gameplay.
+            const bool quickEntrySet = DispatchHudEvent(
+                a_root, "DataMenu_SetMenuForQuickEntry", nullptr);
+            const bool closeAll = DispatchHudEvent(
+                a_root, "GlobalFunc_CloseAllMenus", nullptr);
+            if (!quickEntrySet)
+                REX::WARN("[map] stock DataMenu quick-entry dispatch failed before close-all");
+            return closeAll;
+        }
+
         bool InvokeHudCruiseUserEvent(RE::Scaleform::GFx::ASMovieRootBase* a_root,
             const char* a_rootPath, const char* a_userEvent, bool a_down)
         {
@@ -1522,8 +1597,16 @@ namespace CFS::Bridge
                 return;
             }
 
-            g_closeRequested.store(true, std::memory_order_release);
-            REX::INFO("[map] accepted {} map={:08X}/{} target={:08X}; requested normal menu hide",
+            V menuRoot;
+            if (!GetLiveMapMenuRoot(snapshot, mapRoot, menuRoot) ||
+                !DispatchVanillaCloseAllMenus(mapRoot)) {
+                // Preserve the previous safe behavior if the stock AS3 event
+                // path is unexpectedly unavailable. This may reveal a parent
+                // DataMenu, but never leaves the accepted Starmap stuck open.
+                g_closeRequested.store(true, std::memory_order_release);
+                REX::WARN("[map] stock close-all dispatch failed; queued Starmap hide fallback");
+            }
+            REX::INFO("[map] accepted {} map={:08X}/{} target={:08X}; requested stock return-to-game close",
                 a_action == MapAction::kHold ? "hold" : "tap", selected.mapFormID,
                 selected.mapType, selected.formID);
         }
@@ -1712,6 +1795,25 @@ namespace CFS::Bridge
         MapActionHandler g_mapTapActionHandler{ MapAction::kTap };
         MapActionHandler g_mapHoldActionHandler{ MapAction::kHold };
 
+        void TrackActiveInputDevice(const RE::ButtonEvent* a_button)
+        {
+            if (!a_button || a_button->value == 0.0f || a_button->heldDownSecs != 0.0f)
+                return;
+            if (a_button->deviceType != RE::InputEvent::DeviceType::kKeyboard &&
+                a_button->deviceType != RE::InputEvent::DeviceType::kMouse &&
+                a_button->deviceType != RE::InputEvent::DeviceType::kGamepad)
+                return;
+
+            const bool gamepad = a_button->deviceType == RE::InputEvent::DeviceType::kGamepad;
+            if (g_lastInputWasGamepad.exchange(gamepad, std::memory_order_acq_rel) != gamepad &&
+                g_mapOpen.load(std::memory_order_acquire)) {
+                g_mapUiDirty.store(true, std::memory_order_release);
+                if (Settings::Verbose())
+                    REX::INFO("[input] Starmap action hint input mode -> {}",
+                        gamepad ? "controller" : "keyboard/mouse");
+            }
+        }
+
         bool ObserveButton(const RE::ButtonEvent* a_button)
         {
             const bool down = a_button->value != 0.0f;
@@ -1720,7 +1822,7 @@ namespace CFS::Bridge
             const std::string_view name = raw ? raw : "";
 
             if (g_mapOpen.load(std::memory_order_acquire) && first &&
-                (name == kCruiseMapUserEvent || name == "SHMonocle")) {
+                (name == kCruiseMapUserEvent || name == kCruiseMapGamepadUserEvent)) {
                 if (a_button->disabled)
                     return false;
                 // The runtime-installed ReleaseHoldComboButton must receive the
@@ -1772,7 +1874,8 @@ namespace CFS::Bridge
                 return true;
             }
 
-            if (name == "Cruise" || name == "LockCourse") {
+            if (name == kCruiseMapUserEvent || name == kCruiseMapGamepadUserEvent ||
+                name == "LockCourse") {
                 if (!g_hold.sawCockpitContext) {
                     g_hold.sawCockpitContext = true;
                     REX::INFO("[input] natural context handoff: device={} id={} now reports '{}' "
@@ -1794,14 +1897,29 @@ namespace CFS::Bridge
             return false;
         }
 
-        bool RouteCruiseMapKey(RE::ButtonEvent* a_button)
+        bool RouteCruiseMapControl(RE::ButtonEvent* a_button)
         {
-            const auto key = g_cruiseMapKey.load(std::memory_order_acquire);
-            const auto modifier = g_cruiseMapModifier.load(std::memory_order_acquire);
             if (!a_button || !g_mapOpen.load(std::memory_order_acquire) ||
-                !g_mapActionInteractive.load(std::memory_order_acquire) || a_button->disabled ||
-                a_button->deviceType != RE::InputEvent::DeviceType::kKeyboard ||
-                key < 0 || a_button->idCode != key)
+                !g_mapActionInteractive.load(std::memory_order_acquire) || a_button->disabled)
+                return false;
+
+            std::int32_t binding = -1;
+            std::int32_t modifier = -1;
+            switch (a_button->deviceType) {
+            case RE::InputEvent::DeviceType::kKeyboard:
+                binding = g_cruiseMapKey.load(std::memory_order_acquire);
+                modifier = g_cruiseMapModifier.load(std::memory_order_acquire);
+                break;
+            case RE::InputEvent::DeviceType::kMouse:
+                binding = g_cruiseMapMouseButton.load(std::memory_order_acquire);
+                break;
+            case RE::InputEvent::DeviceType::kGamepad:
+                binding = g_cruiseMapGamepadButton.load(std::memory_order_acquire);
+                break;
+            default:
+                return false;
+            }
+            if (binding < 0 || a_button->idCode != binding)
                 return false;
 
             // The engine's StarMap context normally names this physical key as
@@ -1811,11 +1929,19 @@ namespace CFS::Bridge
             // variants expose the real Cruise event so Starfield can resolve
             // the player's current binding and glyph; the inactive control is
             // disabled and hidden.
-            if (a_button->value != 0.0f && modifier >= 0 &&
+            if (a_button->deviceType == RE::InputEvent::DeviceType::kKeyboard &&
+                a_button->value != 0.0f && modifier >= 0 &&
                 (::GetAsyncKeyState(modifier) & 0x8000) == 0)
                 return false;
 
-            a_button->strUserEvent = RE::BSFixedString{ kCruiseMapUserEvent };
+            // Route to the data object currently installed on the Scaleform
+            // button. If this edge also changed device mode, the next safe UI
+            // pass swaps the data object; this first edge still reaches the old
+            // object instead of being lost.
+            a_button->strUserEvent = RE::BSFixedString{
+                g_mapHintUsesGamepad.load(std::memory_order_acquire) ?
+                    kCruiseMapGamepadUserEvent : kCruiseMapUserEvent
+            };
             return true;
         }
 
@@ -1844,9 +1970,10 @@ namespace CFS::Bridge
                 if (event->eventType == RE::InputEvent::EventType::kButton) {
                     auto* button = const_cast<RE::ButtonEvent*>(
                         static_cast<const RE::ButtonEvent*>(event));
+                    TrackActiveInputDevice(button);
                     if (routedCount < routedEvents.size()) {
                         const auto originalName = button->strUserEvent;
-                        if (RouteCruiseMapKey(button))
+                        if (RouteCruiseMapControl(button))
                             routedEvents[routedCount++] = { button, originalName };
                     }
                     drop = ObserveButton(button);
@@ -1903,6 +2030,7 @@ namespace CFS::Bridge
             mix(a_snapshot.session);
             mix(a_snapshot.wasCruising);
             mix(a_snapshot.cruiseEngageAvailable);
+            mix(g_lastInputWasGamepad.load(std::memory_order_acquire));
             mix(static_cast<std::uint64_t>(a_eligibility.code));
             mix(a_snapshot.markerBodyID);
             mix(a_snapshot.markerBodyType);
@@ -1918,60 +2046,67 @@ namespace CFS::Bridge
         }
 
         bool BuildCruiseComboButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            V& a_buttonBar, V& a_vanillaData, V& a_button, V& a_buttonData)
+            V& a_buttonBar, V& a_vanillaData, V& a_button,
+            V& a_mkbButtonData, V& a_gamepadButtonData)
         {
-            V pressEventName;
-            a_root->CreateString(&pressEventName, kCruiseMapUserEvent);
-
             V tapCallback;
             a_root->CreateFunction(&tapCallback, &g_mapTapActionHandler);
-            V pressArgs[2]{ pressEventName, tapCallback };
-            V pressEvent;
-            a_root->CreateObject(&pressEvent,
-                "Shared.Components.ButtonControls.ButtonData.UserEventData", pressArgs, 2);
-            if (!(pressEvent.IsObject() || pressEvent.IsDisplayObject())) {
-                REX::WARN("[map] stacked action hint unavailable: tap UserEventData construction failed");
-                return false;
-            }
-
-            V emptyName;
-            a_root->CreateString(&emptyName, "");
             V holdCallback;
             a_root->CreateFunction(&holdCallback, &g_mapHoldActionHandler);
-            V holdArgs[2]{ emptyName, holdCallback };
-            V holdEvent;
-            a_root->CreateObject(&holdEvent,
-                "Shared.Components.ButtonControls.ButtonData.UserEventData", holdArgs, 2);
-            if (!(holdEvent.IsObject() || holdEvent.IsDisplayObject())) {
-                REX::WARN("[map] stacked action hint unavailable: UserEventData construction failed");
-                return false;
-            }
+            const auto buildData = [&](const char* a_userEvent, V& a_buttonData) {
+                V pressEventName;
+                a_root->CreateString(&pressEventName, a_userEvent);
+                V pressArgs[2]{ pressEventName, tapCallback };
+                V pressEvent;
+                a_root->CreateObject(&pressEvent,
+                    "Shared.Components.ButtonControls.ButtonData.UserEventData", pressArgs, 2);
 
-            V events;
-            a_root->CreateArray(&events);
-            if (!events.IsArray() || !events.PushBack(pressEvent) || !events.PushBack(holdEvent)) {
-                REX::WARN("[map] stacked action hint unavailable: combo event array construction failed");
-                return false;
-            }
+                V emptyName;
+                a_root->CreateString(&emptyName, "");
+                V holdArgs[2]{ emptyName, holdCallback };
+                V holdEvent;
+                a_root->CreateObject(&holdEvent,
+                    "Shared.Components.ButtonControls.ButtonData.UserEventData", holdArgs, 2);
+                if (!(pressEvent.IsObject() || pressEvent.IsDisplayObject()) ||
+                    !(holdEvent.IsObject() || holdEvent.IsDisplayObject())) {
+                    REX::WARN("[map] stacked '{}' action hint unavailable: UserEventData construction failed",
+                        a_userEvent);
+                    return false;
+                }
 
-            V pressLabel;
-            V holdLabel;
-            a_root->CreateString(&pressLabel, kCruiseMapActionLabel);
-            a_root->CreateString(&holdLabel, kCruiseMapActionHoldLabel);
-            V dataArgs[3]{ pressLabel, holdLabel, events };
-            a_root->CreateObject(&a_buttonData,
-                "Shared.Components.ButtonControls.ButtonData.ReleaseHoldComboButtonData",
-                dataArgs, 3);
-            if (!(a_buttonData.IsObject() || a_buttonData.IsDisplayObject())) {
-                REX::WARN("[map] stacked action hint unavailable: ReleaseHoldComboButtonData construction failed");
-                return false;
-            }
+                V events;
+                a_root->CreateArray(&events);
+                if (!events.IsArray() || !events.PushBack(pressEvent) ||
+                    !events.PushBack(holdEvent)) {
+                    REX::WARN("[map] stacked '{}' action hint unavailable: combo event array construction failed",
+                        a_userEvent);
+                    return false;
+                }
 
-            for (const char* member : { "bEnabled", "bVisible" }) {
-                V value;
-                if (a_vanillaData.GetMember(member, &value))
-                    a_buttonData.SetMember(member, value);
-            }
+                V pressLabel;
+                V holdLabel;
+                a_root->CreateString(&pressLabel, kCruiseMapActionLabel);
+                a_root->CreateString(&holdLabel, kCruiseMapActionHoldLabel);
+                V dataArgs[3]{ pressLabel, holdLabel, events };
+                a_root->CreateObject(&a_buttonData,
+                    "Shared.Components.ButtonControls.ButtonData.ReleaseHoldComboButtonData",
+                    dataArgs, 3);
+                if (!(a_buttonData.IsObject() || a_buttonData.IsDisplayObject())) {
+                    REX::WARN("[map] stacked '{}' action hint unavailable: ReleaseHoldComboButtonData construction failed",
+                        a_userEvent);
+                    return false;
+                }
+
+                for (const char* member : { "bEnabled", "bVisible" }) {
+                    V value;
+                    if (a_vanillaData.GetMember(member, &value))
+                        a_buttonData.SetMember(member, value);
+                }
+                return true;
+            };
+            if (!buildData(kCruiseMapUserEvent, a_mkbButtonData) ||
+                !buildData(kCruiseMapGamepadUserEvent, a_gamepadButtonData))
+                return false;
 
             // ReleaseHoldComboButton is an imported library symbol. Let the
             // movie instantiate it through the same factory used by
@@ -1986,7 +2121,9 @@ namespace CFS::Bridge
             }
             V buttonType;
             a_root->CreateString(&buttonType, "ReleaseHoldComboButton");
-            V factoryArgs[3]{ buttonType, a_buttonData, a_buttonBar };
+            V& initialData = g_lastInputWasGamepad.load(std::memory_order_acquire) ?
+                                 a_gamepadButtonData : a_mkbButtonData;
+            V factoryArgs[3]{ buttonType, initialData, a_buttonBar };
             if (!factory.Invoke("AddToButtonBar", &a_button, factoryArgs, 3) ||
                 !(a_button.IsObject() || a_button.IsDisplayObject())) {
                 REX::WARN("[map] stacked action hint unavailable: stock ButtonFactory rejected ReleaseHoldComboButton");
@@ -1997,48 +2134,57 @@ namespace CFS::Bridge
         }
 
         bool BuildCruiseTapButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            V& a_buttonBar, V& a_vanillaData, V& a_button, V& a_buttonData)
+            V& a_buttonBar, V& a_vanillaData, V& a_button,
+            V& a_mkbButtonData, V& a_gamepadButtonData)
         {
-            V eventName;
-            // ButtonBase resolves its keybox from this UserEventData name. It
-            // must remain the engine-owned Cruise event rather than a private
-            // routing alias or the glyph will be empty.
-            a_root->CreateString(&eventName, kCruiseMapUserEvent);
-
             V tapCallback;
             a_root->CreateFunction(&tapCallback, &g_mapTapActionHandler);
-            V eventArgs[2]{ eventName, tapCallback };
-            V tapEvent;
-            a_root->CreateObject(&tapEvent,
-                "Shared.Components.ButtonControls.ButtonData.UserEventData", eventArgs, 2);
-            if (!(tapEvent.IsObject() || tapEvent.IsDisplayObject())) {
-                REX::WARN("[map] tap-only action hint unavailable: UserEventData construction failed");
-                return false;
-            }
+            // ShipReticle swaps distinct data objects on input-device changes:
+            // Cruise for MKB and SHMonocle for gamepad. The Starmap mirrors
+            // that stock pattern so ButtonKeyHelper can resolve a real glyph.
+            const auto buildData = [&](const char* a_userEvent, V& a_buttonData) {
+                V eventName;
+                a_root->CreateString(&eventName, a_userEvent);
+                V eventArgs[2]{ eventName, tapCallback };
+                V tapEvent;
+                a_root->CreateObject(&tapEvent,
+                    "Shared.Components.ButtonControls.ButtonData.UserEventData", eventArgs, 2);
+                if (!(tapEvent.IsObject() || tapEvent.IsDisplayObject())) {
+                    REX::WARN("[map] tap-only '{}' action hint unavailable: UserEventData construction failed",
+                        a_userEvent);
+                    return false;
+                }
 
-            V events;
-            a_root->CreateArray(&events);
-            if (!events.IsArray() || !events.PushBack(tapEvent)) {
-                REX::WARN("[map] tap-only action hint unavailable: event array construction failed");
-                return false;
-            }
+                V events;
+                a_root->CreateArray(&events);
+                if (!events.IsArray() || !events.PushBack(tapEvent)) {
+                    REX::WARN("[map] tap-only '{}' action hint unavailable: event array construction failed",
+                        a_userEvent);
+                    return false;
+                }
 
-            V label;
-            a_root->CreateString(&label, kCruiseMapActionLabel);
-            V dataArgs[2]{ label, events };
-            a_root->CreateObject(&a_buttonData,
-                "Shared.Components.ButtonControls.ButtonData.ButtonBaseData",
-                dataArgs, 2);
-            if (!(a_buttonData.IsObject() || a_buttonData.IsDisplayObject())) {
-                REX::WARN("[map] tap-only action hint unavailable: ButtonBaseData construction failed");
-                return false;
-            }
+                V label;
+                a_root->CreateString(&label, kCruiseMapActionLabel);
+                V dataArgs[2]{ label, events };
+                a_root->CreateObject(&a_buttonData,
+                    "Shared.Components.ButtonControls.ButtonData.ButtonBaseData",
+                    dataArgs, 2);
+                if (!(a_buttonData.IsObject() || a_buttonData.IsDisplayObject())) {
+                    REX::WARN("[map] tap-only '{}' action hint unavailable: ButtonBaseData construction failed",
+                        a_userEvent);
+                    return false;
+                }
 
-            for (const char* member : { "bEnabled", "bVisible" }) {
-                V value;
-                if (a_vanillaData.GetMember(member, &value))
-                    a_buttonData.SetMember(member, value);
-            }
+                for (const char* member : { "bEnabled", "bVisible" }) {
+                    V value;
+                    if (a_vanillaData.GetMember(member, &value))
+                        a_buttonData.SetMember(member, value);
+                }
+                return true;
+            };
+            if (!buildData(kCruiseMapUserEvent, a_mkbButtonData) ||
+                !buildData(kCruiseMapGamepadUserEvent, a_gamepadButtonData))
+                return false;
 
             V factory;
             if (!a_root->GetVariable(&factory,
@@ -2049,7 +2195,9 @@ namespace CFS::Bridge
             }
             V buttonType;
             a_root->CreateString(&buttonType, "BasicButton");
-            V factoryArgs[3]{ buttonType, a_buttonData, a_buttonBar };
+            V& initialData = g_lastInputWasGamepad.load(std::memory_order_acquire) ?
+                                 a_gamepadButtonData : a_mkbButtonData;
+            V factoryArgs[3]{ buttonType, initialData, a_buttonBar };
             if (!factory.Invoke("AddToButtonBar", &a_button, factoryArgs, 3) ||
                 !(a_button.IsObject() || a_button.IsDisplayObject())) {
                 REX::WARN("[map] tap-only action hint unavailable: stock ButtonFactory rejected BasicButton");
@@ -2073,26 +2221,41 @@ namespace CFS::Bridge
                                       g_mapActionHint.comboReady;
             const bool tapVisible = a_eligibility.show && a_tapOnly &&
                                     g_mapActionHint.tapReady;
+            const bool useGamepad = g_lastInputWasGamepad.load(std::memory_order_acquire);
             bool labelSet = true;
             bool holdLabelSet = true;
+            bool comboDataSet = true;
+            bool tapDataSet = true;
 
             if (g_mapActionHint.comboReady) {
-                g_mapActionHint.comboButtonData.SetMember("bEnabled",
-                    V{ enabled && comboVisible });
-                g_mapActionHint.comboButtonData.SetMember("bVisible", V{ comboVisible });
-                labelSet = g_mapActionHint.comboButtonData.SetMember(
-                    "sButtonText", V{ a_eligibility.label.c_str() });
-                holdLabelSet = g_mapActionHint.comboButtonData.SetMember(
-                    "sHoldButtonText",
-                    V{ enabled && comboVisible ? kCruiseMapActionHoldLabel : "" });
+                for (V* data : { &g_mapActionHint.comboMkbButtonData,
+                         &g_mapActionHint.comboGamepadButtonData }) {
+                    data->SetMember("bEnabled", V{ enabled && comboVisible });
+                    data->SetMember("bVisible", V{ comboVisible });
+                    labelSet = data->SetMember("sButtonText",
+                        V{ a_eligibility.label.c_str() }) && labelSet;
+                    holdLabelSet = data->SetMember("sHoldText",
+                        V{ enabled && comboVisible ? kCruiseMapActionHoldLabel : "" }) &&
+                        holdLabelSet;
+                }
+                V& activeData = useGamepad ? g_mapActionHint.comboGamepadButtonData :
+                                             g_mapActionHint.comboMkbButtonData;
+                comboDataSet = g_mapActionHint.comboButton.Invoke(
+                    "SetButtonData", nullptr, &activeData, 1);
                 g_mapActionHint.comboButton.Invoke("RefreshButtonData");
             }
             if (g_mapActionHint.tapReady) {
-                g_mapActionHint.tapButtonData.SetMember("bEnabled",
-                    V{ enabled && tapVisible });
-                g_mapActionHint.tapButtonData.SetMember("bVisible", V{ tapVisible });
-                labelSet = g_mapActionHint.tapButtonData.SetMember(
-                    "sButtonText", V{ a_eligibility.label.c_str() }) && labelSet;
+                for (V* data : { &g_mapActionHint.tapMkbButtonData,
+                         &g_mapActionHint.tapGamepadButtonData }) {
+                    data->SetMember("bEnabled", V{ enabled && tapVisible });
+                    data->SetMember("bVisible", V{ tapVisible });
+                    labelSet = data->SetMember("sButtonText",
+                        V{ a_eligibility.label.c_str() }) && labelSet;
+                }
+                V& activeData = useGamepad ? g_mapActionHint.tapGamepadButtonData :
+                                             g_mapActionHint.tapMkbButtonData;
+                tapDataSet = g_mapActionHint.tapButton.Invoke(
+                    "SetButtonData", nullptr, &activeData, 1);
                 g_mapActionHint.tapButton.Invoke("RefreshButtonData");
             }
             if ((!labelSet || !holdLabelSet) && Settings::Verbose())
@@ -2100,9 +2263,16 @@ namespace CFS::Bridge
                     labelSet, holdLabelSet);
             const bool desiredReady = a_tapOnly ? g_mapActionHint.tapReady :
                                                   g_mapActionHint.comboReady;
-            g_mapActionHint.installed = a_eligibility.show && desiredReady;
-            g_mapActionInteractive.store(enabled && desiredReady, std::memory_order_release);
-            g_mapActionTapOnly.store(enabled && desiredReady && a_tapOnly,
+            const bool desiredDataSet = a_tapOnly ? tapDataSet : comboDataSet;
+            if (desiredReady && desiredDataSet)
+                g_mapHintUsesGamepad.store(useGamepad, std::memory_order_release);
+            if (desiredReady && !desiredDataSet)
+                REX::WARN("[map] action hint rejected {} input data",
+                    useGamepad ? "controller" : "keyboard/mouse");
+            g_mapActionHint.installed = a_eligibility.show && desiredReady && desiredDataSet;
+            g_mapActionInteractive.store(enabled && desiredReady && desiredDataSet,
+                std::memory_order_release);
+            g_mapActionTapOnly.store(enabled && desiredReady && desiredDataSet && a_tapOnly,
                 std::memory_order_release);
             a_buttonBar.Invoke("RefreshButtons");
         }
@@ -2115,28 +2285,32 @@ namespace CFS::Bridge
             g_mapActionHint.generation = a_generation;
             if (a_tapOnly && !g_mapActionHint.tapReady) {
                 V tapButton;
-                V tapButtonData;
+                V tapMkbButtonData;
+                V tapGamepadButtonData;
                 if (!BuildCruiseTapButton(a_root, a_buttonBar, a_vanillaData,
-                        tapButton, tapButtonData)) {
+                        tapButton, tapMkbButtonData, tapGamepadButtonData)) {
                     SyncCruiseMapButtons(a_vanillaData, a_buttonBar, {}, true);
                     REX::WARN("[map] tap-only action hint installation failed; preserving vanilla route button");
                     return false;
                 }
                 g_mapActionHint.tapReady = true;
                 g_mapActionHint.tapButton = std::move(tapButton);
-                g_mapActionHint.tapButtonData = std::move(tapButtonData);
+                g_mapActionHint.tapMkbButtonData = std::move(tapMkbButtonData);
+                g_mapActionHint.tapGamepadButtonData = std::move(tapGamepadButtonData);
             } else if (!a_tapOnly && !g_mapActionHint.comboReady) {
                 V comboButton;
-                V comboButtonData;
+                V comboMkbButtonData;
+                V comboGamepadButtonData;
                 if (!BuildCruiseComboButton(a_root, a_buttonBar, a_vanillaData,
-                        comboButton, comboButtonData)) {
+                        comboButton, comboMkbButtonData, comboGamepadButtonData)) {
                     SyncCruiseMapButtons(a_vanillaData, a_buttonBar, {}, false);
                     REX::WARN("[map] stacked action hint installation failed; preserving vanilla route button");
                     return false;
                 }
                 g_mapActionHint.comboReady = true;
                 g_mapActionHint.comboButton = std::move(comboButton);
-                g_mapActionHint.comboButtonData = std::move(comboButtonData);
+                g_mapActionHint.comboMkbButtonData = std::move(comboMkbButtonData);
+                g_mapActionHint.comboGamepadButtonData = std::move(comboGamepadButtonData);
             }
 
             SyncCruiseMapButtons(a_vanillaData, a_buttonBar, a_eligibility, a_tapOnly);

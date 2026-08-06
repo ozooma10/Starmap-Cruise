@@ -26,8 +26,8 @@ treated as a proven gameplay behavior.
   system/star tree id and current cockpit body field
 - [x] Keyboard hold preserves physical device/id but does **not** generate a
   fresh Cruise down-edge after the map closes
-- [ ] Controller binding and glyph for the separate Cruise action (current live
-  ControlMap projection is keyboard-only)
+- [x] Controller binding, native glyph, tap callback, and completed hold callback
+  for the separate Cruise action were confirmed in game on 2026-08-06
 - [x] Rebound Cruise control preserves physical device/id, but the cockpit
   event is a continued hold (`first=false`) and does not activate Cruise
 - [x] Direct `Reticle_OnCruiseActivate` dispatch returns success but does not
@@ -527,3 +527,45 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   warning after five seconds and does not retain a Cruise mark or begin travel.
 - [ ] Re-run one current-system completed-hold regression to prove the local
   map-close/HUD-Cruise path remains unchanged.
+
+## 2026-08-06 controller input and glyph repair
+
+- [x] Shipped `ShipReticle` source confirms separate stock input data:
+  `Cruise` for keyboard/mouse and `SHMonocle` for gamepad. The Starmap now
+  mirrors that design for both its `ReleaseHoldComboButton` and tap-only
+  `BasicButton`, swapping the installed data object when the active device
+  changes so `ButtonKeyHelper` can resolve the native controller glyph.
+- [x] The guarded startup `ControlMap` scan now reads keyboard, mouse, and
+  gamepad device arrays. Controller routing follows the live `SHMonocle`
+  physical id and retains the real gamepad device on the hold, so the existing
+  HUD handoff forwards `SHMonocle` rather than the MKB `Cruise` event.
+- [x] A first edge that changes input device is routed to the data object still
+  installed for that frame; the next safe post-advance pass swaps the object.
+  This prevents the first controller press from being lost during an MKB-to-pad
+  transition.
+- [x] Releasedbg configure/build/install passes with inherited CommonLibSF
+  warnings only.
+- [ ] Relaunch Starfield with a controller and confirm the native glyph, tap,
+  completed fill/hold, HUD Cruise activation, course lock, and an in-map
+  keyboard/controller swap.
+
+## 2026-08-06 nested Data Menu close repair
+
+- [x] Shipped `StarMapButtonHintBar.onCloseSubMenuToGame` confirms the stock
+  return-to-game order: `DataMenu_SetMenuForQuickEntry`, then
+  `GlobalFunc_CloseAllMenus`.
+- [x] Accepted current-system tap/hold now dispatches that exact pair from the
+  verified post-advance window. The former single `GalaxyStarMapMenu` hide is
+  retained only as a failure fallback.
+- [x] Remote planet/moon routing remains unchanged: it still dispatches stock
+  `StarMapMenu_OnCancel` to return from system view to galaxy view before
+  guarded Set Course and Execute processing.
+- [x] Releasedbg configure, compile, and link pass with inherited CommonLibSF
+  warnings only. Built DLL SHA-256:
+  `84850B3B36B74120A62B12FE260CBDDFE9607C20F9E83977DFBF0BA26A50CEE9`.
+- [x] After Starfield exited, the new DLL was copied to the active MO2 mod. The
+  built and deployed SHA-256 hashes match:
+  `84850B3B36B74120A62B12FE260CBDDFE9607C20F9E83977DFBF0BA26A50CEE9`.
+- [x] In-game confirmation on 2026-08-06: Start -> character menu -> Starmap ->
+  accepted Cruise action closed every menu layer and returned directly to
+  gameplay instead of revealing the character menu.
