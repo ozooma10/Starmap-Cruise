@@ -19,6 +19,7 @@ namespace CFS::BodyIndex
     {
         std::uint32_t referenceFormID{ 0 };
         std::uint32_t baseFormID{ 0 };
+        std::uint32_t courseFormID{ 0 };
         std::string editorID;
     };
 

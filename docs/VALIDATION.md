@@ -1065,9 +1065,10 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   `00219520 -> 00216F51`, and Deimos Staryard
   `00219DFF -> 003120D6`.
 - [x] A remote non-planet marker is now eligible only when its CELL has exactly
-  one indexed station REFR/base tuple and the guarded load-game sink is ready.
-  The destination value retains the map CELL, exact REFR, exact base, and exact
-  STDT/DNAM system identity. Remote ships and generic POIs remain hidden.
+  one indexed station REFR/base tuple, exactly one CELL-owned XMRK REFR, and the
+  guarded load-game sink is ready. The destination value retains the map CELL,
+  exact physical REFR/base, exact course XMRK, and exact STDT/DNAM system
+  identity. Remote ships and generic POIs remain hidden.
 - [x] The remote station uses the unchanged vanilla system-level route handoff:
   stock Back, guarded GalaxyState selected-system setter/readback, narrowly
   scoped Quick Select ownership byte, stock Set Course, exact route-system
@@ -1078,20 +1079,23 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   live. Its live base must exactly match the retained indexed base and still
   carry `IsStarstation`; a different, missing, or ambiguous identity fails
   closed. The guarded native target setter and exact target-global readback must
-  then succeed. One exact station HUD row takes the direct path. If that row is
-  absent, the exact CELL/DNAM/GNAM orbital continuation documented below may
-  advance only through one exact visible ancestor row.
-- [x] Both station paths dispatch only the retained station REFR. Dispatch is
-  not success: the course must appear on exactly one low-frequency row as
+  then succeed. The exact CELL-owned XMRK is independently revalidated. One exact
+  XMRK HUD row takes the direct path. If that row is absent, the exact
+  CELL/DNAM/GNAM orbital continuation documented below may advance only through
+  one exact visible ancestor row.
+- [x] Both station paths dispatch only the retained CELL-owned XMRK, while the
+  public/native identity remains the physical station REFR/base. Dispatch is not
+  success: the XMRK course must appear on exactly one low-frequency row with
   matching `bIsCruiseTargetLock`. Activation, dispatch, bounded handshake/feed
   timeouts, unrelated courses, load, landing/docking, system mismatch, or
   replacement fail closed; active Cruise travel itself is unbounded.
 - [x] The releasedbg build/deploy and matching DLL/PDB hashes are recorded in the
   remote-moon section above; the same binary contains remote-station support.
-- [ ] Do not mark remote stations validated until one no-mouse trace proves:
-  vanilla system jump, exact retained REFR/base live resolution, native target
-  assignment/readback, exact-one HUD row, stock Cruise activation, exact station
-  dispatch, and matching `bIsCruiseTargetLock`.
+- [ ] Do not mark the corrected remote-station flow validated until one no-mouse
+  trace proves: vanilla system jump, exact retained physical REFR/base live
+  resolution, native target assignment/readback, exact retained CELL/XMRK
+  revalidation, stock Cruise activation, exact XMRK dispatch, and matching
+  one-row `bIsCruiseTargetLock`.
 
 ### 2026-08-07 first remote-station live trace
 
@@ -1123,11 +1127,54 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   may enter the existing one-activation latent orbital continuation only after
   exact live REFR/base assignment and one exact ancestor row. The public mark
   remains the station; active travel has no arbitrary timeout; dispatch is not
-  success; only the station REFR's exact `bIsCruiseTargetLock` succeeds.
-- [ ] Build/deploy evidence and a restarted no-mouse remote-station trace remain
-  pending. Do not mark the flow validated until the log proves vanilla system
-  jump, exact station identity/assignment, exact ancestor waypoint lock and
-  arrival/feed refresh when published, then exact station lock.
+  success. This version incorrectly treated the physical station REFR as the
+  Cruise course identity.
+- [x] With Starfield closed, releasedbg configure/build/deploy completed. Built
+  and active-MO2 DLL SHA-256 matches at
+  `A5848DCDC173B1F1EB45B77D5431C86BABFC704C81F1A8300E968374E5730D4F`;
+  built and active-MO2 PDB SHA-256 matches at
+  `DEBFDBF5C74F5BAD219CDF88D9BEDC3095E2B0C5C66F0E25178E10A41D15CC34`.
+  The winning default has `bVerboseLog=true` and no custom override was found.
+- [ ] A restarted no-mouse remote-station trace remains pending. Do not mark the
+  flow validated until the log proves vanilla system jump, exact station
+  identity/assignment, ordered exact ancestor waypoint lock and arrival/feed
+  refresh when published, then exact station lock.
+
+### 2026-08-07 RE-939 live result and dual-identity correction
+
+- [x] The restarted no-mouse Sol-to-Alpha-Centauri attempt physically reached
+  Starstation RE-939. Vanilla ended the exact system route at Jemison, emitted
+  player grav-jump states `0`, `1`, and `2`, and settled in Alpha Centauri. The
+  plugin then revalidated and natively assigned physical station REFR/base
+  `000013B8/000013B6`, joined CELL `0003DBEC` to orbital PNDT `002D5F53`, and
+  retained the exact Voss `0005E316` to Olivas `0005E313` ancestry.
+- [x] The old model dispatched physical station REFR `000013B8`, but the engine
+  published exact `bIsCruiseTargetLock` on `0003DBEE`. The plugin therefore
+  rejected `0003DBEE` as unrelated and cleared its public mark even though stock
+  Cruise continued and arrived at RE-939. The travel path worked; the plugin's
+  station course identity was incomplete.
+- [x] Raw active-master inspection identifies `0003DBEE` as the sole XMRK REFR
+  in CELL `0003DBEC`'s complete placed-child hierarchy. The active-load-order
+  index now derives this relationship rather than hard-coding either FormID.
+  Remote station eligibility requires exactly one station REFR/base tuple and
+  exactly one CELL-owned XMRK REFR. Native assignment and public status use the
+  physical station; HUD-row selection, event dispatch, and exact lock readback
+  use the XMRK. Missing, ambiguous, deleted, overridden, or live-mismatched
+  identities fail closed.
+- [x] With Starfield closed, the exact releasedbg configure/build completed.
+  xmake's trailing default-INI install copy reported a permission error after
+  linking, so the new DLL/PDB were copied explicitly to the exact active MO2
+  plugin directory. Built/deployed SHA-256 matches at
+  `FA8EBA2432F394639A2AC705DA0FC00AF32BB39A019F660A84D7937445019CCE`
+  for the DLL and
+  `F7873CAF5C64600DFCE690B042D552785CAA28B0A87F11AF8626FA679BE26321`
+  for the PDB. The deployed default already exactly matches the source default,
+  has `bVerboseLog=true`, and no winning `CruiseFromStarmapCustom.ini` override
+  was found in the active mod, MO2 overwrite, or Documents paths.
+- [ ] The correction is built and deployed but not gameplay-proven. A fresh
+  trace must show the indexed CELL/XMRK link, exact physical station assignment,
+  dispatch of that exact XMRK, and matching one-row `bIsCruiseTargetLock`
+  without an unrelated-course clear.
 
 ## 2026-08-07 remote route while Cruise is active
 
@@ -1175,3 +1222,26 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   `EXIT CRUISE FIRST` control performs no Back transition and preserves the
   current mark/course. Exit Cruise in the cockpit, reopen the map, and run the
   ordinary no-mouse remote flow separately.
+
+## 2026-08-07 fast Starmap-open system recovery
+
+- [x] The failing live trace opened Starmap session 1 with
+  `currentSystem=unresolved` at `13:41:59.821`. The load-order index completed
+  and the same HUD rows uniquely resolved system `0` at `13:42:01.233`, but the
+  immutable open-time snapshot continued reporting `CURRENT SYSTEM UNAVAILABLE`.
+  Closing and reopening immediately captured system `0` and exposed the Cruise
+  actions, proving this was a late authoritative-system race rather than missing
+  marker or dossier data.
+- [x] An unresolved open session now adopts that first unique cockpit-system
+  resolution only while its exact map session and movie generation remain live.
+  An already captured system is never changed, and every existing marker,
+  dossier, STDT/GNAM, active-flight, and remote-route gate remains unchanged.
+- [x] A releasedbg `xmake -j1 -y` build passed with deployment explicitly
+  disabled and only inherited CommonLibSF warnings. The local build/deploy DLL
+  SHA-256 is `A5848DCDC173B1F1EB45B77D5431C86BABFC704C81F1A8300E968374E5730D4F`.
+- [x] With Starfield closed, the releasedbg DLL/PDB were deployed to active MO2;
+  their built/deployed hashes match the exact values recorded in the station
+  continuation section above.
+- [ ] Restart Starfield, then open the Starmap immediately after loading. Confirm
+  the log reports recovered current system for the same open session and the
+  Cruise action appears without closing and reopening the map.

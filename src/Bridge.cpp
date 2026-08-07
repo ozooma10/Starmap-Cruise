@@ -253,6 +253,7 @@ namespace CFS::Bridge
             RemoteMoonPhase phase{ RemoteMoonPhase::kNone };
             BodyKind finalKind{ BodyKind::kOther };
             std::uint32_t finalFormID{ 0 };
+            std::uint32_t finalCourseFormID{ 0 };
             std::uint32_t system{ 0 };
             std::uint32_t stationOrbitalFormID{ 0 };
             std::uint32_t parentFormID{ 0 };
@@ -429,6 +430,12 @@ namespace CFS::Bridge
                    a_destination.kind == BodyKind::kMoon;
         }
 
+        std::uint32_t CourseTargetID(const BodyDestination& a_destination)
+        {
+            return a_destination.courseFormID ? a_destination.courseFormID :
+                                                a_destination.formID;
+        }
+
         bool UsesRemoteSystemRoute(const BodyDestination& a_destination)
         {
             return IsPlanetary(a_destination) ||
@@ -497,6 +504,31 @@ namespace CFS::Bridge
             const bool had = g_haveCurrentSystem.exchange(true, std::memory_order_acq_rel);
             if ((!had || old != best->first) && Settings::Verbose())
                 REX::INFO("[system] cockpit feed resolves current system {}", best->first);
+
+            // A fast Starmap open can race the load-order index: the HUD rows
+            // already exist, but ResolveCurrentSystem cannot join them until
+            // BodyIndex becomes ready. Recover only an unresolved snapshot from
+            // the same still-open movie/session. Never rewrite a captured system.
+            bool recoveredMapSession = false;
+            if (g_mapOpen.load(std::memory_order_acquire)) {
+                std::lock_guard lock{ g_mapMutex };
+                if (g_mapOpen.load(std::memory_order_acquire) &&
+                    !g_map.haveCapturedSystem &&
+                    g_map.session != 0 &&
+                    g_map.session == g_mapSession.load(std::memory_order_acquire) &&
+                    g_map.generation ==
+                        g_mapMovie.generation.load(std::memory_order_acquire)) {
+                    g_map.haveCapturedSystem = true;
+                    g_map.capturedSystem = best->first;
+                    recoveredMapSession = true;
+                }
+            }
+            if (recoveredMapSession) {
+                g_mapActionHintSignature.store(0, std::memory_order_release);
+                g_mapUiDirty.store(true, std::memory_order_release);
+                REX::INFO("[map] recovered current system {} for the open Starmap session",
+                    best->first);
+            }
         }
 
         double AsNumber(const V& a_value)
@@ -1156,8 +1188,9 @@ namespace CFS::Bridge
                     old->formID, old->localizedName, a_destination.formID,
                     a_destination.localizedName);
             else
-                REX::INFO("[destination] marked {:08X} '{}' (system={} parent={} planet={} kind={})",
+                REX::INFO("[destination] marked {:08X} '{}' (course={:08X} system={} parent={} planet={} kind={})",
                     a_destination.formID, a_destination.localizedName,
+                    CourseTargetID(a_destination),
                     a_destination.galaxy.system, a_destination.galaxy.parent,
                     a_destination.galaxy.planet,
                     DestinationKindName(a_destination.kind));
@@ -1315,7 +1348,7 @@ namespace CFS::Bridge
             if (!a_snapshot.haveCapturedSystem)
                 return unavailable(EligibilityCode::kCurrentSystemUnavailable,
                     "CURRENT SYSTEM UNAVAILABLE",
-                    "cockpit current system was not resolved before map open");
+                    "cockpit current system is not resolved for this map session");
             if (a_snapshot.highlightedMarkerCount == 0)
                 return unavailable(EligibilityCode::kSelectBody,
                     "HIGHLIGHT A DESTINATION",
@@ -1351,6 +1384,7 @@ namespace CFS::Bridge
                     indexedStations.erase(std::remove_if(indexedStations.begin(),
                         indexedStations.end(), [](const BodyIndex::StationTarget& a_target) {
                             return !a_target.referenceFormID ||
+                                   !a_target.courseFormID ||
                                    !BodyIndex::IsStationBase(a_target.baseFormID);
                         }), indexedStations.end());
                     std::ranges::sort(indexedStations, {},
@@ -1379,6 +1413,7 @@ namespace CFS::Bridge
                             .kind = BodyKind::kStation,
                             .formID = station.referenceFormID,
                             .targetBaseFormID = station.baseFormID,
+                            .courseFormID = station.courseFormID,
                             .mapFormID = a_snapshot.markerBodyID,
                             .mapType = a_snapshot.markerBodyType,
                             .galaxy = { .system = *browsedSystemID },
@@ -1394,10 +1429,11 @@ namespace CFS::Bridge
                             .show = true,
                             .enabled = true,
                             .label = kRemoteCruiseMapActionLabel,
-                            .detail = std::format("eligible remote station CELL={:08X}/{} indexedRef={:08X} base={:08X} '{}' system={}",
+                            .detail = std::format("eligible remote station CELL={:08X}/{} indexedRef={:08X} base={:08X} courseMarker={:08X} '{}' system={}",
                                 destination.mapFormID, destination.mapType,
                                 destination.formID, station.baseFormID,
-                                destination.localizedName, destination.galaxy.system),
+                                station.courseFormID, destination.localizedName,
+                                destination.galaxy.system),
                             .destination = std::move(destination),
                         };
                     }
@@ -1893,6 +1929,7 @@ namespace CFS::Bridge
                     .phase = RemoteMoonPhase::kAwaitingParentFeed,
                     .finalKind = BodyKind::kMoon,
                     .finalFormID = a_destination.formID,
+                    .finalCourseFormID = CourseTargetID(a_destination),
                     .system = a_destination.galaxy.system,
                     .parentFormID = parent.formID,
                     .parentEditorID = parent.editorID,
@@ -1911,6 +1948,19 @@ namespace CFS::Bridge
         {
             if (a_destination.kind != BodyKind::kStation)
                 return false;
+
+            const auto courseMarkerForm = a_destination.courseFormID ?
+                RE::TESForm::LookupByID(a_destination.courseFormID) : nullptr;
+            const auto courseMarker = courseMarkerForm ?
+                courseMarkerForm->As<RE::TESObjectREFR>() : nullptr;
+            if (!courseMarker ||
+                a_destination.courseFormID == a_destination.formID) {
+                REX::WARN("[station] refusing automatic continuation for {:08X} '{}': retained exact CELL/XMRK course identity {:08X} is not a distinct live REFR",
+                    a_destination.formID, a_destination.localizedName,
+                    a_destination.courseFormID);
+                ClearDestination("live station CELL/XMRK course-marker validation failed");
+                return false;
+            }
 
             const auto orbitals = BodyIndex::StationOrbitals(a_destination.mapFormID);
             if (orbitals.size() != 1) {
@@ -2011,6 +2061,7 @@ namespace CFS::Bridge
                     .phase = RemoteMoonPhase::kAwaitingParentFeed,
                     .finalKind = BodyKind::kStation,
                     .finalFormID = a_destination.formID,
+                    .finalCourseFormID = a_destination.courseFormID,
                     .system = a_destination.galaxy.system,
                     .stationOrbitalFormID = orbital.formID,
                     .parentFormID = waypoint->formID,
@@ -2023,10 +2074,11 @@ namespace CFS::Bridge
                 };
             }
             g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
-            REX::INFO("[station] retained public destination {:08X} '{}' maps exactly from CELL {:08X} to orbital PNDT {:08X}; exact GNAM ancestor {:08X} '{}' retained as private waypoint {}/{} and must expose one HUD row before activation",
+            REX::INFO("[station] retained public destination {:08X} '{}' uses exact CELL-owned XMRK course {:08X} and maps from CELL {:08X} to orbital PNDT {:08X}; exact GNAM ancestor {:08X} '{}' retained as private waypoint {}/{} and must expose one HUD row before activation",
                 a_destination.formID, a_destination.localizedName,
-                a_destination.mapFormID, orbital.formID, waypoint->formID,
-                waypoint->editorID, waypointIndex + 1,
+                a_destination.courseFormID, a_destination.mapFormID,
+                orbital.formID, waypoint->formID, waypoint->editorID,
+                waypointIndex + 1,
                 ancestry.size() - 1);
             return true;
         }
@@ -2038,6 +2090,7 @@ namespace CFS::Bridge
             if (!continuation || !destination ||
                 destination->kind != continuation->finalKind ||
                 destination->formID != continuation->finalFormID ||
+                CourseTargetID(*destination) != continuation->finalCourseFormID ||
                 continuation->phase != RemoteMoonPhase::kAwaitingParentFeed)
                 return false;
 
@@ -2054,10 +2107,10 @@ namespace CFS::Bridge
                     g_remoteMoonContinuation.inactiveSince = {};
                 }
                 g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
-                QueueCourse(destination->formID, false);
+                QueueCourse(CourseTargetID(*destination), false);
                 REX::INFO("[orbital] Cruise already active; dispatched retained final {} {:08X} '{}' once and awaiting exact final or optional waypoint readback",
-                    DestinationKindName(destination->kind), destination->formID,
-                    destination->localizedName);
+                    DestinationKindName(destination->kind),
+                    CourseTargetID(*destination), destination->localizedName);
                 return true;
             }
 
@@ -2080,7 +2133,8 @@ namespace CFS::Bridge
             }
             g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
             REX::INFO("[orbital] queued one latched stock HUD Cruise press for retained final {} {:08X} '{}'; stock may resolve it latently through waypoint {:08X} '{}'",
-                DestinationKindName(destination->kind), destination->formID,
+                DestinationKindName(destination->kind),
+                CourseTargetID(*destination),
                 destination->localizedName,
                 continuation->parentFormID, continuation->parentName);
             return true;
@@ -2520,12 +2574,16 @@ namespace CFS::Bridge
             const bool same = existing && existing->mapFormID == selected.mapFormID &&
                 existing->mapType == selected.mapType &&
                 existing->formID == selected.formID &&
-                existing->targetBaseFormID == selected.targetBaseFormID;
+                existing->targetBaseFormID == selected.targetBaseFormID &&
+                CourseTargetID(*existing) == CourseTargetID(selected);
             if (same && a_action == MapAction::kTap && !remoteRoutable) {
-                const bool courseMatches = g_confirmedCourseID.load(std::memory_order_acquire) == selected.formID;
+                const auto courseTarget = CourseTargetID(selected);
+                const bool courseMatches =
+                    g_confirmedCourseID.load(std::memory_order_acquire) ==
+                    courseTarget;
                 ClearDestination("explicit same-target toggle");
                 if (courseMatches && g_cruiseActive.load(std::memory_order_acquire))
-                    QueueCourse(selected.formID, true);
+                    QueueCourse(courseTarget, true);
             } else if (!same) {
                 StoreDestination(selected);
             }
@@ -3947,22 +4005,23 @@ namespace CFS::Bridge
             const auto destination = Destination();
             if (!destination)
                 return;
+            const auto courseTarget = CourseTargetID(*destination);
 
             if (RemoteMoonContinuationActive())
                 return;
 
             if (RemoteStationContinuationActive() && course != 0 &&
-                course != destination->formID) {
+                course != courseTarget) {
                 FailRemoteStationContinuation(
                     "engine selected an unrelated course before exact station lock");
                 return;
             }
 
-            if (course == destination->formID) {
+            if (course == courseTarget) {
                 if (RemoteStationContinuationActive()) {
                     const auto matchingRows = std::ranges::count_if(rows,
                         [&](const HudRow& a_row) {
-                            return a_row.id == destination->formID;
+                            return a_row.id == courseTarget;
                         });
                     if (matchingRows != 1) {
                         FailRemoteStationContinuation(
@@ -3973,8 +4032,9 @@ namespace CFS::Bridge
                         std::memory_order_release);
                     g_pendingStationAssignedID.store(0,
                         std::memory_order_release);
-                    REX::INFO("[station] exact remote station lock confirmed for {:08X} '{}'",
-                        destination->formID, destination->localizedName);
+                    REX::INFO("[station] exact remote station course-marker lock confirmed: physicalRef={:08X} courseMarker={:08X} '{}'",
+                        destination->formID, courseTarget,
+                        destination->localizedName);
                 }
                 g_courseWasLocked.store(true, std::memory_order_release);
                 g_courseAskedID.store(0, std::memory_order_release);
@@ -3982,16 +4042,16 @@ namespace CFS::Bridge
                 g_state.store(NavState::kAutopilotLocked, std::memory_order_release);
                 if (previousCourse != course) {
                     REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
-                        destination->formID, destination->localizedName);
+                        courseTarget, destination->localizedName);
                 }
-            } else if (previousCourse == destination->formID &&
+            } else if (previousCourse == courseTarget &&
                 g_courseWasLocked.exchange(false, std::memory_order_acq_rel)) {
                 g_arrivalCheckID.store(destination->formID, std::memory_order_release);
                 g_arrivalCheckTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
                 g_state.store(NavState::kMarked, std::memory_order_release);
                 if (Settings::Verbose())
                     REX::INFO("[arrival] Cruise lock left {:08X}; waiting for arrival evidence",
-                        destination->formID);
+                        courseTarget);
             }
         }
 
@@ -4231,7 +4291,7 @@ namespace CFS::Bridge
                 std::lock_guard lock{ g_hudRowsMutex };
                 const auto count = std::min(g_hudRows.size(), a_bearings.size());
                 for (std::size_t i = 0; i < count; ++i)
-                    if (g_hudRows[i].id == destination->formID) {
+                    if (g_hudRows[i].id == CourseTargetID(*destination)) {
                         index = i;
                         courseLocked = g_hudRows[i].courseLocked;
                         break;
@@ -4418,17 +4478,17 @@ namespace CFS::Bridge
                         g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                         REX::INFO("[orbital] stock Cruise activation confirmed; dispatching retained final {} {:08X} '{}' once; exact final readback remains the success gate",
                             DestinationKindName(continuation->finalKind),
-                            continuation->finalFormID,
+                            continuation->finalCourseFormID,
                             destination ? destination->localizedName : "");
-                        QueueCourse(continuation->finalFormID, false);
+                        QueueCourse(continuation->finalCourseFormID, false);
                     }
                 } else if (destination &&
                     (state == NavState::kAwaitingCruise || state == NavState::kMarked)) {
                     g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                     if (state == NavState::kMarked)
                         REX::INFO("[course] vanilla Cruise activation detected; locking marked destination {:08X}",
-                            destination->formID);
-                    QueueCourse(destination->formID, false);
+                            CourseTargetID(*destination));
+                    QueueCourse(CourseTargetID(*destination), false);
                 }
             }
             if (!active && wasActive) {
@@ -4632,7 +4692,7 @@ namespace CFS::Bridge
                                 acceptedDestination->galaxy.system);
                         } else if (wasCruising) {
                             if (const auto destination = Destination())
-                                QueueCourse(destination->formID, false);
+                                QueueCourse(CourseTargetID(*destination), false);
                             g_state.store(Destination() ? NavState::kAwaitingCruise : NavState::kIdle,
                                 std::memory_order_release);
                         } else {
@@ -4694,10 +4754,12 @@ namespace CFS::Bridge
             const auto continuation = RemoteMoonState();
             if (!continuation)
                 return;
+            const auto finalCourseTarget = CourseTargetID(a_destination);
             if ((a_destination.kind != BodyKind::kMoon &&
                     a_destination.kind != BodyKind::kStation) ||
                 continuation->finalKind != a_destination.kind ||
                 continuation->finalFormID != a_destination.formID ||
+                continuation->finalCourseFormID != finalCourseTarget ||
                 continuation->system != a_destination.galaxy.system) {
                 FailRemoteMoonContinuation("retained final orbital-target identity changed");
                 return;
@@ -4731,6 +4793,20 @@ namespace CFS::Bridge
                     FailRemoteMoonContinuation("retained station CELL no longer resolves to its exact live REFR/base identity");
                     return;
                 }
+                const auto indexed = BodyIndex::StationTargets(
+                    a_destination.mapFormID);
+                const auto exactIndexed = std::ranges::count_if(indexed,
+                    [&](const BodyIndex::StationTarget& a_target) {
+                        return a_target.referenceFormID == a_destination.formID &&
+                               a_target.baseFormID == a_destination.targetBaseFormID &&
+                               a_target.courseFormID == finalCourseTarget;
+                    });
+                const auto courseForm = RE::TESForm::LookupByID(finalCourseTarget);
+                if (exactIndexed != 1 || !courseForm ||
+                    !courseForm->As<RE::TESObjectREFR>()) {
+                    FailRemoteMoonContinuation("retained station CELL/XMRK course identity no longer has one exact indexed live REFR");
+                    return;
+                }
             }
 
             const auto now = Clock::now();
@@ -4749,7 +4825,7 @@ namespace CFS::Bridge
                 return matches;
             };
             const auto parentRows = snapshotTargets(continuation->parentFormID);
-            const auto finalRows = snapshotTargets(a_destination.formID);
+            const auto finalRows = snapshotTargets(finalCourseTarget);
             if (parentRows.size() > 1) {
                 FailRemoteMoonContinuation("private waypoint became ambiguous in the cockpit target feed");
                 return;
@@ -4806,15 +4882,15 @@ namespace CFS::Bridge
                 if (a_stagedThroughParent) {
                     REX::INFO("[orbital] engine confirmed exact final {} lock on {:08X} '{}' after exact waypoint {:08X} '{}' staging in one continuous Cruise session",
                         DestinationKindName(a_destination.kind),
-                        a_destination.formID, a_destination.localizedName,
+                        finalCourseTarget, a_destination.localizedName,
                         continuation->parentFormID, continuation->parentName);
                 } else {
                     REX::INFO("[orbital] engine confirmed exact final {} lock on {:08X} '{}' after one retained-target dispatch and latent stock course resolution",
                         DestinationKindName(a_destination.kind),
-                        a_destination.formID, a_destination.localizedName);
+                        finalCourseTarget, a_destination.localizedName);
                 }
                 REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
-                    a_destination.formID, a_destination.localizedName);
+                    finalCourseTarget, a_destination.localizedName);
                 if (a_destination.kind == BodyKind::kStation) {
                     g_pendingStationResolveTicks.store(0,
                         std::memory_order_release);
@@ -4842,6 +4918,7 @@ namespace CFS::Bridge
                     auto& live = g_remoteMoonContinuation;
                     if (live.finalKind != BodyKind::kStation ||
                         live.finalFormID != a_destination.formID ||
+                        live.finalCourseFormID != finalCourseTarget ||
                         *exactStationWaypoint < live.waypointIndex ||
                         *exactStationWaypoint >= live.stationWaypoints.size() ||
                         live.stationWaypoints[*exactStationWaypoint].formID !=
@@ -4910,14 +4987,14 @@ namespace CFS::Bridge
                     return;
                 }
                 const auto asked = g_courseAskedID.load(std::memory_order_acquire);
-                if (asked != 0 && asked != a_destination.formID) {
+                if (asked != 0 && asked != finalCourseTarget) {
                     FailRemoteMoonContinuation("another course request replaced the retained final-target dispatch");
                     return;
                 }
-                if (asked != a_destination.formID)
+                if (asked != finalCourseTarget)
                     return;
                 if (feedRevision > continuation->feedRevisionFloor) {
-                    if (course == a_destination.formID && finalRows.size() == 1 &&
+                    if (course == finalCourseTarget && finalRows.size() == 1 &&
                         finalRows.front().courseLocked) {
                         completeFinalLock(false);
                         return;
@@ -4928,6 +5005,7 @@ namespace CFS::Bridge
                         auto& live = g_remoteMoonContinuation;
                         if (live.phase != RemoteMoonPhase::kAwaitingParentLock ||
                             live.finalFormID != a_destination.formID ||
+                            live.finalCourseFormID != finalCourseTarget ||
                             live.parentFormID != course)
                             return;
                         live.phase = RemoteMoonPhase::kParentLocked;
@@ -4939,7 +5017,7 @@ namespace CFS::Bridge
                         g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                         REX::INFO("[orbital] engine resolved retained final {} {:08X} '{}' through exact private-waypoint lock {:08X} '{}' in one continuous Cruise session",
                             DestinationKindName(a_destination.kind),
-                            a_destination.formID, a_destination.localizedName,
+                            finalCourseTarget, a_destination.localizedName,
                             continuation->parentFormID, continuation->parentName);
                         return;
                     }
@@ -4970,13 +5048,13 @@ namespace CFS::Bridge
                     return;
                 }
                 const auto asked = g_courseAskedID.load(std::memory_order_acquire);
-                if (asked != a_destination.formID) {
+                if (asked != finalCourseTarget) {
                     FailRemoteMoonContinuation("retained final-target course request changed during latent resolution");
                     return;
                 }
                 if (feedRevision <= continuation->feedRevisionFloor)
                     return;
-                if (course == a_destination.formID && finalRows.size() == 1 &&
+                if (course == finalCourseTarget && finalRows.size() == 1 &&
                     finalRows.front().courseLocked) {
                     completeFinalLock(false);
                     return;
@@ -4987,6 +5065,7 @@ namespace CFS::Bridge
                     auto& live = g_remoteMoonContinuation;
                     if (live.phase != RemoteMoonPhase::kAwaitingLatentFinalLock ||
                         live.finalFormID != a_destination.formID ||
+                        live.finalCourseFormID != finalCourseTarget ||
                         live.parentFormID != course)
                         return;
                     live.phase = RemoteMoonPhase::kParentLocked;
@@ -4998,7 +5077,7 @@ namespace CFS::Bridge
                     REX::INFO("[orbital] latent stock course published exact private-waypoint lock {:08X} '{}' for retained final {} {:08X} '{}'",
                         continuation->parentFormID, continuation->parentName,
                         DestinationKindName(a_destination.kind),
-                        a_destination.formID, a_destination.localizedName);
+                        finalCourseTarget, a_destination.localizedName);
                     return;
                 }
                 if (course != 0)
@@ -5029,7 +5108,7 @@ namespace CFS::Bridge
                 }
                 if (feedRevision <= continuation->feedRevisionFloor)
                     return;
-                if (course != 0 && course != a_destination.formID) {
+                if (course != 0 && course != finalCourseTarget) {
                     FailRemoteMoonContinuation("engine course left the exact private waypoint for an unrelated target");
                     return;
                 }
@@ -5056,15 +5135,15 @@ namespace CFS::Bridge
                     REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: its exact lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
                         continuation->parentFormID, continuation->parentName,
                         feedRevision, DestinationKindName(a_destination.kind),
-                        a_destination.formID,
+                        finalCourseTarget,
                         a_destination.localizedName);
-                    if (course == a_destination.formID && finalRows.front().courseLocked)
+                    if (course == finalCourseTarget && finalRows.front().courseLocked)
                         completeFinalLock(true);
                 } else {
                     REX::INFO("[orbital] exact waypoint lock left {:08X} '{}'; continuous Cruise remains active while awaiting a newer feed that uniquely exposes retained final {} {:08X} '{}'",
                         continuation->parentFormID, continuation->parentName,
                         DestinationKindName(a_destination.kind),
-                        a_destination.formID, a_destination.localizedName);
+                        finalCourseTarget, a_destination.localizedName);
                 }
                 return;
             }
@@ -5096,7 +5175,7 @@ namespace CFS::Bridge
                         continuation->parentFormID, continuation->parentName);
                     return;
                 }
-                if (course != 0 && course != a_destination.formID) {
+                if (course != 0 && course != finalCourseTarget) {
                     FailRemoteMoonContinuation("engine selected an unrelated course while awaiting the final-target feed");
                     return;
                 }
@@ -5115,9 +5194,9 @@ namespace CFS::Bridge
                 g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                 REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: exact prior lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
                     continuation->parentFormID, continuation->parentName, feedRevision,
-                    DestinationKindName(a_destination.kind), a_destination.formID,
+                    DestinationKindName(a_destination.kind), finalCourseTarget,
                     a_destination.localizedName);
-                if (course == a_destination.formID && finalRows.front().courseLocked)
+                if (course == finalCourseTarget && finalRows.front().courseLocked)
                     completeFinalLock(true);
                 return;
             }
@@ -5131,7 +5210,7 @@ namespace CFS::Bridge
                         FailRemoteMoonContinuation("continuous Cruise exited before exact final-target lock readback");
                     return;
                 }
-                if (course == a_destination.formID && finalRows.size() == 1 &&
+                if (course == finalCourseTarget && finalRows.size() == 1 &&
                     finalRows.front().courseLocked) {
                     completeFinalLock(true);
                     return;
@@ -5190,13 +5269,30 @@ namespace CFS::Bridge
                         desired, std::memory_order_acq_rel);
                     startedTicks = g_pendingStationResolveTicks.load(
                         std::memory_order_acquire);
-                    REX::INFO("[station] settled target system {}; resolving remote CELL {:08X}/{} to retained indexed REFR/base {:08X}/{:08X}",
+                    REX::INFO("[station] settled target system {}; resolving remote CELL {:08X}/{} to retained physical REFR/base {:08X}/{:08X} and course XMRK {:08X}",
                         a_destination.galaxy.system, a_destination.mapFormID,
                         a_destination.mapType, a_destination.formID,
-                        a_destination.targetBaseFormID);
+                        a_destination.targetBaseFormID,
+                        a_destination.courseFormID);
                 }
                 auto phaseStarted = Clock::time_point{ Clock::duration{
                     startedTicks } };
+                const auto indexedTargets =
+                    BodyIndex::StationTargets(a_destination.mapFormID);
+                const auto exactIndexed = std::ranges::count_if(indexedTargets,
+                    [&](const BodyIndex::StationTarget& a_target) {
+                        return a_target.referenceFormID == a_destination.formID &&
+                               a_target.baseFormID == a_destination.targetBaseFormID &&
+                               a_target.courseFormID ==
+                                   a_destination.courseFormID;
+                    });
+                const auto courseMarker = a_destination.courseFormID ?
+                    RE::TESForm::LookupByID(a_destination.courseFormID) : nullptr;
+                if (exactIndexed != 1 || !courseMarker ||
+                    !courseMarker->As<RE::TESObjectREFR>()) {
+                    ClearDestination("remote station CELL/XMRK course identity failed exact live revalidation after arrival");
+                    return;
+                }
                 const auto stationTargets =
                     ResolveStationTargets(a_destination.mapFormID);
                 if (stationTargets.size() > 1) {
@@ -5234,7 +5330,8 @@ namespace CFS::Bridge
                         a_destination.formID);
                 }
 
-                const auto stationRows = CurrentHudTargets(a_destination.formID);
+                const auto stationRows = CurrentHudTargets(
+                    CourseTargetID(a_destination));
                 if (stationRows.size() > 1) {
                     ClearDestination("remote station has ambiguous cockpit HUD rows after native assignment");
                     return;
@@ -5248,11 +5345,11 @@ namespace CFS::Bridge
             // Resolver agreement alone is not enough. A directly exposed final
             // body retains the original exact-one-row path. A missing remote
             // moon may stage only through its unique live PNDT/GNAM parent. A
-            // station reaches this shared path only when its exact REFR is
-            // already exposed; otherwise its separately validated CELL/DNAM/
-            // GNAM ancestry owns the private continuation. Remote planets and
-            // ambiguous final rows never take either detour.
-            const auto finalRows = CurrentHudTargets(a_destination.formID);
+            // station reaches this shared path only when its exact CELL-owned
+            // XMRK course identity is already exposed; otherwise its separately
+            // validated CELL/DNAM/GNAM ancestry owns the private continuation.
+            // Remote planets and ambiguous final rows never take either detour.
+            const auto finalRows = CurrentHudTargets(CourseTargetID(a_destination));
             if (finalRows.size() > 1) {
                 ClearDestination("pending-jump destination has ambiguous cockpit HUD rows");
                 return;
@@ -5267,9 +5364,10 @@ namespace CFS::Bridge
                 auto expected = NavState::kPendingJump;
                 if (g_state.compare_exchange_strong(expected, NavState::kAwaitingCruise,
                         std::memory_order_acq_rel)) {
-                    QueueCourse(a_destination.formID, false);
+                    QueueCourse(CourseTargetID(a_destination), false);
                     REX::INFO("[destination] pending jump arrived in system {}; Cruise already active, queued course {:08X}",
-                        a_destination.galaxy.system, a_destination.formID);
+                        a_destination.galaxy.system,
+                        CourseTargetID(a_destination));
                 }
                 return;
             }
@@ -5288,7 +5386,7 @@ namespace CFS::Bridge
                 return;
             }
             REX::INFO("[destination] pending jump arrived in system {}; queued latched stock HUD Cruise press for {:08X} '{}'",
-                a_destination.galaxy.system, a_destination.formID,
+                a_destination.galaxy.system, CourseTargetID(a_destination),
                 a_destination.localizedName);
         }
 
@@ -5347,7 +5445,7 @@ namespace CFS::Bridge
                 const bool awaitingStockCourseResolution = continuation &&
                     (continuation->phase == RemoteMoonPhase::kAwaitingParentLock ||
                         continuation->phase == RemoteMoonPhase::kAwaitingLatentFinalLock) &&
-                    continuation->finalFormID == asked &&
+                    continuation->finalCourseFormID == asked &&
                     !g_courseAskedClearing.load(std::memory_order_acquire);
                 if (!awaitingStockCourseResolution &&
                     Clock::now() - at > std::chrono::milliseconds(1500)) {

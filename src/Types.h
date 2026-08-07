@@ -27,6 +27,7 @@ namespace CFS
         BodyKind kind{ BodyKind::kPlanet };
         std::uint32_t formID{ 0 };
         std::uint32_t targetBaseFormID{ 0 };
+        std::uint32_t courseFormID{ 0 };
         std::uint32_t mapFormID{ 0 };
         std::uint32_t mapType{ 0 };
         GalaxyIdentity galaxy;

@@ -22,8 +22,9 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
   A current-system station-backed row may be a live station reference or a CELL
   that resolves through placed children to exactly one currently live reference
   whose base carries `IsStarstation`. A remote station CELL may be accepted only
-  when the active-load-order index contains exactly one REFR/base tuple; retain
-  both IDs for exact live revalidation after arrival. Any non-planet marker
+  when the active-load-order index contains exactly one station REFR/base tuple
+  and exactly one CELL-owned XMRK REFR. Retain all identities for exact live
+  revalidation after arrival. Any non-planet marker
   other than an exact indexed station is hidden; Ship POIs and generic markers
   are intentionally unsupported. Keep the map id/type and resolved
   target reference separate. Unmatched generic POIs, tree focus, `bIsFocused`,
@@ -81,18 +82,20 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
   replacement, landing/docking, or system mismatch. Do not clear the final mark
   merely because the parent course completed.
 - After a remote station route settles in the retained system, allow a bounded
-  window for its exact indexed REFR/base tuple to become live, then require
-  native target assignment/readback. If the station has one HUD row, keep the
-  direct path. Otherwise join its CELL EDID to exactly one PNDT `DNAM`, walk only
-  unique live same-system `GNAM` parents, and require an exact ancestor with
-  exactly one HUD row as the first private waypoint. Retain the proven inward
-  ancestry segment so only ordered exact intermediate locks are accepted. Keep the public destination as the
-  station, activate stock Cruise once, dispatch only the retained REFR, and
-  allow the engine-owned travel phase to remain unbounded while Cruise/system/
-  world identity stays valid. Require the station REFR's exact
-  `bIsCruiseTargetLock`; ambiguity, identity drift, bounded handshake/feed
-  timeout, unrelated course, interruption, load, landing/docking, or system
-  mismatch clears it fail-closed.
+  window for its exact indexed physical REFR/base tuple to become live, then
+  require native target assignment/readback. Independently revalidate the exact
+  CELL-owned XMRK REFR and use it—not the physical station REFR—as the Cruise
+  HUD-row, dispatch, and lock-readback identity. If the XMRK has one HUD row,
+  keep the direct path. Otherwise join the CELL EDID to exactly one PNDT `DNAM`,
+  walk only unique live same-system `GNAM` parents, and require an exact ancestor
+  with exactly one HUD row as the first private waypoint. Retain the proven
+  inward ancestry segment so only ordered exact intermediate locks are accepted.
+  Keep the public destination as the physical station, activate stock Cruise
+  once, dispatch only the retained XMRK, and allow the engine-owned travel phase
+  to remain unbounded while Cruise/system/world identity stays valid. Require
+  the XMRK's exact `bIsCruiseTargetLock`; ambiguity, identity drift, bounded
+  handshake/feed timeout, unrelated course, interruption, load,
+  landing/docking, or system mismatch clears it fail-closed.
 - Ship POIs and generic non-planet POIs are hidden and remain vanilla-owned.
 - SFSE permanent tasks are worker-thread producers only. Marshal ordinary
   engine work through `RE::BSService::TaskQueue`; enter Scaleform only from the

@@ -67,6 +67,12 @@ namespace CFS::BodyIndex
             StationTarget target;
         };
 
+        struct MapMarkerPlacement
+        {
+            std::uint32_t cellFormID{ 0 };
+            std::uint32_t referenceFormID{ 0 };
+        };
+
         constexpr std::uint32_t EncodeRuntimeFormID(std::uint32_t a_local,
             PluginInfo::Tier a_tier, std::uint16_t a_index)
         {
@@ -309,6 +315,7 @@ namespace CFS::BodyIndex
             const PluginInfo& a_plugin, const std::vector<PluginInfo>& a_masters,
             const std::unordered_set<std::uint32_t>& a_stationBases,
             std::unordered_map<std::uint32_t, StationPlacement>& a_out,
+            std::unordered_map<std::uint32_t, MapMarkerPlacement>& a_mapMarkers,
             std::unordered_map<std::uint32_t, std::string>& a_cellEditorIDs)
         {
             std::vector<std::byte> raw;
@@ -342,7 +349,7 @@ namespace CFS::BodyIndex
                     }
                     ParseStationReferenceGroup(a_file, groupEnd, nextCell, nextPlacedChild,
                         a_plugin, a_masters, a_stationBases, a_out,
-                        a_cellEditorIDs);
+                        a_mapMarkers, a_cellEditorIDs);
                     a_file.seekg(static_cast<std::streamoff>(groupEnd), std::ios::beg);
                     continue;
                 }
@@ -364,6 +371,12 @@ namespace CFS::BodyIndex
                     const auto cellID = ResolveFormID(record.formID, a_masters, a_plugin);
                     if ((record.flagsOrLabel & kDeleted) != 0) {
                         a_cellEditorIDs.erase(cellID);
+                        std::erase_if(a_out, [cellID](const auto& a_entry) {
+                            return a_entry.second.cellFormID == cellID;
+                        });
+                        std::erase_if(a_mapMarkers, [cellID](const auto& a_entry) {
+                            return a_entry.second.cellFormID == cellID;
+                        });
                         continue;
                     }
                     std::string editorID;
@@ -384,11 +397,13 @@ namespace CFS::BodyIndex
                 const auto referenceID = ResolveFormID(record.formID, a_masters, a_plugin);
                 if ((record.flagsOrLabel & kDeleted) != 0) {
                     a_out.erase(referenceID);
+                    a_mapMarkers.erase(referenceID);
                     continue;
                 }
 
                 std::uint32_t baseID = 0;
                 std::string editorID;
+                bool isMapMarker = false;
                 const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
                 ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
                     const std::byte* a_payload, std::size_t a_length) {
@@ -399,12 +414,25 @@ namespace CFS::BodyIndex
                     } else if (a_sig == "EDID" && a_length > 1) {
                         const auto* chars = reinterpret_cast<const char*>(a_payload);
                         editorID.assign(chars, ::strnlen(chars, a_length));
+                    } else if (a_sig == "XMRK") {
+                        isMapMarker = true;
                     }
                     return true;
                 });
 
-                if (!baseID)
+                if (isMapMarker) {
+                    a_mapMarkers.insert_or_assign(referenceID, MapMarkerPlacement{
+                        .cellFormID = a_currentCell,
+                        .referenceFormID = referenceID,
+                    });
+                } else {
+                    a_mapMarkers.erase(referenceID);
+                }
+
+                if (!baseID) {
+                    a_out.erase(referenceID);
                     continue;
+                }
                 if (!a_stationBases.contains(baseID)) {
                     a_out.erase(referenceID);
                     continue;
@@ -424,6 +452,7 @@ namespace CFS::BodyIndex
             const std::vector<PluginInfo>& a_masters,
             const std::unordered_set<std::uint32_t>& a_stationBases,
             std::unordered_map<std::uint32_t, StationPlacement>& a_out,
+            std::unordered_map<std::uint32_t, MapMarkerPlacement>& a_mapMarkers,
             std::unordered_map<std::uint32_t, std::string>& a_cellEditorIDs)
         {
             const auto path = std::filesystem::path{ "Data" } / a_plugin.name;
@@ -447,7 +476,8 @@ namespace CFS::BodyIndex
                 if (std::memcmp(&group.flagsOrLabel, "CELL", 4) == 0 ||
                     std::memcmp(&group.flagsOrLabel, "WRLD", 4) == 0) {
                     ParseStationReferenceGroup(file, groupEnd, 0, false, a_plugin,
-                        a_masters, a_stationBases, a_out, a_cellEditorIDs);
+                        a_masters, a_stationBases, a_out, a_mapMarkers,
+                        a_cellEditorIDs);
                 }
                 file.seekg(static_cast<std::streamoff>(groupEnd), std::ios::beg);
             }
@@ -604,6 +634,7 @@ namespace CFS::BodyIndex
             std::unordered_map<std::uint32_t, std::uint32_t> systemRoots;
             std::unordered_set<std::uint32_t> stationBases;
             std::unordered_map<std::uint32_t, StationPlacement> stationPlacements;
+            std::unordered_map<std::uint32_t, MapMarkerPlacement> mapMarkerPlacements;
             std::unordered_map<std::uint32_t, std::string> cellEditorIDs;
             std::unordered_map<std::string, PluginInfo> pluginByName;
             const auto fold = [](std::string text) {
@@ -644,7 +675,7 @@ namespace CFS::BodyIndex
                 ParsePlugin(context.plugin, context.masters, entries);
                 ParseSystemRoots(context.plugin, context.masters, systemRoots);
                 ParseStationPlacements(context.plugin, context.masters, stationBases,
-                    stationPlacements, cellEditorIDs);
+                    stationPlacements, mapMarkerPlacements, cellEditorIDs);
             }
 
             std::unordered_map<std::uint32_t, std::vector<StationTarget>> stationTargets;
@@ -652,14 +683,34 @@ namespace CFS::BodyIndex
                 (void)referenceID;
                 stationTargets[placement.cellFormID].push_back(std::move(placement.target));
             }
-            std::size_t stationReferenceCount = 0;
-            for (auto& [cellID, targets] : stationTargets) {
+            std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+                mapMarkersByCell;
+            for (const auto& [referenceID, placement] : mapMarkerPlacements) {
+                (void)referenceID;
+                mapMarkersByCell[placement.cellFormID].push_back(
+                    placement.referenceFormID);
+            }
+            for (auto& [cellID, markers] : mapMarkersByCell) {
                 (void)cellID;
+                std::ranges::sort(markers);
+                markers.erase(std::unique(markers.begin(), markers.end()),
+                    markers.end());
+            }
+            std::size_t stationReferenceCount = 0;
+            std::size_t stationCourseMarkerCount = 0;
+            for (auto& [cellID, targets] : stationTargets) {
                 std::ranges::sort(targets, {}, &StationTarget::referenceFormID);
                 targets.erase(std::unique(targets.begin(), targets.end(),
                     [](const StationTarget& a_left, const StationTarget& a_right) {
                         return a_left.referenceFormID == a_right.referenceFormID;
                     }), targets.end());
+                if (const auto markers = mapMarkersByCell.find(cellID);
+                    markers != mapMarkersByCell.end() &&
+                    markers->second.size() == 1) {
+                    for (auto& target : targets)
+                        target.courseFormID = markers->second.front();
+                    stationCourseMarkerCount += targets.size();
+                }
                 stationReferenceCount += targets.size();
             }
 
@@ -708,9 +759,11 @@ namespace CFS::BodyIndex
             g_ready.store(true, std::memory_order_release);
             REX::INFO("[bodies] load-order index ready: {} PNDT bodies, {} STDT system roots, "
                       "{} station bases, {} placed station refs in {} cells, "
+                      "{} exact station CELL/XMRK course links, "
                       "{} CELL/PNDT orbital links, {} ms",
                 count, systemRootCount, stationBaseCount, stationReferenceCount,
-                stationCellCount, stationOrbitalCount, elapsed);
+                stationCellCount, stationCourseMarkerCount, stationOrbitalCount,
+                elapsed);
         } }.detach();
     }
 

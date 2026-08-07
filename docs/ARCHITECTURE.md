@@ -16,10 +16,10 @@ GalaxyStarMapMenu movie
                     | stations: marker live reference or CELL
                     |   + active-load-order IsStarstation base
                     |   + current: exactly one indexed, live reference
-                    |   + remote: exactly one indexed REFR/base tuple
+                    |   + remote: one station REFR/base + one CELL-owned XMRK
                     | non-station markers: hidden / vanilla-owned
                     v
-              BodyDestination value (map id/type + target/base ids)
+              BodyDestination value (map id/type + public target/base/course ids)
                     |
                     +---- remote planet/moon/station: stock Back to galaxy
                     |       + verify same focused system/root
@@ -51,11 +51,15 @@ The active load order is parsed in memory on a background thread. Planet records
 retain their PNDT/GNAM identity and star records retain their STDT/DNAM system
 identity. Station bases are identified by the vanilla
 `IsStarstation` keyword; CELL placed references are then indexed by
-cell. CELL EDIDs and PNDT `DNAM` space-cell names are also indexed so a remote
-station can be joined to its exact orbital PNDT and unique `GNAM` ancestry.
-Current-system selections validate station references live immediately; remote
-station selections retain one exact indexed REFR/base tuple and validate it live
-only after vanilla reaches the target system. Full, medium, and
+cell. The parser also indexes XMRK-bearing placed references by their owning
+CELL. Remote station selection requires one exact station REFR/base tuple and
+one exact CELL-owned XMRK REFR: the former is the public/native target and the
+latter is the Cruise dispatch/readback identity. CELL EDIDs and PNDT `DNAM`
+space-cell names are also indexed so a remote station can be joined to its exact
+orbital PNDT and unique `GNAM` ancestry. Current-system selections validate
+station references live immediately and retain their existing physical-REFR
+course fallback; remote station selections retain both identities and validate
+them live only after vanilla reaches the target system. Full, medium, and
 light master mappings are respected. For a moon, parent lookup returns every
 live PNDT in the same GNAM system with `parent == 0` and `planet ==
 moon.parent`; automatic staging requires exactly one result and revalidates it
@@ -80,8 +84,13 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   requires the guarded load-event sink. A current-system station marker
   must be a live station reference or a CELL resolving to exactly one indexed,
   currently live reference whose base carries `IsStarstation`; a remote station
-  CELL must have exactly one indexed REFR/base tuple. Ship POIs and every other
-  non-station marker are hidden and remain vanilla-owned.
+  CELL must have exactly one indexed station REFR/base tuple and one CELL-owned
+  XMRK REFR. Ship POIs and every other non-station marker are hidden and remain
+  vanilla-owned. If a fast Starmap open
+  precedes load-order index readiness, the still-open session may capture the
+  first later unique cockpit-system resolution. This recovery requires the same
+  live session/movie generation and applies only while the snapshot is
+  unresolved; a captured system is never rewritten.
 - For a resolved current-system station CELL/reference, map close assigns the
   reference as the native ship target before any Cruise input or course event is
   issued.
@@ -138,18 +147,20 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   parent as an intermediate exact lock, the stronger parent-lock end and newer
   unique final-feed transition is required before the final lock. No second
   activation or dispatch occurs.
-  A retained remote station instead waits for its exact indexed REFR/base tuple
-  to become live after settled arrival. A live mismatch or ambiguity fails
-  closed. Exact native ship-target assignment/readback is required. One exact
-  station HUD row keeps the direct path. If the final row is absent, the station
-  CELL EDID must match exactly one PNDT `DNAM`; every traversed same-system GNAM
-  parent must be unique and a live PNDT. An exact ancestor with one HUD row
-  becomes the first private waypoint; the retained inward ancestry segment
-  permits only ordered exact intermediate locks. The shared continuation activates Cruise once
-  and dispatches only the retained station REFR. Stock may hold that request
-  latently or publish the waypoint as an intermediate exact lock. Active travel
-  is unbounded; matching exact station `bIsCruiseTargetLock` is the sole success
-  gate, and the public destination never changes to the waypoint.
+  A retained remote station instead waits for its exact indexed physical
+  REFR/base tuple to become live after settled arrival. A live mismatch or
+  ambiguity fails closed. Exact native ship-target assignment/readback is
+  required. The exact CELL-owned XMRK is independently revalidated and becomes
+  the course identity. One exact XMRK HUD row keeps the direct path. If that row
+  is absent, the station CELL EDID must match exactly one PNDT `DNAM`; every
+  traversed same-system GNAM parent must be unique and a live PNDT. An exact
+  ancestor with one HUD row becomes the first private waypoint; the retained
+  inward ancestry segment permits only ordered exact intermediate locks. The
+  shared continuation activates Cruise once and dispatches only the retained
+  XMRK. Stock may hold that request latently or publish the waypoint as an
+  intermediate exact lock. Active travel is unbounded; matching exact XMRK
+  `bIsCruiseTargetLock` is the sole success gate, and the public destination
+  never changes from the physical station to the course marker or waypoint.
   Physical-hold and application-focus cleanup does not demote the accepted
   `MapSelection` state. While either that state or the guarded remote-route
   request remains active, ordinary current-system reconciliation cannot clear

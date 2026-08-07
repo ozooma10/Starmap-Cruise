@@ -14,7 +14,9 @@ the selection as the one `StarMapMenuMarkersData` row whose
 `bIsInHighlightRadius` value is true. Planet and moon rows are joined exactly to
 the dossier PNDT identity. A station marker may identify either its live
 reference or its map cell; the active-plugin index resolves the latter to one
-indexed, currently live reference whose ship base carries `IsStarstation`.
+indexed station reference whose ship base carries `IsStarstation`. Remote
+stations additionally require one exact XMRK course reference owned by that
+same CELL; the physical station becomes live only after system arrival.
 Ship POIs and every other non-station marker are intentionally hidden; zero,
 multiple, mismatched, or invalid-view candidates remain entirely vanilla-owned.
 
@@ -57,19 +59,21 @@ retained-moon row reports the exact lock. A
 published exact parent lock, when present, receives the stronger parent/feed
 transition audit. The public destination remains the moon throughout.
 A remote station marker must be a CELL with exactly one active-load-order indexed
-REFR/base tuple. After vanilla arrives in the retained system and the world
-settles, that same REFR must become live with that exact `IsStarstation` base.
-Only then does the plugin assign it as the native ship target and require exact
-setter readback. A station already exposed as exactly one HUD row takes the
-direct path. Otherwise the index joins the station CELL EDID to PNDT `DNAM`,
-walks its unique same-system `GNAM` ancestry, and requires an exact ancestor
-with exactly one HUD row as the first private waypoint. One stock Cruise
-activation and one retained-station dispatch may then resolve latently through
-that waypoint and only ordered inward ancestors;
-only the station REFR's exact `bIsCruiseTargetLock` completes the course. The
-public destination remains the station, and the travel phase has no arbitrary
-duration limit. Current-system stations continue to resolve and assign on map
-close. Ship POIs and generic non-planet markers expose no plugin action.
+station REFR/base tuple and exactly one CELL-owned XMRK REFR. After vanilla
+arrives in the retained system and the world settles, the station REFR must
+become live with that exact `IsStarstation` base. Only then does the plugin
+assign the physical station as the native ship target and require exact setter
+readback. The separately retained XMRK is the Cruise course identity. An XMRK
+already exposed as exactly one HUD row takes the direct path. Otherwise the
+index joins the station CELL EDID to PNDT `DNAM`, walks its unique same-system
+`GNAM` ancestry, and requires an exact ancestor with exactly one HUD row as the
+first private waypoint. One stock Cruise activation and one exact XMRK dispatch
+may then resolve latently through that waypoint and only ordered inward
+ancestors; only the XMRK's exact `bIsCruiseTargetLock` completes the course. The
+public destination remains the physical station, and the travel phase has no
+arbitrary duration limit. Current-system stations continue to resolve and
+assign on map close. Ship POIs and generic non-planet markers expose no plugin
+action.
 
 ## Interaction
 
@@ -111,14 +115,16 @@ close. Ship POIs and generic non-planet markers expose no plugin action.
   that lock must end while Cruise remains active and the target system remains
   settled; a newer cockpit feed must then uniquely expose the retained moon.
   For a station, settled arrival instead requires the retained static CELL,
-  REFR, and base to resolve to the same live identity. Native target assignment
-  and readback must succeed. A missing final row can continue only when the CELL
-  maps uniquely through PNDT `DNAM` and every traversed `GNAM` parent is unique,
-  live, in-system, and exact; an ancestor with one HUD row becomes the first
-  private waypoint, and later exact intermediate locks must move inward along
-  the retained ancestry chain. Cruise remains pending through unbounded active travel, and
-  only the retained station's exact course-lock readback succeeds. Identity,
-  HUD-row, activation, dispatch, and feed-transition timeouts fail closed.
+  physical REFR/base, and CELL-owned XMRK course REFR to resolve to the same
+  exact indexed identities. Native physical-target assignment and readback must
+  succeed. A missing XMRK row can continue only when the CELL maps uniquely
+  through PNDT `DNAM` and every traversed `GNAM` parent is unique, live,
+  in-system, and exact; an ancestor with one HUD row becomes the first private
+  waypoint, and later exact intermediate locks must move inward along the
+  retained ancestry chain. Cruise remains pending through unbounded active
+  travel, and only the retained XMRK's exact course-lock readback succeeds.
+  Identity, HUD-row, activation, dispatch, and feed-transition timeouts fail
+  closed.
 - When the cockpit's stock Cruise action is currently available, completing the
   Starmap hold fill marks the target, closes the complete Starmap/Data Menu
   stack, and latches a held state through the stock
@@ -191,21 +197,23 @@ A Starmap press may be consumed only when all of these gates pass:
 5. A current-system station marker must be a live reference whose base carries
    `IsStarstation`, or a cell that resolves to exactly one indexed, currently live
    reference with such a base. A remote station must be a CELL with exactly one
-   indexed REFR/base tuple and the guarded load-event sink. It uses the same exact
-   STDT/DNAM system route as a remote body; after settled arrival, the retained
-   REFR and base must resolve live and native target setter/readback must agree.
-   A missing final row requires one exact CELL-EDID/PNDT-DNAM orbital identity,
-   a unique live GNAM ancestry chain, and one exact visible ancestor row before
-   Cruise. Only the retained station REFR's exact `bIsCruiseTargetLock` succeeds.
-   Ship POIs and other non-station markers are hidden.
-   The map id/type and resolved target ID are retained separately.
+   indexed station REFR/base tuple, exactly one CELL-owned XMRK REFR, and the
+   guarded load-event sink. It uses the same exact STDT/DNAM system route as a
+   remote body; after settled arrival, the retained physical REFR/base and XMRK
+   must resolve live and native physical-target setter/readback must agree. A
+   missing XMRK row requires one exact CELL-EDID/PNDT-DNAM orbital identity, a
+   unique live GNAM ancestry chain, and one exact visible ancestor row before
+   Cruise. Only the retained XMRK's exact `bIsCruiseTargetLock` succeeds. Ship
+   POIs and other non-station markers are hidden. The map id/type, public/native
+   station target, and Cruise course target are retained separately.
 
 The highlight-radius discriminator was proven with planet, moon, revisit,
 rapid-switch, invalid-view, station, empty-space, and movie-reopen controls.
 Planet/moon direct course dispatch and readback are runtime-proven. Current-system
-station gameplay is runtime-proven. Static 1.16.244 analysis verifies the remote
-station identity, native target assignment, and CELL/DNAM/GNAM ancestry path;
-its end-to-end remote continuation remains pending. Ship POIs and generic
+station gameplay is runtime-proven. A remote RE-939 trace proved the vanilla
+system jump, physical station assignment, engine-owned travel, and arrival, and
+identified its exact CELL-owned XMRK course identity; the corrected dual-identity
+dispatch/readback still requires a fresh trace. Ship POIs and generic
 non-planet markers are intentionally unsupported and hidden. The two-activation parent-staged remote-moon flow is
 runtime-proven by a no-mouse Triton trace. A one-activation Chawla trace proved
 that Starfield can retain the final-moon event without publishing a parent lock
@@ -213,8 +221,8 @@ and later exact-lock and reach Chawla; the corrected plugin-side latent-retentio
 gate remains pending a fresh trace.
 
 No raw `TESForm*` survives a menu transition. Destination state is a value
-containing only kind, map id/type, resolved target/base ids, target-system identity,
-localized name, and menu generation.
+containing only kind, map id/type, resolved public target/base/course ids,
+target-system identity, localized name, and menu generation.
 
 ## Configuration
 
