@@ -140,11 +140,9 @@ action.
   such as its short post-exit cooldown, the same tap-only action marks the target
   without advertising or attempting a hold-to-engage action.
 
-`TapHoldCruise` is the only exposed flow. Older `SelectThenCruise`, `MarkOnly`,
-and `HoldToCruise` custom values are read for compatibility, warn at startup,
-and use `TapHoldCruise` behavior. If Cruise is already active when the map opens,
-an accepted selection retargets it immediately. The custom blue marker remains
-optional and is not the ship target or Cruise itself.
+The tap/hold interaction is fixed rather than configurable. If Cruise is already
+active when the map opens, an accepted current-system selection retargets it
+immediately.
 
 Selecting a marked current-system target again clears the mark. It only toggles
 an existing autopilot lock off if the cockpit feed confirms that the same target
@@ -227,17 +225,14 @@ Edit `Data/SFSE/Plugins/CruiseFromStarmapCustom.ini`, not the shipped default:
 
 ```ini
 [General]
-sMode=TapHoldCruise
-bShowMarker=false
-bShowDestinationName=true
 bVerboseLog=true
 ```
 
-`bShowMarker` controls rendering only. Exact high-frequency distance sampling
-continues while it is false so the independent lock-loss/close-distance arrival
-audit can clear a completed destination safely. The provider reports meters;
-the guarded `0.05` light-second threshold is converted to meters before
-comparison.
+The plugin does not draw a cockpit target overlay. It still samples the exact
+retained course row's high-frequency distance so the independent
+lock-loss/close-distance arrival audit can clear a completed destination safely.
+The provider reports meters; the guarded `0.05` light-second threshold is
+converted to meters before comparison.
 
 The custom file overrides the default and is never created or written by the
 plugin. The separate Starmap action follows the primary keyboard binding for the

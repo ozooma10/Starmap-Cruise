@@ -81,7 +81,7 @@ movie's public user-event method from the post-advance Scaleform pump instead.
   without consuming input or reporting a false lock
 - [ ] HUD movie rebuild, focus loss, load, and repeated map cycles are safe
 - [ ] Disabled eligibility reasons render and never consume input
-- [ ] Cruise Navigation Panel coexists; both input hooks chain and markers remain independent
+- [ ] Cruise Navigation Panel coexists and both input hooks chain
 - [ ] Save made during use loads after uninstall
 
 Remaining runtime work for this matrix is Lane A because a person must focus
@@ -158,19 +158,16 @@ These are source/build results, not production gameplay acceptance:
 - [x] Guarded restart passed the runtime/prologue gate, indexed 1,783 PNDT
   records, resolved Alpha Centauri, subscribed both HUD feeds, and opened ten
   fresh Starmap generations without repeating the AS3 subscription crash.
-- [x] Gagarin marked and displayed the blue runtime marker; Kurtz and Jemison
-  replaced the destination; Jemison displayed the marker; selecting Jemison
-  again cleared it visibly and returned navigation state to idle.
+- [x] Gagarin marked successfully; Kurtz and Jemison replaced the destination;
+  selecting Jemison again cleared it and returned navigation state to idle.
 - [x] The Eye was rejected as marker `0001285A`, type 4, and remained
   vanilla-owned. Inspect view 2 and galaxy view 0 were also logged as
   vanilla-owned; neither was consumed or closed by the plugin.
 - [x] Several normal Starmap closes with `accepted=false` preserved the current
   mark, proving cancel/no-selection behavior in the exercised session.
 - [ ] Kurtz selection resolved and stored PNDT `0005E312` with the correct moon
-  GNAM, but no blue marker was visible. A subsequent Jemison control rendered
-  correctly, isolating the remaining issue to moon availability/bearing in the
-  HUD target feeds or the production row join. Do not claim the off-screen/moon
-  marker row until that path is instrumented and proven.
+  GNAM, but did not produce a usable joined cockpit row. Do not claim the
+  off-screen moon row from that historical trace.
 
 ## 2026-08-04 SelectThenCruise implementation
 
@@ -183,8 +180,7 @@ These include source/build evidence and the first production gameplay capture:
   Cruise, it uses the existing immediate retarget path.
 - [x] The carried map control remains suppressed until release; no synthetic
   input or engine Cruise-start call was added.
-- [x] Changed the shipped default to `SelectThenCruise` and disabled the custom
-  blue HUD marker by default. The marker remains opt-in through the custom INI.
+- [x] Changed the shipped default to `SelectThenCruise` in this historical build.
 - [x] Fresh build/package/deployment DLL hashes match:
   `69839AE1E644B261C019B739E8AC6908F3AB8527B2E3493A8579CA3255107642`.
 - [x] Live Gagarin selection stored PNDT `0005E311` and closed the map without
@@ -1179,21 +1175,18 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   later on low-feed revision 11; no unrelated-course or fail-closed clear
   occurred. The operator confirmed physical arrival at Starstation RE-939.
 
-### 2026-08-07 marker-independent arrival sampling
+### 2026-08-07 retained-target arrival sampling
 
 - [x] The validated RE-939 course lock ended after 102.9 seconds, but the
   two-second arrival audit logged no evidence and preserved public mark
-  `000013B8` despite operator-confirmed arrival. The winning default has
-  `bShowMarker=false`.
-- [x] `UpdateMarker` returned before joining the exact low-frequency target row
-  to its high-frequency bearing whenever marker rendering was disabled, so
-  `g_markedDistance` remained `-1`. This was a rendering-policy dependency, not
-  failed travel or failed exact course identity.
-- [x] Distance sampling now occurs for every valid exact retained-course bearing
-  before the visual setting is checked. `bShowMarker=false` still prevents all
-  plugin marker creation/rendering, while the last valid distance remains
-  available across the lock-loss transition. Destination replacement/clear
-  still resets the sample to `-1`.
+  `000013B8` despite operator-confirmed arrival.
+- [x] The then-present marker updater returned before joining the exact
+  low-frequency target row to its high-frequency sample when rendering was
+  disabled, so the retained distance remained `-1`. This was a presentation
+  dependency, not failed travel or failed exact course identity.
+- [x] Distance sampling was separated from presentation. The dedicated sampler
+  retains every valid exact-course distance across the lock-loss transition;
+  destination replacement/clear still resets the sample to `-1`.
 - [x] The first default-config retest exact-locked Olivas `0005E313`, then began
   the two-second audit when that lock ended after 29.7 seconds, but again logged
   no arrival evidence and preserved the mark. The prior live probe proves
@@ -1204,15 +1197,15 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   comparison. Lock-loss and audit logs include the sampled meter value and
   threshold so the next test distinguishes valid close arrival from manual exit
   without inference.
-- [x] The marker-independent-only build passed exact releasedbg configure/build/deploy and
+- [x] The distance-sampling correction passed exact releasedbg configure/build/deploy and
   `xmake install -o release/Data -y` passed with inherited CommonLibSF warnings
   only. Build, active MO2, and release-package hashes all match:
   DLL `AA3149654D97347034AFA32444427B31319E67BC8F6EFBA7745DC532C6A09ABC`,
   PDB `793D4D1C327CD35B6033C55EFB276F9AED859E572CB4B27163ED83C781EEF40B`,
   and default INI
   `6873CBEE7241BF901146B61B01543FB3094EE54C1A384291CBD969BA37A46649`.
-  The active default has `bShowMarker=false` and `bVerboseLog=true`; no winning
-  custom override was found. These hashes predate the meter-unit correction.
+  The active default had `bVerboseLog=true`; no winning custom override was
+  found. These hashes predate the meter-unit correction.
 - [x] With Starfield closed, the meter-unit correction passed exact releasedbg
   configure/build/deploy and package refresh with inherited CommonLibSF warnings
   only. Build, active MO2, and release-package hashes all match:
@@ -1293,3 +1286,27 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
 - [ ] Restart Starfield, then open the Starmap immediately after loading. Confirm
   the log reports recovered current system for the same open session and the
   Cruise action appears without closing and reopening the map.
+
+## 2026-08-07 custom marker and mode removal
+
+- [x] Removed all plugin-created positional-marker sprites, glyphs, text fields,
+  colors, angle parsing, GFx handles, construction, movement, visibility, and
+  reset code. The plugin no longer draws a cockpit target overlay.
+- [x] Replaced the former bearing snapshot with a distance-only snapshot and a
+  dedicated exact low/high-row join. The last valid retained-course distance
+  still feeds the lock-loss arrival audit and resets on destination replacement
+  or clear.
+- [x] Removed `sMode` and its legacy-value compatibility path. The default and
+  custom-example INIs now expose only `bVerboseLog`.
+- [x] Releasedbg configure/build/deploy and `xmake install -o release/Data -y`
+  passed with inherited CommonLibSF warnings only. Build, active MO2, and
+  release-package hashes all match: DLL
+  `699B7A8EDCB27BD93E38D14D9B481DF4C78ABF1BFEA0E3D5A26684FA94108FE6`,
+  PDB `FF4DDA16495418779F3D75ACFD58CC15987E74956D4B0AF98D0ABA69A012F28A`,
+  and default INI
+  `EC6DEC97ACA8723DE975C1EB987C8B1943BEADC7A3B534BFF7C92BB2404852BC`.
+  The active default has `bVerboseLog=true`; no removed option or stale marker
+  identifier remains in the built DLL.
+- [ ] Run one restarted no-mouse remote-moon regression and require the existing
+  vanilla jump, final exact-lock, and arrival-clear evidence with no plugin HUD
+  overlay.

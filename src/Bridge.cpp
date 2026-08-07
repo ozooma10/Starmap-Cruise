@@ -17,7 +17,6 @@
 #include <array>
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <cstring>
 #include <exception>
 #include <format>
@@ -44,8 +43,6 @@ namespace CFS::Bridge
         constexpr std::uint32_t kMoonType = 3;
         constexpr double kLightSecondMeters = 299'792'458.0;
         constexpr double kArrivalDistanceMeters = 0.05 * kLightSecondMeters;
-        constexpr std::uint32_t kNavigationColor = 0x66CCFF;
-        constexpr std::uint32_t kCruiseColor = 0xF5A04E;
         constexpr const char* kCruiseMapActionLabel = "SET CRUISE TARGET";
         constexpr const char* kRemoteCruiseMapActionLabel = "JUMP THEN CRUISE";
         constexpr const char* kCruiseMapActionHoldLabel = "HOLD TO CRUISE";
@@ -371,14 +368,13 @@ namespace CFS::Bridge
         std::atomic<bool> g_hudLowDirty{ false };
         std::atomic<std::uint64_t> g_hudLowRevision{ 0 };
 
-        struct Bearing
+        struct DistanceSample
         {
             bool valid{ false };
-            double angle{ 0.0 };
             double distance{ -1.0 };
         };
-        std::mutex g_hudBearingsMutex;
-        std::vector<Bearing> g_hudBearings;
+        std::mutex g_hudDistancesMutex;
+        std::vector<DistanceSample> g_hudDistances;
         std::atomic<bool> g_hudUiDirty{ false };
         std::atomic<double> g_markedDistance{ -1.0 };
         std::atomic<bool> g_courseWasLocked{ false };
@@ -386,15 +382,6 @@ namespace CFS::Bridge
         std::atomic<std::int64_t> g_arrivalCheckTicks{ 0 };
 
         std::atomic<std::int64_t> g_lastUnsettledTicks{ 0 };
-
-        std::atomic<bool> g_markerReady{ false };
-        std::atomic<bool> g_markerFailed{ false };
-        std::atomic<bool> g_markerBuildInFlight{ false };
-        V g_marker;
-        V g_navGlyph;
-        V g_cruiseGlyph;
-        V g_markerLabel;
-        V g_markerFormat;
 
         using ProcessInput_t = void (*)(RE::BSInputEventReceiver*, const RE::InputEvent*);
         std::atomic<ProcessInput_t> g_originalInput{ nullptr };
@@ -1044,12 +1031,6 @@ namespace CFS::Bridge
         {
             std::lock_guard lock{ g_remoteMoonMutex };
             g_remoteMoonContinuation = {};
-        }
-
-        void HideMarker()
-        {
-            if (g_markerReady.load(std::memory_order_acquire))
-                g_marker.SetMember("visible", V{ false });
         }
 
         void CancelOrReleaseHudCruiseInput(const char* a_reason)
@@ -4054,21 +4035,18 @@ namespace CFS::Bridge
         class HighCollector : public V::ArrayVisitor
         {
         public:
-            std::vector<Bearing> rows;
+            std::vector<DistanceSample> rows;
 
             void Visit(std::uint32_t a_index, const V& a_value) override
             {
                 V entry = a_value;
-                V angle;
-                Bearing row;
-                if (entry.GetMember("angleToCrosshair", &angle) &&
-                    (angle.IsNumber() || angle.IsInt() || angle.IsUInt())) {
-                    row.valid = true;
-                    row.angle = AsNumber(angle);
-                }
+                DistanceSample row;
                 V distance;
-                if (entry.GetMember("distance", &distance))
+                if (entry.GetMember("distance", &distance) &&
+                    (distance.IsNumber() || distance.IsInt() || distance.IsUInt())) {
+                    row.valid = true;
                     row.distance = AsNumber(distance);
+                }
                 if (rows.size() <= a_index)
                     rows.resize(a_index + 1);
                 rows[a_index] = row;
@@ -4092,159 +4070,25 @@ namespace CFS::Bridge
             return Clock::now() - born >= kHudMovieSettleTime;
         }
 
-        bool AddSprite(RE::Scaleform::GFx::ASMovieRootBase* a_root, V& a_parent,
-            V& a_out, const char* a_name, std::int32_t a_depth = 21000)
-        {
-            if (a_parent.CreateEmptyMovieClip(&a_out, a_name, a_depth))
-                return true;
-            a_root->CreateObject(&a_out, "flash.display.Sprite");
-            if (!(a_out.IsObject() || a_out.IsDisplayObject()))
-                return false;
-            V added;
-            return a_parent.Invoke("addChild", &added, &a_out, 1);
-        }
-
-        bool BorrowTextFormat(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            const std::string& a_base, V& a_format)
-        {
-            const char* donors[]{
-                ".Reticle_mc.ShipReticle_mc.LockOn_mc.LockText_tf",
-                ".Reticle_mc.ShipReticle_mc.Distance_tf",
-                ".DebugText_tf",
-            };
-            for (const auto* suffix : donors) {
-                V donor;
-                if (a_root->GetVariable(&donor, (a_base + suffix).c_str()) &&
-                    donor.Invoke("getTextFormat", &a_format) && a_format.IsObject())
-                    return true;
-            }
-            return false;
-        }
-
-        bool DrawDiamond(V& a_clip, std::uint32_t a_color)
-        {
-            V graphics;
-            if (!a_clip.GetMember("graphics", &graphics))
-                return false;
-            constexpr double half = 12.0;
-            V fill[]{ V{ a_color }, V{ 1.0 } };
-            graphics.Invoke("beginFill", nullptr, fill, 2);
-            V p0[]{ V{ 0.0 }, V{ -half } };
-            V p1[]{ V{ half * 0.62 }, V{ 0.0 } };
-            V p2[]{ V{ 0.0 }, V{ half } };
-            V p3[]{ V{ -half * 0.62 }, V{ 0.0 } };
-            graphics.Invoke("moveTo", nullptr, p0, 2);
-            graphics.Invoke("lineTo", nullptr, p1, 2);
-            graphics.Invoke("lineTo", nullptr, p2, 2);
-            graphics.Invoke("lineTo", nullptr, p3, 2);
-            graphics.Invoke("lineTo", nullptr, p0, 2);
-            graphics.Invoke("endFill", nullptr, nullptr, 0);
-            return true;
-        }
-
-        void TryCreateMarker(RE::Scaleform::GFx::ASMovieRootBase* a_root, const char* a_rootPath)
-        {
-            if (!Settings::ShowMarker() || g_markerReady.load(std::memory_order_acquire) ||
-                g_markerFailed.load(std::memory_order_acquire) || !WorldSettled())
-                return;
-            if (g_markerBuildInFlight.exchange(true, std::memory_order_acq_rel))
-                return;
-            struct Release { ~Release() { g_markerBuildInFlight.store(false, std::memory_order_release); } } release;
-
-            const std::string base{ a_rootPath ? a_rootPath : "root" };
-            V reticle;
-            if (!a_root->GetVariable(&reticle, (base + ".Reticle_mc").c_str()))
-                return;
-            if (!AddSprite(a_root, reticle, g_marker, "CruiseFromStarmapMarker") ||
-                !AddSprite(a_root, g_marker, g_navGlyph, "NavigationGlyph") ||
-                !AddSprite(a_root, g_marker, g_cruiseGlyph, "CruiseGlyph") ||
-                !DrawDiamond(g_navGlyph, kNavigationColor) ||
-                !DrawDiamond(g_cruiseGlyph, kCruiseColor)) {
-                g_markerFailed.store(true, std::memory_order_release);
-                REX::WARN("[marker] runtime marker construction failed");
-                return;
-            }
-
-            a_root->CreateObject(&g_markerLabel, "flash.text.TextField");
-            if (g_markerLabel.IsObject() || g_markerLabel.IsDisplayObject()) {
-                V added;
-                g_marker.Invoke("addChild", &added, &g_markerLabel, 1);
-                g_markerLabel.SetMember("selectable", V{ false });
-                g_markerLabel.SetMember("mouseEnabled", V{ false });
-                g_markerLabel.SetMember("width", V{ 360.0 });
-                g_markerLabel.SetMember("height", V{ 28.0 });
-                g_markerLabel.SetMember("x", V{ 18.0 });
-                g_markerLabel.SetMember("y", V{ -14.0 });
-                if (BorrowTextFormat(a_root, base, g_markerFormat)) {
-                    g_markerFormat.SetMember("size", V{ 18.0 });
-                    g_markerLabel.SetMember("defaultTextFormat", g_markerFormat);
-                }
-            }
-
-            g_marker.SetMember("visible", V{ false });
-            g_navGlyph.SetMember("visible", V{ true });
-            g_cruiseGlyph.SetMember("visible", V{ false });
-            g_markerReady.store(true, std::memory_order_release);
-            REX::INFO("[marker] runtime navigation/cruise marker ready");
-        }
-
-        void UpdateMarker(RE::Scaleform::GFx::ASMovieRootBase* a_root, const char* a_rootPath,
-            const std::vector<Bearing>& a_bearings)
+        void UpdateMarkedDistance(const std::vector<DistanceSample>& a_distances)
         {
             const auto destination = Destination();
-            if (!destination) {
-                HideMarker();
+            if (!destination)
                 return;
-            }
 
             std::size_t index = static_cast<std::size_t>(-1);
-            bool courseLocked = false;
             {
                 std::lock_guard lock{ g_hudRowsMutex };
-                const auto count = std::min(g_hudRows.size(), a_bearings.size());
+                const auto count = std::min(g_hudRows.size(), a_distances.size());
                 for (std::size_t i = 0; i < count; ++i)
                     if (g_hudRows[i].id == CourseTargetID(*destination)) {
                         index = i;
-                        courseLocked = g_hudRows[i].courseLocked;
                         break;
                     }
             }
-            const bool haveBearing = index != static_cast<std::size_t>(-1) &&
-                a_bearings[index].valid;
-            if (haveBearing)
-                g_markedDistance.store(a_bearings[index].distance,
+            if (index != static_cast<std::size_t>(-1) && a_distances[index].valid)
+                g_markedDistance.store(a_distances[index].distance,
                     std::memory_order_release);
-
-            // Arrival auditing is independent of the optional visual marker.
-            // Keep sampling the exact retained course row with bShowMarker=false,
-            // but never create or display plugin UI in that configuration.
-            if (!Settings::ShowMarker() || !haveBearing) {
-                HideMarker();
-                return;
-            }
-
-            TryCreateMarker(a_root, a_rootPath);
-            if (!g_markerReady.load(std::memory_order_acquire))
-                return;
-
-            const double radians = a_bearings[index].angle * 3.14159265358979323846 / 180.0;
-            constexpr double radius = 150.0;
-            g_marker.SetMember("x", V{ radius * std::sin(radians) });
-            g_marker.SetMember("y", V{ -radius * std::cos(radians) });
-            g_marker.SetMember("visible", V{ true });
-            g_navGlyph.SetMember("visible", V{ !courseLocked });
-            g_cruiseGlyph.SetMember("visible", V{ courseLocked });
-            if (g_markerLabel.IsObject() || g_markerLabel.IsDisplayObject()) {
-                g_markerLabel.SetMember("visible", V{ Settings::ShowDestinationName() });
-                if (Settings::ShowDestinationName()) {
-                    g_markerLabel.SetMember("text", V{ destination->localizedName.c_str() });
-                    g_markerLabel.SetMember("textColor", V{ courseLocked ? kCruiseColor : kNavigationColor });
-                    if (g_markerFormat.IsObject()) {
-                        g_markerFormat.SetMember("color", V{ courseLocked ? kCruiseColor : kNavigationColor });
-                        g_markerLabel.Invoke("setTextFormat", nullptr, &g_markerFormat, 1);
-                    }
-                }
-            }
         }
 
         class HighHandler : public RE::Scaleform::GFx::FunctionHandler
@@ -4267,8 +4111,8 @@ namespace CFS::Bridge
                 HighCollector collector;
                 array.VisitElements(&collector);
                 {
-                    std::lock_guard lock{ g_hudBearingsMutex };
-                    g_hudBearings = std::move(collector.rows);
+                    std::lock_guard lock{ g_hudDistancesMutex };
+                    g_hudDistances = std::move(collector.rows);
                 }
                 // Passed GFx values die with this callback. The post-advance
                 // pump consumes only copied C++ rows before entering AS3.
@@ -4286,16 +4130,9 @@ namespace CFS::Bridge
                 g_pendingMapAction.store(MapAction::kNone, std::memory_order_release);
             }
             if ((reset & kResetHudUi) != 0) {
-                g_markerReady.store(false, std::memory_order_release);
-                g_markerFailed.store(false, std::memory_order_release);
-                g_marker = V{};
-                g_navGlyph = V{};
-                g_cruiseGlyph = V{};
-                g_markerLabel = V{};
-                g_markerFormat = V{};
                 {
-                    std::lock_guard lock{ g_hudBearingsMutex };
-                    g_hudBearings.clear();
+                    std::lock_guard lock{ g_hudDistancesMutex };
+                    g_hudDistances.clear();
                 }
             }
         }
@@ -4336,10 +4173,10 @@ namespace CFS::Bridge
 
             DriveHudCruiseInput(root, rootPath);
 
-            std::vector<Bearing> bearings;
+            std::vector<DistanceSample> distances;
             {
-                std::lock_guard lock{ g_hudBearingsMutex };
-                bearings = g_hudBearings;
+                std::lock_guard lock{ g_hudDistancesMutex };
+                distances = g_hudDistances;
             }
 
             V cruise;
@@ -4412,7 +4249,7 @@ namespace CFS::Bridge
                 }
             }
 
-            UpdateMarker(root, rootPath, bearings);
+            UpdateMarkedDistance(distances);
             RunCourseRequest(root);
         }
 
@@ -5558,8 +5395,6 @@ namespace CFS::Bridge
                 g_processedHudSnapshot = {};
             }
             g_hudLowDirty.store(false, std::memory_order_release);
-            g_markerReady.store(false, std::memory_order_release);
-            g_markerFailed.store(false, std::memory_order_release);
             g_cruiseActive.store(false, std::memory_order_release);
             g_cruiseEngageAvailable.store(false, std::memory_order_release);
             g_hudUiDirty.store(true, std::memory_order_release);

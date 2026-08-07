@@ -37,9 +37,7 @@ GalaxyStarMapMenu movie
                     v
 SpaceshipHudMenu movie
   TargetLowFrequencyProvider -------- uniqueID/name/course-lock/current system
-  TargetHighFrequencyProvider ------- index-aligned bearing + distance
-                    |
-                    +---- optional positional marker and localized label
+  TargetHighFrequencyProvider ------- index-aligned distance evidence
                     |
                     +---- ProcessUserEvent("Cruise", down/up)
                     |
@@ -222,11 +220,10 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
 
 The mark survives manual Cruise exits and interruptions. A lost Cruise lock
 starts a two-second arrival audit; the mark clears only when the prior lock and
-close-distance evidence agree. Exact high-frequency distance sampling is
-independent of `bShowMarker`; that setting controls rendering only. A last valid
-sample survives the target row disappearing during the lock transition. The
-provider distance is meters, so the `0.05` light-second guard is converted to
-`14,989,622.9` meters before comparison.
+close-distance evidence agree. A dedicated exact, index-aligned high-frequency
+distance sample survives the target row disappearing during the lock transition.
+The provider distance is meters, so the `0.05` light-second guard is converted
+to `14,989,622.9` meters before comparison.
 Landing/docking, leaving the pilot seat, a
 system change, a loading transition, explicit toggle, or replacement also
 clears a normal mark. `PendingJump` instead survives expected travel transitions
@@ -320,8 +317,8 @@ replacement.
   payload changes stay evidence-pinned.
 - Feed callbacks copy passed GFx payloads into plain C++ snapshots or queue a
   value action, then return without fetching another root or invoking AS3.
-  HUD object construction, forwarded Cruise edges, marker movement, course
-  dispatch, and map-button updates run afterward from the
+  Forwarded Cruise edges, retained-target distance sampling, course dispatch,
+  and map-button updates run afterward from the
   post-advance pump. Stale GFx handles are released there as well.
 - Input interception only reads/copies value state, edits its own queue links
   for the duration of the UI call, and restores them in reverse order.

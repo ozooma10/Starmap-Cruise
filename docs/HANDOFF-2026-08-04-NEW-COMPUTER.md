@@ -215,20 +215,14 @@ Expected deploy directory:
 
 The Cruise focus trace is opt-in and quiet until `stcruise focus start` is issued.
 
-## Current production behavior
+## Historical production behavior
+
+This section records the 2026-08-04 build and is superseded by `README.md` and
+`docs/ARCHITECTURE.md`. Its retired mode and custom HUD-marker configuration are
+intentionally omitted.
 
 The 0.1.0 plugin is standalone: no ESP, Papyrus, serialization, save forms, SWF replacement,
 runtime-created files, Cruise Navigation Panel dependency, or public inter-plugin API.
-
-Configuration defaults to:
-
-```ini
-[General]
-sMode=MarkOnly
-bShowMarker=true
-bShowDestinationName=true
-bVerboseLog=true
-```
 
 The intended flow is current-system planets/moons only. Stations, POIs, ships, other systems,
 surface/galaxy/inspect views, grav-jump routes, and native ship target assignment remain deferred.
