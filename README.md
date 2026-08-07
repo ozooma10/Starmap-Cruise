@@ -212,8 +212,8 @@ rapid-switch, invalid-view, station, empty-space, and movie-reopen controls.
 Planet/moon direct course dispatch and readback are runtime-proven. Current-system
 station gameplay is runtime-proven. A remote RE-939 trace proved the vanilla
 system jump, physical station assignment, engine-owned travel, and arrival, and
-identified its exact CELL-owned XMRK course identity; the corrected dual-identity
-dispatch/readback still requires a fresh trace. Ship POIs and generic
+validated exact dispatch/readback through its CELL-owned XMRK course identity.
+Ship POIs and generic
 non-planet markers are intentionally unsupported and hidden. The two-activation parent-staged remote-moon flow is
 runtime-proven by a no-mouse Triton trace. A one-activation Chawla trace proved
 that Starfield can retain the final-moon event without publishing a parent lock
@@ -236,6 +236,12 @@ bShowDestinationName=true
 bShowTargetStatus=true
 bVerboseLog=true
 ```
+
+`bShowMarker` controls rendering only. Exact high-frequency distance sampling
+continues while it is false so the independent lock-loss/close-distance arrival
+audit can clear a completed destination safely. The provider reports meters;
+the guarded `0.05` light-second threshold is converted to meters before
+comparison.
 
 The custom file overrides the default and is never created or written by the
 plugin. The separate Starmap action follows the primary keyboard binding for the

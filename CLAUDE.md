@@ -97,6 +97,11 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
   handshake/feed timeout, unrelated course, interruption, load,
   landing/docking, or system mismatch clears it fail-closed.
 - Ship POIs and generic non-planet POIs are hidden and remain vanilla-owned.
+- `bShowMarker` gates only plugin marker rendering. Exact retained-target
+  high-frequency distance sampling must continue while it is false because the
+  independent lock-loss/close-distance arrival audit depends on that sample.
+  `TargetHighFrequencyProvider.distance` is meters; convert the guarded `0.05`
+  light-second threshold to meters before comparing it.
 - SFSE permanent tasks are worker-thread producers only. Marshal ordinary
   engine work through `RE::BSService::TaskQueue`; enter Scaleform only from the
   byte-verified post-`UI_AdvanceActiveMenus` pump, when the owning main thread's

@@ -223,7 +223,12 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
 
 The mark survives manual Cruise exits and interruptions. A lost Cruise lock
 starts a two-second arrival audit; the mark clears only when the prior lock and
-close-distance evidence agree. Landing/docking, leaving the pilot seat, a
+close-distance evidence agree. Exact high-frequency distance sampling is
+independent of `bShowMarker`; that setting controls rendering only. A last valid
+sample survives the target row disappearing during the lock transition. The
+provider distance is meters, so the `0.05` light-second guard is converted to
+`14,989,622.9` meters before comparison.
+Landing/docking, leaving the pilot seat, a
 system change, a loading transition, explicit toggle, or replacement also
 clears a normal mark. `PendingJump` instead survives expected travel transitions
 but clears on a guarded `TESLoadGameEvent`, settled non-space state, or

@@ -42,7 +42,8 @@ namespace CFS::Bridge
         constexpr std::int32_t kSystemView = 1;
         constexpr std::uint32_t kPlanetType = 2;
         constexpr std::uint32_t kMoonType = 3;
-        constexpr double kArrivalDistanceLightSeconds = 0.05;
+        constexpr double kLightSecondMeters = 299'792'458.0;
+        constexpr double kArrivalDistanceMeters = 0.05 * kLightSecondMeters;
         constexpr std::uint32_t kNavigationColor = 0x66CCFF;
         constexpr std::uint32_t kCruiseColor = 0xF5A04E;
         constexpr const char* kCruiseMapActionLabel = "SET CRUISE TARGET";
@@ -4050,8 +4051,10 @@ namespace CFS::Bridge
                 g_arrivalCheckTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
                 g_state.store(NavState::kMarked, std::memory_order_release);
                 if (Settings::Verbose())
-                    REX::INFO("[arrival] Cruise lock left {:08X}; waiting for arrival evidence",
-                        courseTarget);
+                    REX::INFO("[arrival] Cruise lock left {:08X}; last distance={:.3f} m, threshold={:.3f} m; waiting for arrival evidence",
+                        courseTarget,
+                        g_markedDistance.load(std::memory_order_acquire),
+                        kArrivalDistanceMeters);
             }
         }
 
@@ -4280,7 +4283,7 @@ namespace CFS::Bridge
             const std::vector<Bearing>& a_bearings)
         {
             const auto destination = Destination();
-            if (!destination || !Settings::ShowMarker()) {
+            if (!destination) {
                 HideMarker();
                 return;
             }
@@ -4297,12 +4300,20 @@ namespace CFS::Bridge
                         break;
                     }
             }
-            if (index == static_cast<std::size_t>(-1) || !a_bearings[index].valid) {
+            const bool haveBearing = index != static_cast<std::size_t>(-1) &&
+                a_bearings[index].valid;
+            if (haveBearing)
+                g_markedDistance.store(a_bearings[index].distance,
+                    std::memory_order_release);
+
+            // Arrival auditing is independent of the optional visual marker.
+            // Keep sampling the exact retained course row with bShowMarker=false,
+            // but never create or display plugin UI in that configuration.
+            if (!Settings::ShowMarker() || !haveBearing) {
                 HideMarker();
                 return;
             }
 
-            g_markedDistance.store(a_bearings[index].distance, std::memory_order_release);
             TryCreateMarker(a_root, a_rootPath);
             if (!g_markerReady.load(std::memory_order_acquire))
                 return;
@@ -5399,14 +5410,17 @@ namespace CFS::Bridge
                 g_arrivalCheckTicks.load(std::memory_order_acquire) } };
             const auto age = Clock::now() - since;
             const double distance = g_markedDistance.load(std::memory_order_acquire);
-            const bool evidence = distance >= 0.0 && distance <= kArrivalDistanceLightSeconds;
+            const bool evidence = distance >= 0.0 && distance <= kArrivalDistanceMeters;
             if (evidence) {
                 g_arrivalCheckID.store(0, std::memory_order_release);
+                REX::INFO("[arrival] exact prior lock plus close distance {:.3f} m <= {:.3f} m confirmed arrival for {:08X}",
+                    distance, kArrivalDistanceMeters, id);
                 ClearDestination("confirmed arrival (course transition plus close distance)");
             } else if (age > std::chrono::seconds(2)) {
                 g_arrivalCheckID.store(0, std::memory_order_release);
                 if (Settings::Verbose())
-                    REX::INFO("[arrival] no arrival evidence after lock transition; preserving mark {:08X}", id);
+                    REX::INFO("[arrival] no arrival evidence after lock transition: distance={:.3f} m threshold={:.3f} m; preserving mark {:08X}",
+                        distance, kArrivalDistanceMeters, id);
             }
         }
 

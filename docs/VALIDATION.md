@@ -1091,11 +1091,11 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   replacement fail closed; active Cruise travel itself is unbounded.
 - [x] The releasedbg build/deploy and matching DLL/PDB hashes are recorded in the
   remote-moon section above; the same binary contains remote-station support.
-- [ ] Do not mark the corrected remote-station flow validated until one no-mouse
-  trace proves: vanilla system jump, exact retained physical REFR/base live
-  resolution, native target assignment/readback, exact retained CELL/XMRK
-  revalidation, stock Cruise activation, exact XMRK dispatch, and matching
-  one-row `bIsCruiseTargetLock`.
+- [x] The corrected no-mouse RE-939 trace proved the complete remote-station
+  chain: vanilla system jump, exact retained physical REFR/base live resolution,
+  native target assignment/readback, exact retained CELL/XMRK revalidation,
+  stock Cruise activation, exact XMRK dispatch, and matching one-row
+  `bIsCruiseTargetLock`.
 
 ### 2026-08-07 first remote-station live trace
 
@@ -1135,10 +1135,11 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   built and active-MO2 PDB SHA-256 matches at
   `DEBFDBF5C74F5BAD219CDF88D9BEDC3095E2B0C5C66F0E25178E10A41D15CC34`.
   The winning default has `bVerboseLog=true` and no custom override was found.
-- [ ] A restarted no-mouse remote-station trace remains pending. Do not mark the
-  flow validated until the log proves vanilla system jump, exact station
-  identity/assignment, ordered exact ancestor waypoint lock and arrival/feed
-  refresh when published, then exact station lock.
+- [x] The later dual-identity trace below supersedes this physical-REFR course
+  model. It proved the same vanilla jump and exact physical assignment, retained
+  Olivas as the unique visible ancestor, and then received the final XMRK lock
+  directly. Stock did not publish an intermediate ancestor lock, so no
+  ancestor-lock arrival/feed transition was required.
 
 ### 2026-08-07 RE-939 live result and dual-identity correction
 
@@ -1171,10 +1172,60 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   for the PDB. The deployed default already exactly matches the source default,
   has `bVerboseLog=true`, and no winning `CruiseFromStarmapCustom.ini` override
   was found in the active mod, MO2 overwrite, or Documents paths.
-- [ ] The correction is built and deployed but not gameplay-proven. A fresh
-  trace must show the indexed CELL/XMRK link, exact physical station assignment,
-  dispatch of that exact XMRK, and matching one-row `bIsCruiseTargetLock`
-  without an unrelated-course clear.
+- [x] The restarted no-mouse trace on the deployed correction indexed 25 exact
+  CELL/XMRK course links and selected RE-939 CELL `0003DBEC` as physical
+  REFR/base `000013B8/000013B6` with course XMRK `0003DBEE`. Vanilla entered
+  Alpha Centauri at Jemison after player grav-jump states `0`, `1`, and `2`.
+  Settled arrival revalidated and assigned the physical station, exact ancestry
+  retained Olivas `0005E313` as one HUD row, and one stock Cruise activation
+  dispatched only `0003DBEE`. The engine published matching exact lock 10 ms
+  later on low-feed revision 11; no unrelated-course or fail-closed clear
+  occurred. The operator confirmed physical arrival at Starstation RE-939.
+
+### 2026-08-07 marker-independent arrival sampling
+
+- [x] The validated RE-939 course lock ended after 102.9 seconds, but the
+  two-second arrival audit logged no evidence and preserved public mark
+  `000013B8` despite operator-confirmed arrival. The winning default has
+  `bShowMarker=false`.
+- [x] `UpdateMarker` returned before joining the exact low-frequency target row
+  to its high-frequency bearing whenever marker rendering was disabled, so
+  `g_markedDistance` remained `-1`. This was a rendering-policy dependency, not
+  failed travel or failed exact course identity.
+- [x] Distance sampling now occurs for every valid exact retained-course bearing
+  before the visual setting is checked. `bShowMarker=false` still prevents all
+  plugin marker creation/rendering, while the last valid distance remains
+  available across the lock-loss transition. Destination replacement/clear
+  still resets the sample to `-1`.
+- [x] The first default-config retest exact-locked Olivas `0005E313`, then began
+  the two-second audit when that lock ended after 29.7 seconds, but again logged
+  no arrival evidence and preserved the mark. The prior live probe proves
+  `TargetHighFrequencyProvider.distance` uses meters: its deliberate-exit
+  control retained a value near 38.3 million. Production was comparing that raw
+  meter value directly to `0.05` as though it were already light-seconds.
+- [x] The guard now converts `0.05` light-seconds to `14,989,622.9` meters before
+  comparison. Lock-loss and audit logs include the sampled meter value and
+  threshold so the next test distinguishes valid close arrival from manual exit
+  without inference.
+- [x] The marker-independent-only build passed exact releasedbg configure/build/deploy and
+  `xmake install -o release/Data -y` passed with inherited CommonLibSF warnings
+  only. Build, active MO2, and release-package hashes all match:
+  DLL `AA3149654D97347034AFA32444427B31319E67BC8F6EFBA7745DC532C6A09ABC`,
+  PDB `793D4D1C327CD35B6033C55EFB276F9AED859E572CB4B27163ED83C781EEF40B`,
+  and default INI
+  `6873CBEE7241BF901146B61B01543FB3094EE54C1A384291CBD969BA37A46649`.
+  The active default has `bShowMarker=false` and `bVerboseLog=true`; no winning
+  custom override was found. These hashes predate the meter-unit correction.
+- [x] With Starfield closed, the meter-unit correction passed exact releasedbg
+  configure/build/deploy and package refresh with inherited CommonLibSF warnings
+  only. Build, active MO2, and release-package hashes all match:
+  DLL `DC4666919DD2A1619C560CF6FD2C0C3DA51D9358EED032CDBBDFA782CB139D5C`,
+  PDB `F329B38428801619483B6A2D91BC5C09F0B24F84A79EA78A00D961BF62CEF615`,
+  and default INI
+  `6873CBEE7241BF901146B61B01543FB3094EE54C1A384291CBD969BA37A46649`.
+- [ ] Run one default-config arrival trace. Require exact lock loss
+  followed by `confirmed arrival (course transition plus close distance)` and
+  public destination clear.
 
 ## 2026-08-07 remote route while Cruise is active
 
