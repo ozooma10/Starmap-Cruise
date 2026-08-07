@@ -89,15 +89,17 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   `StarMapMenu_OnCancel` event used by vanilla Back. Reaching galaxy view with
   the captured root and establishing the galaxy marker context are two separate
   guarded phases, each with its own five-second window. In the marker-context
-  phase a fixed ladder runs one rung at a time, and only until native publishes
-  a selection. A rung that has just run holds the ladder for a fixed number of
-  completed AS3 advances so native can publish its result before the next rung
-  touches the same state; the unit is advances, not wall clock. Rung 1 emits
-  `StarMapMenu_QuickSelectChange {bodyID: captured STDT root}`—the exact event
-  emitted by `QuickSystemSelect.OnSelectionChange`—and rung 2 invokes the
-  shipped public `SetHoveredSystem` galaxy setter with the same root, found by a
-  bounded exact-name search of the menu root and any galaxy-named container.
-  Neither rung touches the cursor. Set Course is dispatched as
+  phase the driver invokes vanilla's non-entering GalaxyState selected-system
+  setter once with the captured STDT root, then waits a fixed number of
+  completed AS3 advances for native to publish its result. Static 1.16.244
+  analysis identifies this as Address Library ID `94292`, primary vtable slot
+  `+0x48`. The call is allowed only after its 16-byte function fingerprint, the
+  live StarMapMenu primary vtable, and the owned GalaxyState primary vtable all
+  match the exact runtime. Immediately around Set Course the driver sets the
+  one-byte Quick Select ownership state so vanilla reads the selected-system ID
+  rather than cursor hover, then requires the stock handler to consume and clear
+  it synchronously. If it does not, byte-verified stock close ID `94308` restores
+  the state and the route fails closed. Set Course is dispatched as
   `StarMapMenu_OnHintButtonClicked {buttonAction: "SetRouteDestination"}` only
   once native itself names the captured system: the vanilla Set Course button
   reporting enabled and visible, the native `StarMapMenuQuickSelectData` cursor
@@ -216,8 +218,8 @@ replacement.
   GNAM system ID, plus the live public
   `SetRouteDestinationButtonData` enabled/visible state. Acceptance captures
   `SystemNameHeader_mc` for later route-display comparison, emits stock Back,
-  carries the exact captured STDT/DNAM root into galaxy view, and then runs the
-  cursor-independent marker-context ladder against that root. Once a native
+  carries the exact captured STDT/DNAM root into galaxy view, and then invokes
+  the guarded non-entering selected-system setter against that root. Once a native
   selection authority names the captured system, it emits the same custom event
   as stock Set Course. The post-advance driver watches
   `JumpData_mc`: `ExecuteButton_mc.ExecuteButtonHint_mc.Visible` is the shipped
@@ -244,12 +246,12 @@ replacement.
   STDT rows update the cached root; zero/transient rows cannot erase it. The root
   is cleared on entry to galaxy view but retained across galaxy-to-system entry
   because the star feed may publish before the view feed.
-- `StarMapMenuQuickSelectData` is subscribed read-only. It supplies
-  `uCursorSelectionIndex` and the `uBodyID` of that entry, which is the one
-  native statement of galaxy system selection that does not depend on the
-  physical cursor. The plugin only reads it; it never sets a cursor index,
-  writes an entry, or opens the Quick Select panel. Its member names are logged
-  once per session so the payload shape stays pinned to observed evidence.
+- `StarMapMenuQuickSelectData` is subscribed read-only. Live 1.16.244 payload
+  enumeration proves it contains only `bShowMenu` and `bOpenForPlot`; Quick
+  Select entries arrive through native's direct `SetMarkers(Array)` movie call,
+  not this feed. The handler therefore cannot claim an entry/cursor authority
+  from absent fields. Member names remain logged once per session so future
+  payload changes stay evidence-pinned.
 - Feed callbacks copy passed GFx payloads into plain C++ snapshots or queue a
   value action, then return without fetching another root or invoking AS3.
   HUD object construction, forwarded Cruise edges, fixed target status, marker

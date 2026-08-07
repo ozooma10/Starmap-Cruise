@@ -42,10 +42,15 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
   Cruise-bound control while the guarded handoff remains active.
   Reaching galaxy view with the captured root is a separate phase from
   establishing the galaxy marker context, and each owns a full timeout. Marker
-  context is attempted with cursor-independent stock seams only, one rung at a
-  time with a fixed number of completed AS3 advances between rungs: the shipped
-  Quick Select `bodyID` change event, then the shipped public `SetHoveredSystem`
-  galaxy setter. Set Course may be dispatched
+  context is attempted once through vanilla's non-entering GalaxyState
+  selected-system setter, Address Library ID 94292, after exact 1.16.244
+  function bytes plus the live StarMapMenu and GalaxyState primary vtables pass.
+  Native then receives a fixed number of completed AS3 advances to publish the
+  selected ID. Immediately around Set Course, arm only the exact Quick Select
+  route-ownership byte that makes vanilla consume that selected ID; require the
+  stock handler to clear it synchronously, and use byte-verified ID 94308 to
+  restore it if not consumed.
+  Set Course may be dispatched
   only after native itself names the captured system through the vanilla Set
   Course button, the native Quick Select cursor, or a unique galaxy highlight
   marker; the two weaker authorities additionally require the vanilla Set Course

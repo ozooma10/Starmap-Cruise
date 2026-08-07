@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -55,13 +54,21 @@ namespace CFS::Bridge
         constexpr auto kMapRoutePollTime = std::chrono::milliseconds(250);
         constexpr auto kRemoteRouteExecuteSettleTime = std::chrono::milliseconds(500);
         constexpr auto kRemoteRouteTimeout = std::chrono::seconds(5);
-        // Post-advance passes a focus rung keeps before the next one may run.
+        // Post-advance passes the native selection call keeps before diagnostics.
         // The unit is completed AS3 advances, not wall clock: each pass means
-        // native finished one advance with the previous rung already applied.
+        // native finished one advance with the selection already applied.
         constexpr std::uint32_t kGalaxyFocusRungPasses = 10;
         constexpr REL::ID kControlMapSingletonPtr{ 938003 };
         constexpr REL::ID kSetShipHudTarget{ 97892 };
         constexpr REL::ID kCurrentShipHudTarget{ 883585 };
+        // Starfield 1.16.244: GalaxyState's non-entering selected-system setter
+        // and the stock Quick Select close/consume path. The setter is vtable
+        // slot +0x48; SetRouteDestination reads that selected ID when Quick
+        // Select mode is active, then closes the mode itself.
+        constexpr REL::ID kSelectGalaxySystem{ 94292 };
+        constexpr REL::ID kCloseGalaxyQuickSelect{ 94308 };
+        constexpr REL::ID kStarMapMenuPrimaryVtable{ 446845 };
+        constexpr REL::ID kGalaxyStatePrimaryVtable{ 446425 };
         constexpr REL::ID kLoadGameGetEventSource{ 64149 };
         constexpr REL::ID kLoadGameSourceStatic{ 838425 };
         constexpr REL::ID kLoadGameSourceVtable{ 413741 };
@@ -71,6 +78,10 @@ namespace CFS::Bridge
         constexpr std::size_t kControlMapContextSlotsOffset = 0x10;
         constexpr std::size_t kControlMapMappingStride = 0x28;
         constexpr std::size_t kMaxControlMappings = 4096;
+        constexpr std::size_t kStarMapMenuDataModelOffset = 0x1B8;
+        constexpr std::size_t kStarMapMenuGalaxyStateOffset = 0x1240;
+        constexpr std::size_t kGalaxyStateSelectedSystemOffset = 0x880;
+        constexpr std::size_t kGalaxyStateQuickSelectOpenOffset = 0x8F8;
         constexpr std::array<std::uint8_t, 2> kCruiseControlContexts{ 0x21, 0x4D };
         constexpr std::array<std::uint8_t, 16> kIsInSpace116244Prologue{
             0x48, 0x89, 0x5C, 0x24, 0x10, 0x55, 0x56, 0x57,
@@ -79,6 +90,14 @@ namespace CFS::Bridge
         constexpr std::array<std::uint8_t, 6> kSetShipHudTarget116244Prefix{
             0x48, 0x83, 0xEC, 0x48, 0x89, 0x0D,
         };
+        constexpr std::array<std::uint8_t, 16> kSelectGalaxySystem116244Prologue{
+            0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x74,
+            0x24, 0x20, 0x55, 0x48, 0x8D, 0x6C, 0x24, 0xA9,
+        };
+        constexpr std::array<std::uint8_t, 16> kCloseGalaxyQuickSelect116244Prologue{
+            0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C,
+            0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57,
+        };
         constexpr std::array<std::uint8_t, 16> kGlobalEventGetEventSource116244Prologue{
             0x48, 0x83, 0xEC, 0x28, 0x65, 0x48, 0x8B, 0x04,
             0x25, 0x58, 0x00, 0x00, 0x00, 0xBA, 0xB8, 0x00,
@@ -86,8 +105,12 @@ namespace CFS::Bridge
 
         using IsInSpace_t = bool (*)(RE::TESObjectREFR*, bool);
         using SetShipHudTarget_t = void (*)(std::uint32_t);
+        using SelectGalaxySystem_t = void (*)(void*, std::uint32_t, bool);
+        using CloseGalaxyQuickSelect_t = void (*)(void*, void*);
         std::atomic<IsInSpace_t> g_isInSpace{ nullptr };
         std::atomic<SetShipHudTarget_t> g_setShipHudTarget{ nullptr };
+        std::atomic<SelectGalaxySystem_t> g_selectGalaxySystem{ nullptr };
+        std::atomic<CloseGalaxyQuickSelect_t> g_closeGalaxyQuickSelect{ nullptr };
 
         struct MovieState
         {
@@ -179,15 +202,13 @@ namespace CFS::Bridge
             kAwaitRoute,
         };
 
-        // Ordered, cursor-independent attempts at establishing the vanilla
-        // galaxy marker context. Each rung is attempted at most once and only
-        // on a post-advance pass that already failed the proof test, so the
-        // ladder advances on observed state rather than on elapsed time.
+        // One exact vanilla focus operation establishes the galaxy system
+        // context. It runs only on a post-advance pass that already failed the
+        // proof test, then native gets completed advances to publish readback.
         enum class GalaxyFocusRung : std::uint8_t
         {
-            kQuickSelectChange = 0,
-            kHoverSetter = 1,
-            kExhausted = 2,
+            kNativeSystemSelection = 0,
+            kExhausted = 1,
         };
 
         struct RemoteRouteRequest
@@ -197,7 +218,7 @@ namespace CFS::Bridge
             std::uint32_t generation{ 0 };
             std::uint32_t targetFormID{ 0 };
             std::uint32_t systemBodyID{ 0 };
-            GalaxyFocusRung nextFocusRung{ GalaxyFocusRung::kQuickSelectChange };
+            GalaxyFocusRung nextFocusRung{ GalaxyFocusRung::kNativeSystemSelection };
             std::uint32_t focusRungCooldown{ 0 };
             bool focusDiagnosticsLogged{ false };
             std::string expectedSystemName;
@@ -737,6 +758,76 @@ namespace CFS::Bridge
                 std::memory_order_release);
             REX::INFO("[target] native ship-target setter validated: Address Library ID 97892, RVA=0x{:X}",
                 address - module);
+            return true;
+        }
+
+        bool ValidateGalaxySystemSelectionBindings()
+        {
+            static_assert(kSelectGalaxySystem.id() == 94292);
+            static_assert(kCloseGalaxyQuickSelect.id() == 94308);
+            static_assert(kStarMapMenuPrimaryVtable.id() == 446845);
+            static_assert(kGalaxyStatePrimaryVtable.id() == 446425);
+
+            REL::Relocation<std::uintptr_t> selectTarget{ kSelectGalaxySystem };
+            REL::Relocation<std::uintptr_t> closeTarget{ kCloseGalaxyQuickSelect };
+            REL::Relocation<std::uintptr_t> menuVtable{ kStarMapMenuPrimaryVtable };
+            REL::Relocation<std::uintptr_t> galaxyVtable{ kGalaxyStatePrimaryVtable };
+            const auto selectAddress = selectTarget.address();
+            const auto closeAddress = closeTarget.address();
+            const auto menuVtableAddress = menuVtable.address();
+            const auto galaxyVtableAddress = galaxyVtable.address();
+            const auto module = reinterpret_cast<std::uintptr_t>(::GetModuleHandleW(nullptr));
+            if (!selectAddress || !closeAddress || !menuVtableAddress ||
+                !galaxyVtableAddress || !module) {
+                REX::ERROR("[jump] native galaxy-system selection bindings unavailable; bridge disabled before hooks");
+                return false;
+            }
+
+            const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+            if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+                REX::ERROR("[jump] Starfield module has no valid DOS header; bridge disabled");
+                return false;
+            }
+            const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS64*>(module + dos->e_lfanew);
+            if (nt->Signature != IMAGE_NT_SIGNATURE) {
+                REX::ERROR("[jump] Starfield module has no valid NT header; bridge disabled");
+                return false;
+            }
+            const auto imageEnd = module + nt->OptionalHeader.SizeOfImage;
+            const auto inImage = [&](std::uintptr_t a_value, std::size_t a_span) {
+                return a_value >= module && a_value < imageEnd &&
+                       a_span <= imageEnd - a_value;
+            };
+            if (!inImage(selectAddress, kSelectGalaxySystem116244Prologue.size()) ||
+                !inImage(closeAddress, kCloseGalaxyQuickSelect116244Prologue.size()) ||
+                !inImage(menuVtableAddress, sizeof(std::uintptr_t)) ||
+                !inImage(galaxyVtableAddress, sizeof(std::uintptr_t))) {
+                REX::ERROR("[jump] galaxy selection Address Library bindings resolve outside Starfield.exe; bridge disabled");
+                return false;
+            }
+            if (std::memcmp(reinterpret_cast<const void*>(selectAddress),
+                    kSelectGalaxySystem116244Prologue.data(),
+                    kSelectGalaxySystem116244Prologue.size()) != 0) {
+                REX::ERROR("[jump] Address Library ID 94292 failed the Starfield 1.16.244 prologue fingerprint at {:016X}; bridge disabled",
+                    selectAddress);
+                return false;
+            }
+            if (std::memcmp(reinterpret_cast<const void*>(closeAddress),
+                    kCloseGalaxyQuickSelect116244Prologue.data(),
+                    kCloseGalaxyQuickSelect116244Prologue.size()) != 0) {
+                REX::ERROR("[jump] Address Library ID 94308 failed the Starfield 1.16.244 prologue fingerprint at {:016X}; bridge disabled",
+                    closeAddress);
+                return false;
+            }
+
+            g_selectGalaxySystem.store(
+                reinterpret_cast<SelectGalaxySystem_t>(selectAddress),
+                std::memory_order_release);
+            g_closeGalaxyQuickSelect.store(
+                reinterpret_cast<CloseGalaxyQuickSelect_t>(closeAddress),
+                std::memory_order_release);
+            REX::INFO("[jump] native galaxy selection bindings validated: select ID 94292 RVA=0x{:X}, Quick Select close ID 94308 RVA=0x{:X}, menuVtableID=446845, galaxyVtableID=446425",
+                selectAddress - module, closeAddress - module);
             return true;
         }
 
@@ -1499,11 +1590,19 @@ namespace CFS::Bridge
             return joined.empty() ? "<none>" : joined;
         }
 
+        bool ReadNativeGalaxySelection(const MapSnapshot& a_snapshot,
+            std::uint32_t& a_selectedSystem, bool& a_quickSelectOpen,
+            std::string& a_detail);
+
         struct GalaxySelectionProof
         {
             bool proven{ false };
             const char* authority{ "none" };
             SetCourseButtonState button;
+            bool nativeSelectionResolved{ false };
+            bool nativeSelectedMatch{ false };
+            std::uint32_t nativeSelectedSystem{ 0 };
+            bool nativeQuickSelectOpen{ false };
             bool quickSelectMatch{ false };
             bool markerMatch{ false };
 
@@ -1511,8 +1610,10 @@ namespace CFS::Bridge
                 std::uint32_t a_root) const
             {
                 return std::format(
-                    "root={:08X} setCourse(resolved={} enabled={} visible={}) quickSelect(published={} count={} cursor={} bodyID={:08X}) marker(count={} bodyID={:08X})",
+                    "root={:08X} setCourse(resolved={} enabled={} visible={}) nativeSelection(resolved={} selected={:08X} quickSelectOpen={}) quickSelect(published={} count={} cursor={} bodyID={:08X}) marker(count={} bodyID={:08X})",
                     a_root, button.resolved, button.enabled, button.visible,
+                    nativeSelectionResolved, nativeSelectedSystem,
+                    nativeQuickSelectOpen,
                     a_snapshot.quickSelectPublished, a_snapshot.quickSelectCount,
                     a_snapshot.quickSelectCursorIndex,
                     a_snapshot.quickSelectCursorBodyID,
@@ -1522,9 +1623,9 @@ namespace CFS::Bridge
 
         // A galaxy selection counts as established only when native itself says
         // so. The vanilla Set Course button is the strongest statement; the
-        // Quick Select cursor and the unique galaxy highlight marker are the two
-        // other native-published readbacks that name a system directly. Nothing
-        // here forces, writes, or infers the button state.
+        // exact GalaxyState selected-system field, Quick Select cursor, and
+        // unique galaxy highlight marker are the other readbacks that name a
+        // system directly. Nothing here forces, writes, or infers button state.
         GalaxySelectionProof EvaluateGalaxySelection(V& a_menuRoot,
             const MapSnapshot& a_snapshot, std::uint32_t a_systemBodyID)
         {
@@ -1533,6 +1634,13 @@ namespace CFS::Bridge
             V buttonData;
             proof.button = ReadVanillaSetCourseButton(a_menuRoot, hintBar,
                 buttonData);
+            std::string nativeDetail;
+            proof.nativeSelectionResolved = ReadNativeGalaxySelection(a_snapshot,
+                proof.nativeSelectedSystem, proof.nativeQuickSelectOpen,
+                nativeDetail);
+            proof.nativeSelectedMatch = proof.nativeSelectionResolved &&
+                a_systemBodyID != 0 &&
+                proof.nativeSelectedSystem == a_systemBodyID;
             proof.quickSelectMatch = a_snapshot.quickSelectPublished &&
                 a_snapshot.quickSelectCursorIndex >= 0 && a_systemBodyID != 0 &&
                 a_snapshot.quickSelectCursorBodyID == a_systemBodyID;
@@ -1543,6 +1651,10 @@ namespace CFS::Bridge
             if (proof.button.Ready()) {
                 proof.proven = true;
                 proof.authority = "vanilla Set Course button";
+            } else if (proof.button.resolved && proof.button.visible &&
+                       proof.nativeSelectedMatch) {
+                proof.proven = true;
+                proof.authority = "native GalaxyState selected system";
             } else if (proof.button.resolved && proof.button.visible &&
                        proof.quickSelectMatch) {
                 // QuickSystemSelect.OnItemPress plots from the list cursor
@@ -1704,97 +1816,184 @@ namespace CFS::Bridge
                 "StarMapMenu_OnHintButtonClicked", &params);
         }
 
-        bool DispatchVanillaGalaxySelection(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            std::uint32_t a_systemBodyID)
+        struct LiveGalaxyState
         {
-            // QuickSystemSelect.OnSelectionChange emits this exact payload
-            // before its OpenForPlot item sends SetRouteDestination. Mouse
-            // hover normally establishes the selection; reproduce that stock
-            // handoff so a remote route never depends on cursor movement.
-            V params;
-            a_root->CreateObject(&params);
-            if (!params.IsObject() ||
-                !params.SetMember("bodyID", V{ static_cast<double>(a_systemBodyID) }))
+            std::uintptr_t menuAddress{ 0 };
+            void* galaxyState{ nullptr };
+        };
+
+        bool ResolveLiveGalaxyState(const MapSnapshot& a_snapshot,
+            LiveGalaxyState& a_live, std::string& a_detail)
+        {
+            const auto ui = RE::UI::GetSingleton();
+            const RE::BSFixedString mapName{ kMapMenu };
+            const auto menu = ui ? ui->GetMenu(mapName) : nullptr;
+            if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot ||
+                !g_mapOpen.load(std::memory_order_acquire) ||
+                a_snapshot.generation !=
+                    g_mapMovie.generation.load(std::memory_order_acquire)) {
+                a_detail = "live StarMapMenu instance changed before galaxy selection";
                 return false;
-            return DispatchHudEvent(a_root,
-                "StarMapMenu_QuickSelectChange", &params);
+            }
+
+            a_live.menuAddress = reinterpret_cast<std::uintptr_t>(menu.get());
+            REL::Relocation<std::uintptr_t> expectedMenuVtable{
+                kStarMapMenuPrimaryVtable };
+            std::uintptr_t actualMenuVtable = 0;
+            std::memcpy(&actualMenuVtable,
+                reinterpret_cast<const void*>(a_live.menuAddress),
+                sizeof(actualMenuVtable));
+            if (actualMenuVtable != expectedMenuVtable.address()) {
+                a_detail = std::format(
+                    "StarMapMenu primary vtable mismatch (actual={:016X} expected={:016X})",
+                    actualMenuVtable, expectedMenuVtable.address());
+                return false;
+            }
+
+            std::memcpy(&a_live.galaxyState,
+                reinterpret_cast<const void*>(a_live.menuAddress +
+                    kStarMapMenuGalaxyStateOffset),
+                sizeof(a_live.galaxyState));
+            if (!a_live.galaxyState) {
+                a_detail = "StarMapMenu has no active GalaxyState";
+                return false;
+            }
+
+            REL::Relocation<std::uintptr_t> expectedGalaxyVtable{
+                kGalaxyStatePrimaryVtable };
+            std::uintptr_t actualGalaxyVtable = 0;
+            std::memcpy(&actualGalaxyVtable, a_live.galaxyState,
+                sizeof(actualGalaxyVtable));
+            if (actualGalaxyVtable != expectedGalaxyVtable.address()) {
+                a_detail = std::format(
+                    "GalaxyState primary vtable mismatch (actual={:016X} expected={:016X})",
+                    actualGalaxyVtable, expectedGalaxyVtable.address());
+                return false;
+            }
+            return true;
         }
 
-        constexpr const char* kGalaxyHoverSetter = "SetHoveredSystem";
-
-        bool ContainsNoCase(const std::string& a_haystack, std::string_view a_needle)
-        {
-            const auto it = std::search(a_haystack.begin(), a_haystack.end(),
-                a_needle.begin(), a_needle.end(),
-                [](char a_lhs, char a_rhs) {
-                    return std::tolower(static_cast<unsigned char>(a_lhs)) ==
-                           std::tolower(static_cast<unsigned char>(a_rhs));
-                });
-            return it != a_haystack.end();
-        }
-
-        // Second rung: invoke the shipped public hover setter with the captured
-        // root instead of relying on the physical cursor. Enumeration is
-        // read-only and the only mutation is one call to a method vanilla
-        // already exposes; a miss leaves the map untouched.
-        bool InvokeGalaxyHoverSetter(V& a_menuRoot, std::uint32_t a_systemBodyID,
+        bool ReadNativeGalaxySelection(const MapSnapshot& a_snapshot,
+            std::uint32_t& a_selectedSystem, bool& a_quickSelectOpen,
             std::string& a_detail)
         {
-            MemberNameCollector collector{ 64 };
-            if (!a_menuRoot.IsObject()) {
-                a_detail = "menu root is not an object";
+            LiveGalaxyState live;
+            if (!ResolveLiveGalaxyState(a_snapshot, live, a_detail))
+                return false;
+
+            const auto galaxyAddress =
+                reinterpret_cast<std::uintptr_t>(live.galaxyState);
+            std::memcpy(&a_selectedSystem,
+                reinterpret_cast<const void*>(galaxyAddress +
+                    kGalaxyStateSelectedSystemOffset),
+                sizeof(a_selectedSystem));
+            std::uint8_t quickSelectOpen = 0;
+            std::memcpy(&quickSelectOpen,
+                reinterpret_cast<const void*>(galaxyAddress +
+                    kGalaxyStateQuickSelectOpenOffset),
+                sizeof(quickSelectOpen));
+            a_quickSelectOpen = quickSelectOpen != 0;
+            a_detail = std::format("selected={:08X} quickSelectOpen={}",
+                a_selectedSystem, a_quickSelectOpen);
+            return true;
+        }
+
+        bool InvokeNativeGalaxySystemSelection(const MapSnapshot& a_snapshot,
+            std::uint32_t a_systemBodyID, std::string& a_detail)
+        {
+            const auto select = g_selectGalaxySystem.load(std::memory_order_acquire);
+            if (!select || a_systemBodyID == 0) {
+                a_detail = select ? "captured system body ID is zero" :
+                    "native selected-system binding is unavailable";
                 return false;
             }
-            a_menuRoot.VisitMembers(&collector);
 
-            auto tryInvoke = [&](V& a_owner, const std::string& a_path) {
-                if (!a_owner.HasMember(kGalaxyHoverSetter))
-                    return false;
-                V argument{ static_cast<double>(a_systemBodyID) };
-                V result;
-                const bool invoked = a_owner.Invoke(kGalaxyHoverSetter, &result,
-                    &argument, 1);
-                a_detail = std::format("{}.{}({:08X}) invoked={}", a_path,
-                    kGalaxyHoverSetter, a_systemBodyID, invoked);
-                return invoked;
-            };
+            LiveGalaxyState live;
+            if (!ResolveLiveGalaxyState(a_snapshot, live, a_detail))
+                return false;
 
-            for (const auto& entry : collector.names) {
-                const auto colon = entry.rfind(':');
-                if (colon == std::string::npos ||
-                    (entry.compare(colon, std::string::npos, ":object") != 0 &&
-                        entry.compare(colon, std::string::npos, ":displayobject") != 0))
-                    continue;
-                const auto name = entry.substr(0, colon);
-                V member;
-                if (!ObjectMember(a_menuRoot, name.c_str(), member))
-                    continue;
-                if (tryInvoke(member, name))
-                    return true;
-                if (!ContainsNoCase(name, "galaxy"))
-                    continue;
-                // The shipped Galaxy2DMap can sit one level inside its
-                // container. Only galaxy-named containers are descended into so
-                // this stays a bounded, targeted probe.
-                MemberNameCollector children{ 64 };
-                member.VisitMembers(&children);
-                for (const auto& childEntry : children.names) {
-                    const auto childColon = childEntry.rfind(':');
-                    if (childColon == std::string::npos ||
-                        (childEntry.compare(childColon, std::string::npos, ":object") != 0 &&
-                            childEntry.compare(childColon, std::string::npos, ":displayobject") != 0))
-                        continue;
-                    const auto childName = childEntry.substr(0, childColon);
-                    V child;
-                    if (!ObjectMember(member, childName.c_str(), child))
-                        continue;
-                    if (tryInvoke(child, std::format("{}.{}", name, childName)))
-                        return true;
-                }
+            // This is GalaxyState's stock non-entering selected-system setter,
+            // used by normal galaxy selection before Quick Select decides
+            // whether the action means focus or plot.
+            select(live.galaxyState, a_systemBodyID, false);
+
+            std::uint32_t selectedSystem = 0;
+            bool quickSelectOpen = false;
+            if (!ReadNativeGalaxySelection(a_snapshot, selectedSystem,
+                    quickSelectOpen, a_detail) ||
+                selectedSystem != a_systemBodyID) {
+                if (selectedSystem != a_systemBodyID)
+                    a_detail = std::format(
+                        "native selected-system readback mismatch (expected={:08X} actual={:08X})",
+                        a_systemBodyID, selectedSystem);
+                return false;
+            }
+            a_detail = std::format(
+                "native GalaxyState selected system bodyID={:08X}",
+                selectedSystem);
+            return true;
+        }
+
+        bool ArmNativeQuickSelectRouteSelection(const MapSnapshot& a_snapshot,
+            std::uint32_t a_systemBodyID, std::string& a_detail)
+        {
+            LiveGalaxyState live;
+            if (!ResolveLiveGalaxyState(a_snapshot, live, a_detail))
+                return false;
+
+            const auto galaxyAddress =
+                reinterpret_cast<std::uintptr_t>(live.galaxyState);
+            std::uint32_t selectedSystem = 0;
+            std::memcpy(&selectedSystem,
+                reinterpret_cast<const void*>(galaxyAddress +
+                    kGalaxyStateSelectedSystemOffset),
+                sizeof(selectedSystem));
+            if (selectedSystem != a_systemBodyID) {
+                a_detail = std::format(
+                    "native selected-system changed before Set Course (expected={:08X} actual={:08X})",
+                    a_systemBodyID, selectedSystem);
+                return false;
             }
 
-            if (a_detail.empty())
-                a_detail = std::format("no reachable public '{}' method", kGalaxyHoverSetter);
+            const std::uint8_t open = 1;
+            std::memcpy(reinterpret_cast<void*>(galaxyAddress +
+                    kGalaxyStateQuickSelectOpenOffset),
+                &open, sizeof(open));
+            a_detail = std::format(
+                "armed native Quick Select route ownership for selected={:08X}",
+                selectedSystem);
+            return true;
+        }
+
+        bool ConfirmNativeQuickSelectConsumed(const MapSnapshot& a_snapshot,
+            std::string& a_detail)
+        {
+            LiveGalaxyState live;
+            if (!ResolveLiveGalaxyState(a_snapshot, live, a_detail))
+                return false;
+
+            const auto galaxyAddress =
+                reinterpret_cast<std::uintptr_t>(live.galaxyState);
+            std::uint8_t open = 0;
+            std::memcpy(&open,
+                reinterpret_cast<const void*>(galaxyAddress +
+                    kGalaxyStateQuickSelectOpenOffset),
+                sizeof(open));
+            if (open == 0) {
+                a_detail = "native Set Course consumed Quick Select route ownership";
+                return true;
+            }
+
+            const auto close =
+                g_closeGalaxyQuickSelect.load(std::memory_order_acquire);
+            if (close) {
+                close(live.galaxyState,
+                    reinterpret_cast<void*>(live.menuAddress +
+                        kStarMapMenuDataModelOffset));
+            }
+            a_detail = close ?
+                "Set Course did not consume Quick Select route ownership; stock close restored it" :
+                "Set Course did not consume Quick Select route ownership and close binding is unavailable";
             return false;
         }
 
@@ -2183,11 +2382,36 @@ namespace CFS::Bridge
                         REX::INFO("[jump] Set Course still reports enabled={} visible={} while native selection is proven by {}; the vanilla button is never written to",
                             proof.button.enabled, proof.button.visible,
                             proof.authority);
+                    std::string routeSelectionDetail;
+                    if (!ArmNativeQuickSelectRouteSelection(snapshot,
+                            request.systemBodyID, routeSelectionDetail)) {
+                        g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                        ClearDestination("native Quick Select route selection could not be armed");
+                        g_mapUiDirty.store(true, std::memory_order_release);
+                        REX::WARN("[jump] native Quick Select route selection unavailable ({}); remote mark cleared",
+                            routeSelectionDetail);
+                        return;
+                    }
+                    REX::INFO("[jump] Quick Select route selection armed: {}",
+                        routeSelectionDetail);
                     if (!DispatchVanillaSetCourse(root)) {
+                        std::string cleanupDetail;
+                        ConfirmNativeQuickSelectConsumed(snapshot, cleanupDetail);
                         g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
                         ClearDestination("vanilla system-level Set Course handoff failed");
                         g_mapUiDirty.store(true, std::memory_order_release);
-                        REX::WARN("[jump] stock system-level SetRouteDestination dispatch failed; remote mark cleared");
+                        REX::WARN("[jump] stock system-level SetRouteDestination dispatch failed; remote mark cleared ({})",
+                            cleanupDetail);
+                        return;
+                    }
+                    std::string consumedDetail;
+                    if (!ConfirmNativeQuickSelectConsumed(snapshot,
+                            consumedDetail)) {
+                        g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                        ClearDestination("vanilla Set Course did not consume Quick Select route selection");
+                        g_mapUiDirty.store(true, std::memory_order_release);
+                        REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
+                            consumedDetail);
                         return;
                     }
                     REX::INFO("[jump] Set Course dispatched at system scope for '{}' root={:08X} (authority={})",
@@ -2210,41 +2434,33 @@ namespace CFS::Bridge
                     return;
                 }
 
-                // Advance the focus ladder by exactly one rung on this pass.
-                // Each rung is a stock, cursor-independent seam.
+                // Invoke the exact stock non-entering system-selection path once, then
+                // leave completed advances for native to publish readback.
                 if (request.nextFocusRung != GalaxyFocusRung::kExhausted) {
-                    auto rung = request.nextFocusRung;
                     {
                         std::lock_guard lock{ g_remoteRouteMutex };
                         if (g_remoteRouteRequest.phase != RemoteRoutePhase::kEstablishSelection ||
                             g_remoteRouteRequest.targetFormID != request.targetFormID ||
                             g_remoteRouteRequest.generation != request.generation)
                             return;
-                        g_remoteRouteRequest.nextFocusRung =
-                            rung == GalaxyFocusRung::kQuickSelectChange ?
-                            GalaxyFocusRung::kHoverSetter :
-                            GalaxyFocusRung::kExhausted;
+                        g_remoteRouteRequest.nextFocusRung = GalaxyFocusRung::kExhausted;
                         g_remoteRouteRequest.focusRungCooldown = kGalaxyFocusRungPasses;
                     }
-                    if (rung == GalaxyFocusRung::kQuickSelectChange) {
-                        if (!DispatchVanillaGalaxySelection(root, request.systemBodyID)) {
-                            g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                            ClearDestination("vanilla galaxy system selection handoff failed");
-                            g_mapUiDirty.store(true, std::memory_order_release);
-                            REX::WARN("[jump] stock StarMapMenu_QuickSelectChange dispatch failed; remote mark cleared");
-                            return;
-                        }
-                        REX::INFO("[jump] focus rung 1: primed stock Quick Select system bodyID={:08X} for '{}' without cursor input",
-                            request.systemBodyID, request.expectedSystemName);
-                    } else {
-                        std::string detail;
-                        const bool invoked = InvokeGalaxyHoverSetter(menuRoot,
-                            request.systemBodyID, detail);
-                        // A miss here is not fatal: rung 1 may still settle, and
-                        // the vanilla route/warning state is untouched either way.
-                        REX::INFO("[jump] focus rung 2: public galaxy hover setter {} ({})",
-                            invoked ? "invoked" : "unavailable", detail);
+                    std::string detail;
+                    if (!InvokeNativeGalaxySystemSelection(snapshot,
+                            request.systemBodyID, detail)) {
+                        REX::WARN("[jump] focus rung 1: stock native galaxy system selection unavailable ({})",
+                            detail);
+                        LogGalaxyFocusDiagnostics(menuRoot, snapshot, proof,
+                            request.systemBodyID);
+                        g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                        ClearDestination("guarded native galaxy system selection was unavailable");
+                        g_mapUiDirty.store(true, std::memory_order_release);
+                        REX::WARN("[jump] guarded native galaxy system selection failed closed; remote mark cleared and vanilla route state preserved");
+                        return;
                     }
+                    REX::INFO("[jump] focus rung 1: invoked stock native galaxy selected-system setter for '{}' ({}) without changing map view",
+                        request.expectedSystemName, detail);
                     return;  // Re-test native state on the next advance.
                 }
 
@@ -4386,7 +4602,8 @@ namespace CFS::Bridge
             return;
         }
 
-        if (!ValidateIsInSpaceBinding() || !ValidateShipTargetBinding())
+        if (!ValidateIsInSpaceBinding() || !ValidateShipTargetBinding() ||
+            !ValidateGalaxySystemSelectionBindings())
             return;
         TryInstallLoadGameSink();
         TryInstallGravJumpSink();
@@ -4403,6 +4620,6 @@ namespace CFS::Bridge
         StartFocusWatcher();
         g_lastUnsettledTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
         tasks->AddPermanentTask(&OnFrame);
-        REX::INFO("bridge initialized: current-system Cruise plus guarded remote stock Back/system-SetCourse/ExecuteRoute handoff, no serialization or public API");
+        REX::INFO("bridge initialized: current-system Cruise plus guarded remote stock Back/native-selected-system/QuickSelect-SetCourse/ExecuteRoute handoff, no serialization or public API");
     }
 }

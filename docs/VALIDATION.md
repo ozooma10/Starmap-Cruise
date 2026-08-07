@@ -855,15 +855,11 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
 - [x] Log phrasing now distinguishes the stages explicitly: `marker context
   established by <authority>`, `Set Course enabled`, `Set Course dispatched`,
   `route identity confirmed`, and `Execute dispatched`.
-- [ ] Local `xmake f -m releasedbg -y && xmake -y` compile/link and MO2
-  deployment were **not** performed for this change: it was authored in a Linux
-  cloud container with no Windows toolchain, no game install, and no checked-out
-  `lib/commonlibsf` submodule. Static validation only: the new galaxy-focus
-  helpers and the Quick Select handler were extracted and compiled clean under
-  GCC 13 and Clang with `-std=c++23 -Wall -Wextra` against a stub mirroring the
-  pinned CommonLibSF `Scaleform::GFx::Value` API (`VisitMembers` is
-  `REL::ID{169753}` at submodule commit `856774a`, so it is bound and non-zero).
-  Releasedbg compilation and in-game testing remain required.
+- [x] The first native Windows `releasedbg` compile/link and MO2 deployment were
+  performed on 2026-08-07 against checked-out CommonLibSF commit `856774a`.
+  They passed with inherited CommonLibSF warnings only. The following no-mouse
+  run failed as recorded in the next section, so build/deploy proof was not
+  mistaken for gameplay proof.
 - [ ] Restart Starfield and trigger one remote planet/moon `JUMP THEN CRUISE`
   **without moving the mouse after the press**. Require, in order: `marker
   context established by <authority>`, `Set Course dispatched`, `route identity
@@ -872,3 +868,73 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
 - [ ] If it still fails closed, capture the `galaxy diagnostics` lines and the
   `StarMapMenuQuickSelectData members` line: together they name the real
   vanilla galaxy-selection seam without another speculative event.
+
+## 2026-08-07 native single-system galaxy focus
+
+- [x] The first Windows compile/deploy of the previous two-rung change passed,
+  and the one requested no-mouse Neptune test failed closed without dispatching
+  Set Course. The live payload was exactly
+  `StarMapMenuQuickSelectData members: bShowMenu:bool, bOpenForPlot:bool`;
+  it contains no entry array, selected index, or selected body ID.
+- [x] The same run proved both speculative rungs ineffective: the direct
+  `StarMapMenu_QuickSelectChange` event produced no native selection readback,
+  and no public `SetHoveredSystem` method was reachable. At timeout native still
+  reported `SetRouteDestination` resolved/visible but disabled, zero Quick
+  Select entries, and zero highlighted galaxy markers. Vanilla route state was
+  preserved and only the Cruise mark was cleared.
+- [x] Shipped `QuickSystemSelect.as` confirms the list emits
+  `StarMapMenu_QuickSelectChange` only from an actual selected entry and sends
+  `SetRouteDestination` from its Open-for-Plot item press. Native
+  `GalaxyState` analysis confirms the list entries are delivered separately by
+  a direct `SetMarkers(Array)` call; the two-bool feed is complete.
+- [x] Static 1.16.244 native analysis identifies why opening Quick Select is not
+  itself the fix: its candidate builder measures galaxy marker positions
+  against cursor coordinates and opens the list only for multiple candidates.
+  The one-candidate path instead calls `0x1416A1880`, Address Library ID
+  `94315`, with `(GalaxyState, StarMapMenu+0x1B8, systemBodyID, false)`.
+- [x] The first follow-up driver invoked that exact vanilla single-system focus operation
+  once after stock Back proves the captured STDT root in galaxy view. It is
+  guarded by the exact 16-byte 1.16.244 prologue, StarMapMenu primary vtable ID
+  `446845`, GalaxyState primary vtable ID `446425`, the active menu/movie
+  generation, and a nonzero captured root. Any mismatch fails closed before the
+  call. No Quick Select array, button state, route, or synthetic input is
+  written.
+- [x] The downstream authority gates are unchanged: system-scope Set Course is
+  dispatched only after native readback names the captured system, and Execute
+  still requires matching route-end system identity plus continuous public
+  readiness for 500 ms.
+- [x] Releasedbg build and MO2 deployment for the ID `94315` change pass with
+  inherited CommonLibSF warnings only. Built/deployed DLL hashes match at
+  `EAC3CA0907BAC5E6CE2FBB14CF6F87B836615DA88D66738FD4BE248C530B265E`;
+  built/deployed PDB hashes match at
+  `776279214B55D6F493008AF97C0D169558DE3A6593FCD41EC20C4047E9E176FE`.
+  Starfield was closed for deployment, no custom INI was present, and the
+  winning default INI had `bVerboseLog=true`.
+- [x] The no-mouse Chawla follow-up proved ID `94315` is not a plot-selection
+  seam. It made the vanilla Set Course button enabled within 17 ms and the
+  plugin dispatched Set Course, but native then entered Alpha Centauri system
+  view and produced no route. The full five-second route phase failed closed
+  with `system-level Set Course left galaxy view before producing a route`.
+- [x] Static follow-up identifies the non-entering operation as GalaxyState
+  primary-vtable slot `+0x48`, `0x14169DEB0`, Address Library ID `94292`. It
+  writes/publishes the native selected-system field at `+0x880` without queuing
+  a view transition. `SetRouteDestination` reads that selected ID only while
+  the Quick Select ownership byte at `+0x8F8` is active, then calls stock close
+  `0x1416A0DA0`, Address Library ID `94308`, which clears it synchronously.
+- [x] The driver now uses ID `94292`, verifies exact selected-system readback,
+  and arms `+0x8F8` only immediately around the stock Set Course event. If the
+  event does not synchronously consume the byte, byte-verified ID `94308`
+  restores the state and the request fails closed. The physical/fake cursor,
+  button enabled state, marker arrays, and route data are never written.
+- [x] Releasedbg build and MO2 deployment pass with inherited CommonLibSF
+  warnings only. Built/deployed DLL hashes match at
+  `075F58AA57961A7F208C23DB07028A07972334C815603E595556B564CF06E930`;
+  built/deployed PDB hashes match at
+  `907F36EA5BD5B9694C688AAD269D8BFF9EB12A0444610F5D5DA9D8809F77A7EB`.
+  Starfield remained closed throughout deployment.
+- [ ] Restart Starfield and run one remote planet/moon `JUMP THEN CRUISE` tap
+  without moving the mouse for the full ten seconds. Require `focus rung 1:
+  invoked stock native galaxy selected-system setter`, `Quick Select route
+  selection armed`, Set Course without returning to system view, matching-route
+  Execute, player grav-jump states `0`, `1`, `2`, and final Cruise lock on the
+  marked body.

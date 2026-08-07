@@ -37,9 +37,11 @@ inter-plugin API.
 Native grav-jump route construction or modification remains outside this
 plugin's scope. For a remote planet or moon, one tap arms the process-local body
 mark and emits vanilla Back from system view. Once galaxy view is active, the
-plugin emits vanilla Quick Select's system-selection event with the captured
-STDT root, verifies the resulting **Set Course** state, and dispatches the exact
-custom event emitted by vanilla **Set Course** there. The plugin then waits for
+plugin invokes vanilla's non-entering selected-system setter with the captured
+STDT root, verifies the native readback, and dispatches the exact custom event
+emitted by vanilla **Set Course** through its Quick Select route-selection path.
+The selection/cleanup bindings, StarMap menu, and GalaxyState object are all
+exact-version byte/vtable guarded. The plugin then waits for
 the visible vanilla travel panel, verifies that it remains an executable route
 to the captured system for 500 ms, and invokes the same public method as the
 vanilla Execute button. Vanilla still owns fuel, range,
@@ -65,10 +67,12 @@ than being reported as confirmed.
   enabled only when the system/star root is exact and vanilla **Set Course** is
   available. The tap records the body as the Cruise target, dispatches stock
   `StarMapMenu_OnCancel`, and waits for galaxy view. It then establishes the
-  galaxy marker context without the cursor: it emits the stock
-  `StarMapMenu_QuickSelectChange` payload with the captured STDT root and, if
-  native still reports no selection a fixed number of UI advances later,
-  invokes the shipped public galaxy hover setter with that same root. Stock
+  galaxy marker context without consulting the physical cursor: it invokes the
+  native non-entering selected-system setter (Address Library ID `94292`) with
+  the captured STDT root, then leaves completed UI advances for native to
+  publish the result. Immediately around Set Course it arms the same native
+  selected-ID branch used by an open Quick Select list; vanilla must consume and
+  clear that ownership synchronously or the stock close path restores it. Stock
   `SetRouteDestination` is dispatched at system scope only after native itself
   names the captured system — through the
   vanilla **Set Course** button, the native Quick Select cursor, or a unique
@@ -125,9 +129,9 @@ A Starmap press may be consumed only when all of these gates pass:
    a live STDT star whose parsed DNAM system ID matches the destination's
    parsed GNAM system ID, vanilla **Set Course** to be
    available, and the browsed-system header to resolve. After stock Back the
-   captured STDT/DNAM root is carried into galaxy view and sent through
-   vanilla Quick Select's `bodyID` selection event without requiring mouse
-   movement. After
+   captured STDT/DNAM root is carried into galaxy view and passed to vanilla's
+   byte- and vtable-guarded non-entering selected-system/Quick Select route path
+   without requiring mouse movement. After
    system-scope route
    creation they require the public Execute hint to remain visible
    (`bCanExecuteRoute=true`) and its destination-system text to match the system
