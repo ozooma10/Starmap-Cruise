@@ -8,9 +8,8 @@ remote planet, moon, or exact indexed station with an executable matching vanill
 a system-level route and remembers which target Cruise should lock after arrival. The key
 may be released once a local hold completes. In flight system view, the action
 remains visible but disabled with a short reason when the highlighted marker
-cannot be accepted. A fixed cockpit label confirms the marked target even when
-its optional positional marker is unavailable. Live 1.16.244 evidence identifies
-the selection as the one `StarMapMenuMarkersData` row whose
+cannot be accepted. Live 1.16.244 evidence identifies the selection as the one
+`StarMapMenuMarkersData` row whose
 `bIsInHighlightRadius` value is true. Planet and moon rows are joined exactly to
 the dossier PNDT identity. A station marker may identify either its live
 reference or its map cell; the active-plugin index resolves the latter to one
@@ -140,8 +139,6 @@ action.
 - If Cruise is inactive but the stock cockpit action is temporarily unavailable,
   such as its short post-exit cooldown, the same tap-only action marks the target
   without advertising or attempting a hold-to-engage action.
-- The cockpit shows `CRUISE TARGET: <name>` while a mark exists. It changes to
-  `LOCKING CRUISE TARGET` and `CRUISE LOCK` as engine readback advances.
 
 `TapHoldCruise` is the only exposed flow. Older `SelectThenCruise`, `MarkOnly`,
 and `HoldToCruise` custom values are read for compatibility, warn at startup,
@@ -233,7 +230,6 @@ Edit `Data/SFSE/Plugins/CruiseFromStarmapCustom.ini`, not the shipped default:
 sMode=TapHoldCruise
 bShowMarker=false
 bShowDestinationName=true
-bShowTargetStatus=true
 bVerboseLog=true
 ```
 

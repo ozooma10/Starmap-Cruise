@@ -396,13 +396,6 @@ namespace CFS::Bridge
         V g_markerLabel;
         V g_markerFormat;
 
-        std::atomic<bool> g_targetStatusReady{ false };
-        std::atomic<bool> g_targetStatusFailed{ false };
-        std::atomic<bool> g_targetStatusBuildInFlight{ false };
-        V g_targetStatus;
-        V g_targetStatusLabel;
-        V g_targetStatusFormat;
-
         using ProcessInput_t = void (*)(RE::BSInputEventReceiver*, const RE::InputEvent*);
         std::atomic<ProcessInput_t> g_originalInput{ nullptr };
         std::atomic<bool> g_inputInstalled{ false };
@@ -4149,90 +4142,6 @@ namespace CFS::Bridge
             return true;
         }
 
-        void TryCreateTargetStatus(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            const char* a_rootPath)
-        {
-            if (!Settings::ShowTargetStatus() ||
-                g_targetStatusReady.load(std::memory_order_acquire) ||
-                g_targetStatusFailed.load(std::memory_order_acquire) || !WorldSettled())
-                return;
-            if (g_targetStatusBuildInFlight.exchange(true, std::memory_order_acq_rel))
-                return;
-            struct Release
-            {
-                ~Release()
-                {
-                    g_targetStatusBuildInFlight.store(false, std::memory_order_release);
-                }
-            } release;
-
-            const std::string base{ a_rootPath ? a_rootPath : "root" };
-            V reticle;
-            if (!a_root->GetVariable(&reticle, (base + ".Reticle_mc").c_str()))
-                return;
-            if (!AddSprite(a_root, reticle, g_targetStatus,
-                    "CruiseFromStarmapTargetStatus", 21001)) {
-                g_targetStatusFailed.store(true, std::memory_order_release);
-                REX::WARN("[status] cockpit target-status construction failed");
-                return;
-            }
-
-            a_root->CreateObject(&g_targetStatusLabel, "flash.text.TextField");
-            if (!(g_targetStatusLabel.IsObject() || g_targetStatusLabel.IsDisplayObject())) {
-                g_targetStatusFailed.store(true, std::memory_order_release);
-                REX::WARN("[status] cockpit target-status text construction failed");
-                return;
-            }
-            V added;
-            g_targetStatus.Invoke("addChild", &added, &g_targetStatusLabel, 1);
-            g_targetStatusLabel.SetMember("selectable", V{ false });
-            g_targetStatusLabel.SetMember("mouseEnabled", V{ false });
-            g_targetStatusLabel.SetMember("width", V{ 520.0 });
-            g_targetStatusLabel.SetMember("height", V{ 30.0 });
-            g_targetStatusLabel.SetMember("x", V{ -260.0 });
-            g_targetStatusLabel.SetMember("y", V{ 185.0 });
-            if (BorrowTextFormat(a_root, base, g_targetStatusFormat)) {
-                g_targetStatusFormat.SetMember("size", V{ 18.0 });
-                g_targetStatusFormat.SetMember("color", V{ kNavigationColor });
-                g_targetStatusFormat.SetMember("align", V{ "center" });
-                g_targetStatusLabel.SetMember("defaultTextFormat", g_targetStatusFormat);
-            }
-            g_targetStatus.SetMember("visible", V{ false });
-            g_targetStatusReady.store(true, std::memory_order_release);
-            REX::INFO("[status] cockpit Cruise target confirmation ready");
-        }
-
-        void UpdateTargetStatus(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            const char* a_rootPath)
-        {
-            const auto destination = Destination();
-            if (!destination || !Settings::ShowTargetStatus()) {
-                if (g_targetStatusReady.load(std::memory_order_acquire))
-                    g_targetStatus.SetMember("visible", V{ false });
-                return;
-            }
-
-            TryCreateTargetStatus(a_root, a_rootPath);
-            if (!g_targetStatusReady.load(std::memory_order_acquire))
-                return;
-
-            const auto state = g_state.load(std::memory_order_acquire);
-            const bool locked = state == NavState::kAutopilotLocked;
-            const bool awaiting = state == NavState::kAwaitingCruise;
-            const auto text = std::format("{}: {}",
-                locked ? "CRUISE LOCK" : (awaiting ? "LOCKING CRUISE TARGET" : "CRUISE TARGET"),
-                destination->localizedName);
-            const auto color = locked ? kCruiseColor : kNavigationColor;
-            g_targetStatusLabel.SetMember("text", V{ text.c_str() });
-            g_targetStatusLabel.SetMember("textColor", V{ color });
-            if (g_targetStatusFormat.IsObject()) {
-                g_targetStatusFormat.SetMember("color", V{ color });
-                g_targetStatusLabel.Invoke("setTextFormat", nullptr,
-                    &g_targetStatusFormat, 1);
-            }
-            g_targetStatus.SetMember("visible", V{ true });
-        }
-
         void TryCreateMarker(RE::Scaleform::GFx::ASMovieRootBase* a_root, const char* a_rootPath)
         {
             if (!Settings::ShowMarker() || g_markerReady.load(std::memory_order_acquire) ||
@@ -4384,11 +4293,6 @@ namespace CFS::Bridge
                 g_cruiseGlyph = V{};
                 g_markerLabel = V{};
                 g_markerFormat = V{};
-                g_targetStatusReady.store(false, std::memory_order_release);
-                g_targetStatusFailed.store(false, std::memory_order_release);
-                g_targetStatus = V{};
-                g_targetStatusLabel = V{};
-                g_targetStatusFormat = V{};
                 {
                     std::lock_guard lock{ g_hudBearingsMutex };
                     g_hudBearings.clear();
@@ -4431,7 +4335,6 @@ namespace CFS::Bridge
             g_hudUiDirty.store(false, std::memory_order_release);
 
             DriveHudCruiseInput(root, rootPath);
-            UpdateTargetStatus(root, rootPath);
 
             std::vector<Bearing> bearings;
             {
@@ -5657,8 +5560,6 @@ namespace CFS::Bridge
             g_hudLowDirty.store(false, std::memory_order_release);
             g_markerReady.store(false, std::memory_order_release);
             g_markerFailed.store(false, std::memory_order_release);
-            g_targetStatusReady.store(false, std::memory_order_release);
-            g_targetStatusFailed.store(false, std::memory_order_release);
             g_cruiseActive.store(false, std::memory_order_release);
             g_cruiseEngageAvailable.store(false, std::memory_order_release);
             g_hudUiDirty.store(true, std::memory_order_release);

@@ -81,7 +81,6 @@ movie's public user-event method from the post-advance Scaleform pump instead.
   without consuming input or reporting a false lock
 - [ ] HUD movie rebuild, focus loss, load, and repeated map cycles are safe
 - [ ] Disabled eligibility reasons render and never consume input
-- [ ] Fixed cockpit target status renders independently of positional bearing
 - [ ] Cruise Navigation Panel coexists; both input hooks chain and markers remain independent
 - [ ] Save made during use loads after uninstall
 
@@ -263,8 +262,6 @@ Starfield pass before gameplay rows can be checked:
 - [x] In active-flight system view, the separate action remains present while
   ineligible and receives a disabled reason label. Input routing remains off
   unless the exact planet/moon gate passes.
-- [x] Added a fixed cockpit `CRUISE TARGET` status independent of low/high
-  positional-bearing availability. The optional diamond marker remains separate.
 - [x] Reduced the exposed interaction to `TapHoldCruise`. Legacy custom mode
   strings warn and use the supported behavior instead of entering unreachable
   selection paths.
@@ -998,8 +995,8 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   Cruise became available and newer feed revision 56 uniquely exposed Triton,
   independently confirming the parent arrival/feed refresh. The plugin then
   reactivated stock Cruise, dispatched Triton, and received exact final-moon
-  lock readback 14 ms later. The public cockpit status remained `CRUISE TARGET:
-  TRITON` while the orange engine marker showed the private Neptune first leg.
+  lock readback 14 ms later. The retained public destination remained Triton
+  while the orange engine marker showed the private Neptune first leg.
 - [x] A same-system Ariel `0005DEC9` regression preserved the pre-existing direct
   path. After stock Cruise activation, the plugin dispatched Ariel once at
   `10:51:49`; no `bIsCruiseTargetLock` readback arrived within 1.5 seconds, so

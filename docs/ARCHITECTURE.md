@@ -39,7 +39,6 @@ SpaceshipHudMenu movie
   TargetLowFrequencyProvider -------- uniqueID/name/course-lock/current system
   TargetHighFrequencyProvider ------- index-aligned bearing + distance
                     |
-                    +---- fixed target-status label (independent of bearing)
                     +---- optional positional marker and localized label
                     |
                     +---- ProcessUserEvent("Cruise", down/up)
@@ -321,8 +320,8 @@ replacement.
   payload changes stay evidence-pinned.
 - Feed callbacks copy passed GFx payloads into plain C++ snapshots or queue a
   value action, then return without fetching another root or invoking AS3.
-  HUD object construction, forwarded Cruise edges, fixed target status, marker
-  movement, course dispatch, and map-button updates run afterward from the
+  HUD object construction, forwarded Cruise edges, marker movement, course
+  dispatch, and map-button updates run afterward from the
   post-advance pump. Stale GFx handles are released there as well.
 - Input interception only reads/copies value state, edits its own queue links
   for the duration of the UI call, and restores them in reverse order.

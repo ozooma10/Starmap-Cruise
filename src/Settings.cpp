@@ -16,7 +16,6 @@ namespace CFS::Settings
         REX::TIniSetting<std::string> sMode{ "General", "sMode", "TapHoldCruise" };
         REX::TIniSetting<bool> bShowMarker{ "General", "bShowMarker", false };
         REX::TIniSetting<bool> bShowDestinationName{ "General", "bShowDestinationName", true };
-        REX::TIniSetting<bool> bShowTargetStatus{ "General", "bShowTargetStatus", true };
         REX::TIniSetting<bool> bVerboseLog{ "General", "bVerboseLog", true };
     }
 
@@ -35,13 +34,11 @@ namespace CFS::Settings
             REX::WARN("sMode={} is no longer exposed; using the supported TapHoldCruise flow",
                 sMode.GetValue());
 
-        REX::INFO("config: mode=TapHoldCruise marker={} destinationName={} targetStatus={} verbose={}",
-            bShowMarker.GetValue(), bShowDestinationName.GetValue(),
-            bShowTargetStatus.GetValue(), bVerboseLog.GetValue());
+        REX::INFO("config: mode=TapHoldCruise marker={} destinationName={} verbose={}",
+            bShowMarker.GetValue(), bShowDestinationName.GetValue(), bVerboseLog.GetValue());
     }
 
     bool ShowMarker() { return bShowMarker.GetValue(); }
     bool ShowDestinationName() { return bShowDestinationName.GetValue(); }
-    bool ShowTargetStatus() { return bShowTargetStatus.GetValue(); }
     bool Verbose() { return bVerboseLog.GetValue(); }
 }
