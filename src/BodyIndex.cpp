@@ -94,6 +94,7 @@ namespace CFS::BodyIndex
         std::unordered_map<std::uint32_t, std::uint32_t> g_systemRoots;
         std::unordered_set<std::uint32_t> g_stationBases;
         std::unordered_map<std::uint32_t, std::vector<StationTarget>> g_stationTargets;
+        std::unordered_map<std::uint32_t, std::vector<IndexedBody>> g_stationOrbitals;
         std::atomic<bool> g_started{ false };
         std::atomic<bool> g_ready{ false };
 
@@ -307,7 +308,8 @@ namespace CFS::BodyIndex
             std::uint32_t a_currentCell, bool a_placedChild,
             const PluginInfo& a_plugin, const std::vector<PluginInfo>& a_masters,
             const std::unordered_set<std::uint32_t>& a_stationBases,
-            std::unordered_map<std::uint32_t, StationPlacement>& a_out)
+            std::unordered_map<std::uint32_t, StationPlacement>& a_out,
+            std::unordered_map<std::uint32_t, std::string>& a_cellEditorIDs)
         {
             std::vector<std::byte> raw;
             std::vector<std::byte> scratch;
@@ -339,15 +341,18 @@ namespace CFS::BodyIndex
                         nextPlacedChild = true;
                     }
                     ParseStationReferenceGroup(a_file, groupEnd, nextCell, nextPlacedChild,
-                        a_plugin, a_masters, a_stationBases, a_out);
+                        a_plugin, a_masters, a_stationBases, a_out,
+                        a_cellEditorIDs);
                     a_file.seekg(static_cast<std::streamoff>(groupEnd), std::ios::beg);
                     continue;
                 }
 
                 if (start + sizeof(RecordHeader) + record.dataSize > a_end)
                     return;
-                if (!a_currentCell || !a_placedChild ||
-                    std::memcmp(record.signature, "REFR", 4) != 0) {
+                const bool isCell = std::memcmp(record.signature, "CELL", 4) == 0;
+                const bool isPlacedReference = a_currentCell && a_placedChild &&
+                    std::memcmp(record.signature, "REFR", 4) == 0;
+                if (!isCell && !isPlacedReference) {
                     a_file.seekg(record.dataSize, std::ios::cur);
                     continue;
                 }
@@ -355,6 +360,27 @@ namespace CFS::BodyIndex
                 raw.resize(record.dataSize);
                 if (record.dataSize && !ReadExact(a_file, raw.data(), raw.size()))
                     return;
+                if (isCell) {
+                    const auto cellID = ResolveFormID(record.formID, a_masters, a_plugin);
+                    if ((record.flagsOrLabel & kDeleted) != 0) {
+                        a_cellEditorIDs.erase(cellID);
+                        continue;
+                    }
+                    std::string editorID;
+                    const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
+                    ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
+                        const std::byte* a_payload, std::size_t a_length) {
+                        if (a_sig == "EDID" && a_length > 1) {
+                            const auto* chars = reinterpret_cast<const char*>(a_payload);
+                            editorID.assign(chars, ::strnlen(chars, a_length));
+                            return false;
+                        }
+                        return true;
+                    });
+                    if (!editorID.empty())
+                        a_cellEditorIDs.insert_or_assign(cellID, std::move(editorID));
+                    continue;
+                }
                 const auto referenceID = ResolveFormID(record.formID, a_masters, a_plugin);
                 if ((record.flagsOrLabel & kDeleted) != 0) {
                     a_out.erase(referenceID);
@@ -397,7 +423,8 @@ namespace CFS::BodyIndex
         void ParseStationPlacements(const PluginInfo& a_plugin,
             const std::vector<PluginInfo>& a_masters,
             const std::unordered_set<std::uint32_t>& a_stationBases,
-            std::unordered_map<std::uint32_t, StationPlacement>& a_out)
+            std::unordered_map<std::uint32_t, StationPlacement>& a_out,
+            std::unordered_map<std::uint32_t, std::string>& a_cellEditorIDs)
         {
             const auto path = std::filesystem::path{ "Data" } / a_plugin.name;
             std::ifstream file{ path, std::ios::binary };
@@ -420,7 +447,7 @@ namespace CFS::BodyIndex
                 if (std::memcmp(&group.flagsOrLabel, "CELL", 4) == 0 ||
                     std::memcmp(&group.flagsOrLabel, "WRLD", 4) == 0) {
                     ParseStationReferenceGroup(file, groupEnd, 0, false, a_plugin,
-                        a_masters, a_stationBases, a_out);
+                        a_masters, a_stationBases, a_out, a_cellEditorIDs);
                 }
                 file.seekg(static_cast<std::streamoff>(groupEnd), std::ios::beg);
             }
@@ -533,12 +560,22 @@ namespace CFS::BodyIndex
                     if (a_sig == "EDID" && a_length > 1) {
                         const auto* chars = reinterpret_cast<const char*>(a_payload);
                         entry.editorID.assign(chars, ::strnlen(chars, a_length));
+                    } else if (a_sig == "DNAM" && a_length >= 5) {
+                        std::uint32_t stringBytes = 0;
+                        std::memcpy(&stringBytes, a_payload, sizeof(stringBytes));
+                        if (stringBytes > 1 &&
+                            sizeof(stringBytes) + stringBytes <= a_length) {
+                            const auto* chars = reinterpret_cast<const char*>(
+                                a_payload + sizeof(stringBytes));
+                            const auto textLength = ::strnlen(chars, stringBytes);
+                            if (textLength + 1 == stringBytes)
+                                entry.spaceCellEditorID.assign(chars, textLength);
+                        }
                     } else if (a_sig == "GNAM" && a_length >= 12) {
                         std::uint32_t values[3]{};
                         std::memcpy(values, a_payload, sizeof(values));
                         entry.galaxy = { values[0], values[1], values[2] };
                         haveGalaxy = true;
-                        return false;
                     }
                     return true;
                 });
@@ -567,6 +604,7 @@ namespace CFS::BodyIndex
             std::unordered_map<std::uint32_t, std::uint32_t> systemRoots;
             std::unordered_set<std::uint32_t> stationBases;
             std::unordered_map<std::uint32_t, StationPlacement> stationPlacements;
+            std::unordered_map<std::uint32_t, std::string> cellEditorIDs;
             std::unordered_map<std::string, PluginInfo> pluginByName;
             const auto fold = [](std::string text) {
                 std::ranges::transform(text, text.begin(), [](unsigned char ch) {
@@ -606,7 +644,7 @@ namespace CFS::BodyIndex
                 ParsePlugin(context.plugin, context.masters, entries);
                 ParseSystemRoots(context.plugin, context.masters, systemRoots);
                 ParseStationPlacements(context.plugin, context.masters, stationBases,
-                    stationPlacements);
+                    stationPlacements, cellEditorIDs);
             }
 
             std::unordered_map<std::uint32_t, std::vector<StationTarget>> stationTargets;
@@ -625,6 +663,34 @@ namespace CFS::BodyIndex
                 stationReferenceCount += targets.size();
             }
 
+            std::unordered_map<std::string, std::vector<IndexedBody>> orbitalsByCellEditorID;
+            for (const auto& [formID, entry] : entries) {
+                if (entry.spaceCellEditorID.empty())
+                    continue;
+                orbitalsByCellEditorID[fold(entry.spaceCellEditorID)].push_back({
+                    formID, entry.galaxy, entry.editorID,
+                });
+            }
+            std::unordered_map<std::uint32_t, std::vector<IndexedBody>> stationOrbitals;
+            std::size_t stationOrbitalCount = 0;
+            for (const auto& [cellID, targets] : stationTargets) {
+                (void)targets;
+                const auto cellEditor = cellEditorIDs.find(cellID);
+                if (cellEditor == cellEditorIDs.end())
+                    continue;
+                const auto found = orbitalsByCellEditorID.find(fold(cellEditor->second));
+                if (found == orbitalsByCellEditorID.end())
+                    continue;
+                auto& orbitals = stationOrbitals[cellID];
+                orbitals = found->second;
+                std::ranges::sort(orbitals, {}, &IndexedBody::formID);
+                orbitals.erase(std::unique(orbitals.begin(), orbitals.end(),
+                    [](const IndexedBody& a_left, const IndexedBody& a_right) {
+                        return a_left.formID == a_right.formID;
+                    }), orbitals.end());
+                stationOrbitalCount += orbitals.size();
+            }
+
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - started).count();
             const auto count = entries.size();
@@ -637,12 +703,14 @@ namespace CFS::BodyIndex
                 g_systemRoots = std::move(systemRoots);
                 g_stationBases = std::move(stationBases);
                 g_stationTargets = std::move(stationTargets);
+                g_stationOrbitals = std::move(stationOrbitals);
             }
             g_ready.store(true, std::memory_order_release);
             REX::INFO("[bodies] load-order index ready: {} PNDT bodies, {} STDT system roots, "
-                      "{} station bases, {} placed station refs in {} cells, {} ms",
+                      "{} station bases, {} placed station refs in {} cells, "
+                      "{} CELL/PNDT orbital links, {} ms",
                 count, systemRootCount, stationBaseCount, stationReferenceCount,
-                stationCellCount, elapsed);
+                stationCellCount, stationOrbitalCount, elapsed);
         } }.detach();
     }
 
@@ -660,6 +728,53 @@ namespace CFS::BodyIndex
         if (const auto found = g_entries.find(a_formID); found != g_entries.end())
             return found->second;
         return std::nullopt;
+    }
+
+    std::vector<IndexedBody> ParentPlanets(std::uint32_t a_moonFormID)
+    {
+        std::vector<IndexedBody> parents;
+        std::lock_guard lock{ g_mutex };
+        const auto moon = g_entries.find(a_moonFormID);
+        if (moon == g_entries.end() || !moon->second.galaxy.parent)
+            return parents;
+
+        for (const auto& [formID, entry] : g_entries) {
+            if (entry.galaxy.system == moon->second.galaxy.system &&
+                entry.galaxy.parent == 0 &&
+                entry.galaxy.planet == moon->second.galaxy.parent) {
+                parents.push_back({ formID, entry.galaxy, entry.editorID });
+            }
+        }
+        std::ranges::sort(parents, {}, &IndexedBody::formID);
+        return parents;
+    }
+
+    std::vector<IndexedBody> ParentBodies(std::uint32_t a_childFormID)
+    {
+        std::vector<IndexedBody> parents;
+        std::lock_guard lock{ g_mutex };
+        const auto child = g_entries.find(a_childFormID);
+        if (child == g_entries.end() || !child->second.galaxy.parent)
+            return parents;
+
+        for (const auto& [formID, entry] : g_entries) {
+            if (formID != a_childFormID &&
+                entry.galaxy.system == child->second.galaxy.system &&
+                entry.galaxy.planet == child->second.galaxy.parent) {
+                parents.push_back({ formID, entry.galaxy, entry.editorID });
+            }
+        }
+        std::ranges::sort(parents, {}, &IndexedBody::formID);
+        return parents;
+    }
+
+    std::vector<IndexedBody> StationOrbitals(std::uint32_t a_cellFormID)
+    {
+        std::lock_guard lock{ g_mutex };
+        if (const auto found = g_stationOrbitals.find(a_cellFormID);
+            found != g_stationOrbitals.end())
+            return found->second;
+        return {};
     }
 
     std::optional<std::uint32_t> LookupSystemRoot(std::uint32_t a_formID)

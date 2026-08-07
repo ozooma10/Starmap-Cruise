@@ -378,10 +378,7 @@ CELL `0001285A`, while its placed ship reference is `00012894`:
   evidence for map `0001285A`, target `00012894`, native assignment, dispatch,
   and matching `bIsCruiseTargetLock` readback.
 - [ ] Repeat with Nova Galactic and Deimos Staryards.
-- [ ] Verify a generic non-planet marker with one exact current HUD row dispatches
-  and receives matching lock readback.
-- [ ] Confirm missing and ambiguous non-station markers remain disabled as
-  `TARGET IS NOT AVAILABLE TO CRUISE` or `TARGET IS AMBIGUOUS`.
+- [ ] Confirm Ship POIs and generic non-station markers expose no plugin action.
 
 ## 2026-08-05 HUD getter crash hardening
 
@@ -469,8 +466,8 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
 - [x] Current-system planetary regression: a completed Jemison hold latched the
   stock HUD press, activated Cruise, dispatched `0003F5A1`, and received exact
   engine lock readback after the remote-pending changes.
-- [ ] Recheck current-system station and generic non-planet flows; controller
-  binding/glyph validation remains pending.
+- [ ] Recheck the current-system station flow; controller binding/glyph
+  validation remains pending. Generic non-station targets are now hidden.
 
 ## 2026-08-06 remote mark plus vanilla ExecuteRoute handoff
 
@@ -619,17 +616,15 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
 - [x] The local CommonLibSF mirror's 1.16.244 `TESObjectCELL` layout has a
   byte-derived locked loaded-reference walker at `references+0x80` and
   `lock+0x118`. The resolver uses that walker only on the main UI thread.
-- [x] A Ship CELL is eligible only when the walker finds exactly one currently
-  live, in-space, non-station GBFM reference after excluding the player ship.
-  Zero or multiple candidates fail closed. Map close repeats the live form,
-  GBFM, in-space, non-station, and not-player checks before native assignment,
-  then requires exact target-global readback.
+- [x] This experimental resolver was later removed from selection policy. Ship
+  CELL identity is not reliable enough for the production exactness boundary;
+  all non-station markers are now hidden rather than exposed as unavailable or
+  eligible.
 - [x] Releasedbg compile/link/install passed with inherited CommonLibSF warnings
   only. The build, `release/Data`, and active MO2 DLL hashes match:
   `1ABB3F1652F309FF5CCE444570CE96A79CC0213E7919460555F9655FC8CE8B96`.
-- [ ] Restart Starfield, highlight the same Ship POI, and confirm the log reports
-  one eligible ship CELL/ref/base tuple, exact native target assignment, and
-  Cruise course-lock readback on that resolved reference.
+- [ ] Restart Starfield, highlight a Ship POI, and confirm the plugin action is
+  absent rather than disabled as `TARGET IS NOT AVAILABLE TO CRUISE`.
 
 ## 2026-08-06 controller input and glyph repair
 
@@ -938,3 +933,245 @@ that path with a null internal object; OSF UI is only the preceding hook frame.
   selection armed`, Set Course without returning to system view, matching-route
   Execute, player grav-jump states `0`, `1`, `2`, and final Cruise lock on the
   marked body.
+
+## 2026-08-07 remote-moon parent continuation
+
+- [x] The live failure is isolated downstream of the vanilla system route.
+  Chawla `0005E315` arrived in Alpha Centauri at Jemison but was absent from
+  `TargetLowFrequencyProvider`; Aranae IV-c `0005E290` accepted
+  `Reticle_OnCruiseLockCourse` after a manual same-system activation but never
+  produced matching `bIsCruiseTargetLock`. Removing the exact-one-row gate would
+  therefore activate Cruise without a lockable destination.
+- [x] The same PNDT/GNAM parser used by the production body index resolves each
+  failing moon to exactly one parent without a guessed FormID: Chawla
+  `(system=71456,parent=4,planet=10)` resolves to Olivas `0005E313`
+  `(71456,0,4)`; Aranae IV-c `(72955,4,12)` resolves to Aranae IV `0005E28C`
+  `(72955,0,4)`. The runtime Neptune result separately proves that a planet
+  exposed in the cockpit feed can be exact-locked even when vanilla entered the
+  system at a different planet.
+- [x] Production now retains the moon as the sole public destination and keeps
+  the resolved parent in a private continuation. It requires one parent planet
+  HUD row, stock Cruise activation, dispatched parent ID, exact parent lock
+  readback, lock loss with Cruise inactive in the same settled system, a newer
+  low-feed revision with one final-moon row, a second stock Cruise activation, and exact final-moon
+  lock readback. Dispatch success alone advances neither lock gate.
+- [x] Missing/ambiguous parent identity or HUD rows, bounded feed/activation/lock
+  and arrival timeouts, manual interruption, map reopen, load, HUD replacement,
+  landing/docking, or system mismatch fail closed. The existing system-route,
+  GalaxyState, Quick Select ownership, Execute dwell, grav-jump, and direct
+  planet/final-row paths are unchanged.
+- [x] With Starfield PID `16308` closed first, `xmake f -m releasedbg -y`
+  followed by `xmake -y` compiled, linked, installed, and deployed successfully
+  with inherited CommonLibSF warnings only. Built/deployed DLL hashes match at
+  `40D54D514C30FC46E49DADA7495AE5EA1A15EB03E43B8CE74F1FA47889935AA7`;
+  built/deployed PDB hashes match at
+  `59DBEF2ECDDE4A113AA4D20927BE6F78884C5BA09D86B0A8F31822631E8518DB`.
+  No custom INI exists and the deployed winning default has
+  `bVerboseLog=true`.
+- [x] The first no-mouse Chawla trace proved the entire first leg: vanilla entered
+  Alpha Centauri at Jemison, the private parent resolved uniquely to Olivas
+  `0005E313`, stock Cruise activated, the Olivas course dispatched, and exact
+  Olivas `bIsCruiseTargetLock` readback arrived 12 ms later. After 94 seconds the
+  lock ended at Olivas, but the added `0.05` light-second audit did not pass and
+  failed closed after two seconds. Stock Cruise did not become available again
+  until five seconds after lock loss. The operator observed Olivas as the
+  terminal result; Chawla was never dispatched on the second leg.
+- [x] That trace disproves the generic close-distance threshold for an internal
+  parent planet. The continuation now uses a stricter identity/topology proof:
+  after an exact parent lock ends, Cruise must be inactive, the same system must
+  remain settled, and a strictly newer cockpit feed must contain exactly one row
+  for the retained moon. A manual exit away from the parent cannot advance while
+  that moon remains absent. The ordinary final-destination arrival audit retains
+  its existing close-distance rule.
+- [x] With Starfield closed, the corrected gate passed a fresh
+  `xmake f -m releasedbg -y` and `xmake -y` build/deploy with inherited
+  CommonLibSF warnings only. Built/deployed DLL hashes match at
+  `1DA15F20BD3DACEB747755DDF736E5594D034C905137A93A70BCBDB4552C4BAD`;
+  built/deployed PDB hashes match at
+  `E6593F937F7EC17BB2C53CDFF0B55B417373588A23103E2DB6B1C6341EF248F4`.
+  The winning default remains `bVerboseLog=true` with no custom override.
+- [x] A no-mouse Triton `0005DECE` trace completed the required sequence. Vanilla
+  built and executed a Sol route ending at Mars, player grav-jump states 0, 1,
+  and 2 were observed, and the settled Sol feed lacked Triton. Live GNAM resolved
+  the unique private parent Neptune `0005DECD`; its course was dispatched and
+  received exact engine lock readback 11 ms later. After that lock ended, stock
+  Cruise became available and newer feed revision 56 uniquely exposed Triton,
+  independently confirming the parent arrival/feed refresh. The plugin then
+  reactivated stock Cruise, dispatched Triton, and received exact final-moon
+  lock readback 14 ms later. The public cockpit status remained `CRUISE TARGET:
+  TRITON` while the orange engine marker showed the private Neptune first leg.
+- [x] A same-system Ariel `0005DEC9` regression preserved the pre-existing direct
+  path. After stock Cruise activation, the plugin dispatched Ariel once at
+  `10:51:49`; no `bIsCruiseTargetLock` readback arrived within 1.5 seconds, so
+  the mark was preserved. The operator observed stock Cruise approach Uranus,
+  and the cockpit feed reported exact Ariel lock at `10:56:21`. No remote-moon
+  continuation or plugin-dispatched Uranus course occurred, so this proves that
+  the guarded remote parent workflow did not replace Starfield's deferred
+  same-system behavior.
+- [x] The Ariel trace revises the earlier interpretation of the 1.5-second
+  timeout: an absent immediate `bIsCruiseTargetLock` does not prove that the
+  final-moon event was discarded. Cruise remained active for roughly 4.5 minutes
+  after the single Ariel dispatch and later published exact Ariel lock without a
+  second event. Production now logs every low-feed engine course-ID transition
+  and applies that stock behavior to remote moons without trusting dispatch
+  success or the orange visual marker.
+- [x] With Starfield PID `42376` closed, `xmake f -m releasedbg -y` followed by
+  `xmake -y` compiled, linked, installed, and deployed the one-activation variant
+  with inherited CommonLibSF warnings only. Built/deployed DLL hashes match at
+  `1DAEA647DA798000D2AB99FD649E1B6B580FAF97CF91AE625878E54A3140BFF7`;
+  built/deployed PDB hashes match at
+  `CEA709DD97CBE5C3489B48303E37E3264D10980B9567459811DD9C7B9CCA63A9`.
+  No custom INI exists in the mod, MO2 overwrite, or Documents SFSE paths, and
+  the deployed default has `bVerboseLog=true`.
+- [x] The first no-mouse one-activation Chawla trace proved the stock latent
+  behavior. Vanilla entered Alpha Centauri at Jemison, the plugin activated
+  Cruise once and dispatched only Chawla at `11:20:13`, and neither Olivas nor
+  Chawla published an exact lock during the initial five-second gate. The plugin
+  cleared its public mark at `11:20:18`, but stock Cruise retained the request:
+  exact Chawla lock appeared at `11:21:32`, ended at `11:21:57`, and Cruise
+  became inactive at `11:22:02`; the operator confirmed arrival at Chawla. No
+  Olivas exact-lock transition or second activation/dispatch occurred.
+- [x] That trace proves the orange parent approach is not necessarily
+  `bIsCruiseTargetLock` and that missing immediate readback is not course
+  rejection. An initial bounded latent-resolution design was rejected because
+  both Ariel and Chawla prove this phase is engine-owned travel whose duration
+  depends on distance, not a command handshake. The driver now keeps the final
+  mark pending without an arbitrary travel timeout while Cruise/system/world
+  gates remain valid. Dispatch is still never success; only a unique final-moon
+  exact lock completes the continuation. An optional published parent exact
+  lock retains the stronger lock-end/newer-feed audit. Opening the map pauses
+  the driver and an accepted replacement target resets it normally.
+- [x] With Starfield closed, `xmake f -m releasedbg -y` and `xmake -y` built and
+  deployed the corrected latent-retention gate together with remote-station
+  support. Built/deployed DLL SHA-256 matches at
+  `16BBC10F5FAFCC458C885A854EB57E55D9763F76108D2DD3E7875289F85F96FA`;
+  built/deployed PDB SHA-256 matches at
+  `BCF32F7D13400E617C2B4DB85D8EDEC6974B41EC27F90CAC9B817647FDA03541`.
+  The winning default has `bVerboseLog=true`, with no custom override in the mod,
+  MO2 overwrite, or Documents SFSE paths.
+- [ ] Repeat one no-mouse remote moon. Do not mark the corrected gate validated
+  until the public final mark survives the latent interval and matching exact
+  final-moon lock appears without another activation or dispatch.
+
+## 2026-08-07 remote station continuation
+
+- [x] The prior remote non-planet exclusion was broader than necessary. Ships
+  and generic POIs still have no stable unloaded target identity, but the
+  active-load-order index already preserves station CELL, placed REFR, and
+  `IsStarstation` base identity independently of whether that system is loaded.
+- [x] The existing parser simulation found 23 placed station references in 23
+  distinct CELLs with zero ambiguous CELLs. Known exact mappings include The Eye
+  `0001285A -> 00012894`, Nova Galactic Staryard
+  `00219520 -> 00216F51`, and Deimos Staryard
+  `00219DFF -> 003120D6`.
+- [x] A remote non-planet marker is now eligible only when its CELL has exactly
+  one indexed station REFR/base tuple and the guarded load-game sink is ready.
+  The destination value retains the map CELL, exact REFR, exact base, and exact
+  STDT/DNAM system identity. Remote ships and generic POIs remain hidden.
+- [x] The remote station uses the unchanged vanilla system-level route handoff:
+  stock Back, guarded GalaxyState selected-system setter/readback, narrowly
+  scoped Quick Select ownership byte, stock Set Course, exact route-system
+  identity, executable-route dwell, stock Execute Route, player grav-jump
+  acknowledgement, and settled target-system agreement.
+- [x] No native ship-target assignment occurs in the origin system. After
+  settled arrival, one bounded window allows the retained station REFR to become
+  live. Its live base must exactly match the retained indexed base and still
+  carry `IsStarstation`; a different, missing, or ambiguous identity fails
+  closed. The guarded native target setter and exact target-global readback must
+  then succeed. One exact station HUD row takes the direct path. If that row is
+  absent, the exact CELL/DNAM/GNAM orbital continuation documented below may
+  advance only through one exact visible ancestor row.
+- [x] Both station paths dispatch only the retained station REFR. Dispatch is
+  not success: the course must appear on exactly one low-frequency row as
+  matching `bIsCruiseTargetLock`. Activation, dispatch, bounded handshake/feed
+  timeouts, unrelated courses, load, landing/docking, system mismatch, or
+  replacement fail closed; active Cruise travel itself is unbounded.
+- [x] The releasedbg build/deploy and matching DLL/PDB hashes are recorded in the
+  remote-moon section above; the same binary contains remote-station support.
+- [ ] Do not mark remote stations validated until one no-mouse trace proves:
+  vanilla system jump, exact retained REFR/base live resolution, native target
+  assignment/readback, exact-one HUD row, stock Cruise activation, exact station
+  dispatch, and matching `bIsCruiseTargetLock`.
+
+### 2026-08-07 first remote-station live trace
+
+- [x] A no-mouse remote Alpha Centauri station selection proved the new front
+  half. CELL `0003DBEC/4` resolved statically to REFR/base
+  `000013B8/000013B6`; the exact Alpha Centauri route ended at Jemison, Execute
+  closed the map, player grav-jump states `0`, `1`, and `2` appeared, and the
+  settled system resolved to `71456`.
+- [x] After arrival the same exact REFR/base resolved live, native ship-target
+  assignment committed, and target-global readback agreed.
+- [x] The station did not appear in `TargetLowFrequencyProvider` during its fresh
+  ten-second HUD-row window, so the continuation cleared the mark without
+  activating Cruise or dispatching a course. This is a safe failure, not remote
+  station validation. Do not remove the exact-one row gate.
+
+### 2026-08-07 exact orbital staging for missing remote-station rows
+
+- [x] Base-game PNDT `002D5F53` has `DNAM=scLC175StationRE939` and GNAM
+  `{system=71456,parent=11,planet=28}`. That `DNAM` exactly matches CELL
+  `0003DBEC`'s EDID, proving the selected station's orbital identity without a
+  guessed FormID.
+- [x] The same live-load-order GNAM index resolves the orbital's unique parent
+  to Voss `0005E316` (`planet=11,parent=4`) and Voss's unique parent to Olivas
+  `0005E313` (`planet=4,parent=0`). The design can therefore select an exact
+  visible ancestor even when the immediate parent is itself a distant moon,
+  then accept only ordered inward locks such as Olivas to Voss before the station.
+- [x] The index now parses PNDT space-cell `DNAM`, active CELL EDID, station
+  CELL/PNDT links, and unique same-system GNAM parents. A missing station row
+  may enter the existing one-activation latent orbital continuation only after
+  exact live REFR/base assignment and one exact ancestor row. The public mark
+  remains the station; active travel has no arbitrary timeout; dispatch is not
+  success; only the station REFR's exact `bIsCruiseTargetLock` succeeds.
+- [ ] Build/deploy evidence and a restarted no-mouse remote-station trace remain
+  pending. Do not mark the flow validated until the log proves vanilla system
+  jump, exact station identity/assignment, exact ancestor waypoint lock and
+  arrival/feed refresh when published, then exact station lock.
+
+## 2026-08-07 remote route while Cruise is active
+
+- [x] The failing Chawla attempt began with exact Phobos Cruise lock
+  `0005DEB7` active. Chawla replaced the public destination, stock Back and the
+  guarded GalaxyState/Quick Select handoff built the correct Alpha Centauri route
+  ending at Jemison, and route readiness remained exact for 506 ms.
+- [x] `JumpDataPanel.SendExecuteEvent()` returned invocation success while Cruise
+  remained active, but no Starmap close or player grav-jump state followed. The
+  operator was left in the Starmap. Therefore ActionScript dispatch is not
+  Execute acknowledgement when stock Cruise is active.
+- [x] The first guarded fix deferred Execute and tried the normal stock HUD
+  Cruise control. A live Alpha-Centauri-to-Sol Callisto run proved that route is
+  not accepted while the Starmap owns the UI: both press and release logged
+  `invoked=true handled=false`, `CruiseModeHUDActive` never became false, and the
+  route failed closed before Execute. The stock Back step explains the visible
+  return to galaxy view.
+- [x] A second Triton control reproduced the same result without focus loss:
+  exact Sol route ending at Mars, then `handled=false`, no inactive readback,
+  four-second safety release, and no Execute. ActionScript invocation is not an
+  input acknowledgement.
+- [x] Production now disables remote planet/moon/station selection while Cruise
+  is active and labels the control `EXIT CRUISE FIRST`. Acceptance rechecks the
+  active flag before any destination or map mutation, and the route driver checks
+  again immediately before Execute. Current-system Cruise retargeting is unchanged.
+- [x] With Starfield closed, releasedbg configure/build/install passed with only
+  inherited CommonLibSF warnings. Built and active-MO2 DLL SHA-256 matches at
+  `9974639BB5103C5C1A93C673943798C284F09C822B776F9AD101128886A0A711`;
+  built and active-MO2 PDB SHA-256 matches at
+  `3B7503567C53BE94CC276FB1F35163583F545969FE84EB8334DFE74670D5BA5A`.
+  The deployed default has `bVerboseLog=true`; no custom override exists in the
+  mod, MO2 overwrite, Documents, or direct game paths checked.
+- [x] Execute now has its own bounded acknowledgement phase. Only the stock
+  Starmap close consumes that phase and preserves `PendingJump`; a dispatched
+  event without map close clears the remote mark instead of leaving a false
+  pending jump.
+- [x] With Starfield closed, releasedbg configure/build/install passed with only
+  inherited CommonLibSF warnings. Built/deployed DLL SHA-256 matches at
+  `1BF2C4C9EC2130C84ACB3F7FCDF53BF66F607B666AECDA8B3D85A4F5A0354DF3`;
+  built/deployed PDB SHA-256 matches at
+  `436C2F8CBAEE4BAFEDD6FC32292E69AE261D398EB2C45ECDE9A6125B6B461F76`.
+  The winning default has `bVerboseLog=true` and no custom override exists in
+  the mod, MO2 overwrite, or Documents SFSE paths.
+- [ ] With Cruise active, highlight one remote target and verify the disabled
+  `EXIT CRUISE FIRST` control performs no Back transition and preserves the
+  current mark/course. Exit Cruise in the cockpit, reopen the map, and run the
+  ordinary no-mouse remote flow separately.

@@ -54,6 +54,11 @@ namespace CFS::Bridge
         constexpr auto kMapRoutePollTime = std::chrono::milliseconds(250);
         constexpr auto kRemoteRouteExecuteSettleTime = std::chrono::milliseconds(500);
         constexpr auto kRemoteRouteTimeout = std::chrono::seconds(5);
+        constexpr auto kRemoteExecuteAckTimeout = std::chrono::seconds(2);
+        constexpr auto kRemoteMoonFeedTimeout = std::chrono::seconds(10);
+        constexpr auto kRemoteMoonCruiseTimeout = std::chrono::seconds(5);
+        constexpr auto kRemoteMoonLockExitTimeout = std::chrono::seconds(2);
+        constexpr auto kRemoteStationResolveTimeout = std::chrono::seconds(10);
         // Post-advance passes the native selection call keeps before diagnostics.
         // The unit is completed AS3 advances, not wall clock: each pass means
         // native finished one advance with the selection already applied.
@@ -168,6 +173,7 @@ namespace CFS::Bridge
             kTargetTypeUnsupported,
             kTargetDataUpdating,
             kTargetNotIndexed,
+            kCruiseActive,
             kRemoteSafetyUnavailable,
             kRemoteCourseUnavailable,
             kRemoteCourseMismatch,
@@ -200,6 +206,7 @@ namespace CFS::Bridge
             kAwaitGalaxy,
             kEstablishSelection,
             kAwaitRoute,
+            kAwaitExecuteAck,
         };
 
         // One exact vanilla focus operation establishes the galaxy system
@@ -228,6 +235,37 @@ namespace CFS::Bridge
         };
         std::mutex g_remoteRouteMutex;
         RemoteRouteRequest g_remoteRouteRequest;
+
+        enum class RemoteMoonPhase : std::uint8_t
+        {
+            kNone,
+            kAwaitingParentFeed,
+            kAwaitingParentCruise,
+            kAwaitingParentLock,
+            kAwaitingLatentFinalLock,
+            kParentLocked,
+            kAwaitingParentArrival,
+            kAwaitingFinalLock,
+        };
+
+        struct RemoteMoonContinuation
+        {
+            RemoteMoonPhase phase{ RemoteMoonPhase::kNone };
+            BodyKind finalKind{ BodyKind::kOther };
+            std::uint32_t finalFormID{ 0 };
+            std::uint32_t system{ 0 };
+            std::uint32_t stationOrbitalFormID{ 0 };
+            std::uint32_t parentFormID{ 0 };
+            std::string parentEditorID;
+            std::string parentName;
+            std::vector<BodyIndex::IndexedBody> stationWaypoints;
+            std::size_t waypointIndex{ 0 };
+            std::uint64_t feedRevisionFloor{ 0 };
+            Clock::time_point phaseStarted{};
+            Clock::time_point inactiveSince{};
+        };
+        std::mutex g_remoteMoonMutex;
+        RemoteMoonContinuation g_remoteMoonContinuation;
 
         struct MapActionHintState
         {
@@ -259,6 +297,8 @@ namespace CFS::Bridge
         std::atomic<RE::InputEvent::DeviceType> g_pendingJumpDevice{
             RE::InputEvent::DeviceType::kNone
         };
+        std::atomic<std::int64_t> g_pendingStationResolveTicks{ 0 };
+        std::atomic<std::uint32_t> g_pendingStationAssignedID{ 0 };
         std::atomic<bool> g_loadGameSinkAttempted{ false };
         std::atomic<bool> g_loadGameSinkReady{ false };
         std::atomic<bool> g_loadClearPending{ false };
@@ -317,7 +357,17 @@ namespace CFS::Bridge
         std::mutex g_hudRowsMutex;
         std::vector<HudRow> g_hudRows;
 
+        struct ProcessedHudSnapshot
+        {
+            std::vector<HudRow> rows;
+            std::uint32_t course{ 0 };
+            std::uint64_t revision{ 0 };
+        };
+        std::mutex g_processedHudMutex;
+        ProcessedHudSnapshot g_processedHudSnapshot;
+
         std::atomic<bool> g_hudLowDirty{ false };
+        std::atomic<std::uint64_t> g_hudLowRevision{ 0 };
 
         struct Bearing
         {
@@ -368,8 +418,6 @@ namespace CFS::Bridge
                 return "moon";
             case BodyKind::kStation:
                 return "station";
-            case BodyKind::kShip:
-                return "ship";
             default:
                 return "non-planet target";
             }
@@ -379,6 +427,12 @@ namespace CFS::Bridge
         {
             return a_destination.kind == BodyKind::kPlanet ||
                    a_destination.kind == BodyKind::kMoon;
+        }
+
+        bool UsesRemoteSystemRoute(const BodyDestination& a_destination)
+        {
+            return IsPlanetary(a_destination) ||
+                   a_destination.kind == BodyKind::kStation;
         }
 
         std::optional<std::uint32_t> MapTreeSystemID(std::uint32_t a_formID)
@@ -887,37 +941,6 @@ namespace CFS::Bridge
             return resolved;
         }
 
-        std::vector<LiveReferenceTarget> ResolveShipTargets(std::uint32_t a_mapFormID)
-        {
-            std::vector<LiveReferenceTarget> resolved;
-            const auto form = RE::TESForm::LookupByID(a_mapFormID);
-            const auto cell = form ? form->As<RE::TESObjectCELL>() : nullptr;
-            if (!cell)
-                return resolved;
-
-            const auto player = RE::PlayerCharacter::GetSingleton();
-            const auto playerShip = player ? player->GetSpaceship() : nullptr;
-            const auto playerShipID = playerShip ? playerShip->GetFormID() : 0;
-            cell->ForEachReference([&](const RE::NiPointer<RE::TESObjectREFR>& a_reference) {
-                const auto base = a_reference ? a_reference->GetBaseObject() : nullptr;
-                const auto referenceID = a_reference ? a_reference->GetFormID() : 0;
-                if (referenceID && referenceID != playerShipID && base &&
-                    IsShipInSpace(a_reference.get()) &&
-                    base->GetFormType() == RE::FormType::kGBFM &&
-                    !BodyIndex::IsStationBase(base->GetFormID())) {
-                    resolved.push_back({ referenceID, base->GetFormID() });
-                }
-                return RE::BSContainer::ForEachResult::kContinue;
-            });
-            std::ranges::sort(resolved, {}, &LiveReferenceTarget::referenceFormID);
-            resolved.erase(std::unique(resolved.begin(), resolved.end(),
-                [](const LiveReferenceTarget& a_left,
-                    const LiveReferenceTarget& a_right) {
-                    return a_left.referenceFormID == a_right.referenceFormID;
-                }), resolved.end());
-            return resolved;
-        }
-
         std::vector<HudRow> CurrentHudTargets(std::uint32_t a_formID)
         {
             std::vector<HudRow> matches;
@@ -929,27 +952,28 @@ namespace CFS::Bridge
             return matches;
         }
 
+        ProcessedHudSnapshot CurrentProcessedHudSnapshot()
+        {
+            std::lock_guard lock{ g_processedHudMutex };
+            return g_processedHudSnapshot;
+        }
+
         bool AssignNativeShipTarget(const BodyDestination& a_destination)
         {
-            if (a_destination.kind != BodyKind::kStation &&
-                a_destination.kind != BodyKind::kShip)
+            if (a_destination.kind != BodyKind::kStation)
                 return true;
 
             const auto form = RE::TESForm::LookupByID(a_destination.formID);
             const auto reference = form ? form->As<RE::TESObjectREFR>() : nullptr;
             const auto base = reference ? reference->GetBaseObject() : nullptr;
             const auto setter = g_setShipHudTarget.load(std::memory_order_acquire);
-            const auto player = RE::PlayerCharacter::GetSingleton();
-            const auto playerShip = player ? player->GetSpaceship() : nullptr;
-            const auto playerShipID = playerShip ? playerShip->GetFormID() : 0;
-            const bool validStation = base && a_destination.kind == BodyKind::kStation &&
+            const bool exactBase = base &&
+                (!a_destination.targetBaseFormID ||
+                    base->GetFormID() == a_destination.targetBaseFormID);
+            const bool validStation = exactBase &&
+                a_destination.kind == BodyKind::kStation &&
                 BodyIndex::IsStationBase(base->GetFormID());
-            const bool validShip = base && reference &&
-                reference->GetFormID() != playerShipID && IsShipInSpace(reference) &&
-                a_destination.kind == BodyKind::kShip &&
-                base->GetFormType() == RE::FormType::kGBFM &&
-                !BodyIndex::IsStationBase(base->GetFormID());
-            if (!setter || (!validStation && !validShip)) {
+            if (!setter || !validStation) {
                 REX::ERROR("[target] refusing native assignment for {:08X}: live {} REFR validation failed",
                     a_destination.formID, DestinationKindName(a_destination.kind));
                 return false;
@@ -974,6 +998,26 @@ namespace CFS::Bridge
         {
             std::lock_guard lock{ g_destinationMutex };
             return g_destination;
+        }
+
+        std::optional<RemoteMoonContinuation> RemoteMoonState()
+        {
+            std::lock_guard lock{ g_remoteMoonMutex };
+            if (g_remoteMoonContinuation.phase == RemoteMoonPhase::kNone)
+                return std::nullopt;
+            return g_remoteMoonContinuation;
+        }
+
+        bool RemoteMoonContinuationActive()
+        {
+            std::lock_guard lock{ g_remoteMoonMutex };
+            return g_remoteMoonContinuation.phase != RemoteMoonPhase::kNone;
+        }
+
+        void ResetRemoteMoonContinuation()
+        {
+            std::lock_guard lock{ g_remoteMoonMutex };
+            g_remoteMoonContinuation = {};
         }
 
         void HideMarker()
@@ -1066,6 +1110,7 @@ namespace CFS::Bridge
                 std::lock_guard lock{ g_remoteRouteMutex };
                 g_remoteRouteRequest = {};
             }
+            ResetRemoteMoonContinuation();
             g_courseAskedID.store(0, std::memory_order_release);
             g_courseAskedClearing.store(false, std::memory_order_release);
             g_state.store(NavState::kIdle, std::memory_order_release);
@@ -1074,6 +1119,8 @@ namespace CFS::Bridge
             g_arrivalCheckID.store(0, std::memory_order_release);
             g_pendingJumpDevice.store(RE::InputEvent::DeviceType::kNone,
                 std::memory_order_release);
+            g_pendingStationResolveTicks.store(0, std::memory_order_release);
+            g_pendingStationAssignedID.store(0, std::memory_order_release);
             g_hudUiDirty.store(true, std::memory_order_release);
             if (old)
                 REX::INFO("[destination] cleared {:08X} '{}': {}", old->formID,
@@ -1092,6 +1139,7 @@ namespace CFS::Bridge
                 std::lock_guard lock{ g_courseMutex };
                 g_courseRequest = {};
             }
+            ResetRemoteMoonContinuation();
             g_courseAskedID.store(0, std::memory_order_release);
             g_courseAskedClearing.store(false, std::memory_order_release);
             g_state.store(NavState::kMapSelection, std::memory_order_release);
@@ -1100,6 +1148,8 @@ namespace CFS::Bridge
             g_arrivalCheckID.store(0, std::memory_order_release);
             g_pendingJumpDevice.store(RE::InputEvent::DeviceType::kNone,
                 std::memory_order_release);
+            g_pendingStationResolveTicks.store(0, std::memory_order_release);
+            g_pendingStationAssignedID.store(0, std::memory_order_release);
             g_hudUiDirty.store(true, std::memory_order_release);
             if (old && old->formID != a_destination.formID)
                 REX::INFO("[destination] replaced {:08X} '{}' with {:08X} '{}'",
@@ -1111,6 +1161,21 @@ namespace CFS::Bridge
                     a_destination.galaxy.system, a_destination.galaxy.parent,
                     a_destination.galaxy.planet,
                     DestinationKindName(a_destination.kind));
+        }
+
+        bool RemoteStationContinuationActive()
+        {
+            return g_pendingStationAssignedID.load(std::memory_order_acquire) != 0;
+        }
+
+        void FailRemoteStationContinuation(const char* a_reason)
+        {
+            if (!RemoteStationContinuationActive())
+                return;
+            REX::WARN("[station] automatic remote continuation failed closed: {}",
+                a_reason);
+            CancelOrReleaseHudCruiseInput(a_reason);
+            ClearDestination(a_reason);
         }
 
         class LoadGameSink final : public RE::BSTEventSink<RE::TESLoadGameEvent>
@@ -1276,9 +1341,69 @@ namespace CFS::Bridge
             if (!planetary) {
                 const auto browsedSystemID = MapTreeSystemID(a_snapshot.treeBodyID);
                 if (browsedSystemID && *browsedSystemID != a_snapshot.capturedSystem) {
+                    if (g_cruiseActive.load(std::memory_order_acquire)) {
+                        return unavailable(EligibilityCode::kCruiseActive,
+                            "EXIT CRUISE FIRST",
+                            "vanilla cannot execute a grav-jump route while Cruise is active, and the stock HUD Cruise control is not handled while the Starmap is open");
+                    }
+                    auto indexedStations =
+                        BodyIndex::StationTargets(a_snapshot.markerBodyID);
+                    indexedStations.erase(std::remove_if(indexedStations.begin(),
+                        indexedStations.end(), [](const BodyIndex::StationTarget& a_target) {
+                            return !a_target.referenceFormID ||
+                                   !BodyIndex::IsStationBase(a_target.baseFormID);
+                        }), indexedStations.end());
+                    std::ranges::sort(indexedStations, {},
+                        &BodyIndex::StationTarget::referenceFormID);
+                    indexedStations.erase(std::unique(indexedStations.begin(),
+                        indexedStations.end(),
+                        [](const BodyIndex::StationTarget& a_left,
+                            const BodyIndex::StationTarget& a_right) {
+                            return a_left.referenceFormID == a_right.referenceFormID;
+                        }), indexedStations.end());
+                    if (indexedStations.size() > 1) {
+                        return unavailable(EligibilityCode::kAmbiguousTarget,
+                            "STATION TARGET IS AMBIGUOUS",
+                            std::format("remote station CELL {:08X}/{} has {} exact indexed references",
+                                a_snapshot.markerBodyID, a_snapshot.markerBodyType,
+                                indexedStations.size()));
+                    }
+                    if (indexedStations.size() == 1) {
+                        if (!g_loadGameSinkReady.load(std::memory_order_acquire)) {
+                            return unavailable(EligibilityCode::kRemoteSafetyUnavailable,
+                                "REMOTE CRUISE SAFETY UNAVAILABLE",
+                                "guarded TESLoadGameEvent sink is unavailable; refusing a remote station mark that could survive a save load");
+                        }
+                        const auto& station = indexedStations.front();
+                        auto destination = BodyDestination{
+                            .kind = BodyKind::kStation,
+                            .formID = station.referenceFormID,
+                            .targetBaseFormID = station.baseFormID,
+                            .mapFormID = a_snapshot.markerBodyID,
+                            .mapType = a_snapshot.markerBodyType,
+                            .galaxy = { .system = *browsedSystemID },
+                            .localizedName = a_snapshot.markerName.empty() ?
+                                (station.editorID.empty() ?
+                                        std::format("STATION {:08X}", station.referenceFormID) :
+                                        station.editorID) :
+                                a_snapshot.markerName,
+                            .menuGeneration = a_snapshot.generation,
+                        };
+                        return {
+                            .code = EligibilityCode::kEligible,
+                            .show = true,
+                            .enabled = true,
+                            .label = kRemoteCruiseMapActionLabel,
+                            .detail = std::format("eligible remote station CELL={:08X}/{} indexedRef={:08X} base={:08X} '{}' system={}",
+                                destination.mapFormID, destination.mapType,
+                                destination.formID, station.baseFormID,
+                                destination.localizedName, destination.galaxy.system),
+                            .destination = std::move(destination),
+                        };
+                    }
                     return {
                         .code = EligibilityCode::kHidden,
-                        .detail = std::format("remote non-planet marker {:08X}/{} is hidden until its system is loaded",
+                        .detail = std::format("remote non-station marker {:08X}/{} has no stable unloaded target identity",
                             a_snapshot.markerBodyID, a_snapshot.markerBodyType),
                     };
                 }
@@ -1296,6 +1421,7 @@ namespace CFS::Bridge
                     auto destination = BodyDestination{
                         .kind = BodyKind::kStation,
                         .formID = station.referenceFormID,
+                        .targetBaseFormID = station.baseFormID,
                         .mapFormID = a_snapshot.markerBodyID,
                         .mapType = a_snapshot.markerBodyType,
                         .galaxy = { .system = a_snapshot.capturedSystem },
@@ -1317,77 +1443,10 @@ namespace CFS::Bridge
                     };
                 }
 
-                const auto shipTargets = ResolveShipTargets(a_snapshot.markerBodyID);
-                if (shipTargets.size() > 1)
-                    return unavailable(EligibilityCode::kAmbiguousTarget,
-                        "SHIP TARGET IS AMBIGUOUS",
-                        std::format("non-planet CELL {:08X}/{} contains {} live non-station ship references",
-                            a_snapshot.markerBodyID, a_snapshot.markerBodyType,
-                            shipTargets.size()));
-
-                if (!shipTargets.empty()) {
-                    const auto& ship = shipTargets.front();
-                    auto localizedName = a_snapshot.markerName.empty() ?
-                        std::format("SHIP {:08X}", ship.referenceFormID) :
-                        a_snapshot.markerName;
-                    const auto shipHudTargets = CurrentHudTargets(ship.referenceFormID);
-                    if (shipHudTargets.size() == 1 && !shipHudTargets.front().name.empty())
-                        localizedName = shipHudTargets.front().name;
-                    auto destination = BodyDestination{
-                        .kind = BodyKind::kShip,
-                        .formID = ship.referenceFormID,
-                        .mapFormID = a_snapshot.markerBodyID,
-                        .mapType = a_snapshot.markerBodyType,
-                        .galaxy = { .system = a_snapshot.capturedSystem },
-                        .localizedName = std::move(localizedName),
-                        .menuGeneration = a_snapshot.generation,
-                    };
-                    return {
-                        .code = EligibilityCode::kEligible,
-                        .show = true,
-                        .enabled = true,
-                        .label = kCruiseMapActionLabel,
-                        .detail = std::format("eligible ship CELL={:08X}/{} ref={:08X} base={:08X} '{}'",
-                            destination.mapFormID, destination.mapType,
-                            destination.formID, ship.baseFormID,
-                            destination.localizedName),
-                        .destination = std::move(destination),
-                    };
-                }
-
-                const auto hudTargets = CurrentHudTargets(a_snapshot.markerBodyID);
-                if (hudTargets.empty())
-                    return unavailable(EligibilityCode::kTargetNotIndexed,
-                        "TARGET IS NOT AVAILABLE TO CRUISE",
-                        std::format("non-planet marker {:08X}/{} has neither a station/ship reference nor a current HUD target row",
-                            a_snapshot.markerBodyID, a_snapshot.markerBodyType));
-                if (hudTargets.size() != 1)
-                    return unavailable(EligibilityCode::kAmbiguousTarget,
-                        "TARGET IS AMBIGUOUS",
-                        std::format("non-planet marker {:08X}/{} matches {} current HUD target rows",
-                            a_snapshot.markerBodyID, a_snapshot.markerBodyType,
-                            hudTargets.size()));
-
-                const auto& hudTarget = hudTargets.front();
-                auto destination = BodyDestination{
-                    .kind = BodyKind::kOther,
-                    .formID = hudTarget.id,
-                    .mapFormID = a_snapshot.markerBodyID,
-                    .mapType = a_snapshot.markerBodyType,
-                    .galaxy = { .system = a_snapshot.capturedSystem },
-                    .localizedName = a_snapshot.markerName.empty() ?
-                        hudTarget.name : a_snapshot.markerName,
-                    .menuGeneration = a_snapshot.generation,
-                };
                 return {
-                    .code = EligibilityCode::kEligible,
-                    .show = true,
-                    .enabled = true,
-                    .label = kCruiseMapActionLabel,
-                    .detail = std::format("eligible current-feed non-planet map={:08X}/{} target={:08X} '{}'",
-                        destination.mapFormID, destination.mapType,
-                        destination.formID, destination.localizedName),
-                    .destination = std::move(destination),
+                    .code = EligibilityCode::kHidden,
+                    .detail = std::format("unsupported non-station marker {:08X}/{} is vanilla-owned",
+                        a_snapshot.markerBodyID, a_snapshot.markerBodyType),
                 };
             }
 
@@ -1421,6 +1480,11 @@ namespace CFS::Bridge
                         a_snapshot.dossierBodyID));
             }
             const bool remote = body->galaxy.system != a_snapshot.capturedSystem;
+            if (remote && g_cruiseActive.load(std::memory_order_acquire)) {
+                return unavailable(EligibilityCode::kCruiseActive,
+                    "EXIT CRUISE FIRST",
+                    "vanilla cannot execute a grav-jump route while Cruise is active, and the stock HUD Cruise control is not handled while the Starmap is open");
+            }
             if (remote && !g_loadGameSinkReady.load(std::memory_order_acquire))
                 return unavailable(EligibilityCode::kRemoteSafetyUnavailable,
                     "REMOTE CRUISE SAFETY UNAVAILABLE",
@@ -1782,6 +1846,260 @@ namespace CFS::Bridge
                 REX::INFO("[course] queued {} for {:08X}", a_clearing ? "clear" : "lock", a_id);
         }
 
+        void FailRemoteMoonContinuation(const std::string& a_reason)
+        {
+            if (!RemoteMoonContinuationActive())
+                return;
+            const auto continuation = RemoteMoonState();
+            REX::WARN("[orbital] automatic {} continuation failed closed: {}",
+                continuation ? DestinationKindName(continuation->finalKind) : "target",
+                a_reason);
+            CancelOrReleaseHudCruiseInput(a_reason.c_str());
+            ClearDestination(a_reason.c_str());
+        }
+
+        bool StartRemoteMoonContinuation(const BodyDestination& a_destination)
+        {
+            if (a_destination.kind != BodyKind::kMoon)
+                return false;
+
+            const auto parents = BodyIndex::ParentPlanets(a_destination.formID);
+            if (parents.size() != 1) {
+                REX::WARN("[moon] refusing automatic continuation for {:08X} '{}': parent identity is {} ({} exact GNAM candidates)",
+                    a_destination.formID, a_destination.localizedName,
+                    parents.empty() ? "missing" : "ambiguous", parents.size());
+                ClearDestination("missing or ambiguous live PNDT/GNAM parent identity");
+                return false;
+            }
+
+            const auto& parent = parents.front();
+            const auto liveParent = RE::TESForm::LookupByID(parent.formID);
+            if (!liveParent || liveParent->GetFormType() != RE::FormType::kPNDT ||
+                parent.galaxy.system != a_destination.galaxy.system ||
+                parent.galaxy.parent != 0 ||
+                parent.galaxy.planet != a_destination.galaxy.parent) {
+                REX::WARN("[moon] refusing automatic continuation for {:08X} '{}': exact parent candidate {:08X} failed live PNDT/GNAM validation",
+                    a_destination.formID, a_destination.localizedName, parent.formID);
+                ClearDestination("live PNDT/GNAM parent validation failed");
+                return false;
+            }
+
+            {
+                std::lock_guard lock{ g_remoteMoonMutex };
+                if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kNone)
+                    return g_remoteMoonContinuation.finalKind == a_destination.kind &&
+                           g_remoteMoonContinuation.finalFormID == a_destination.formID;
+                g_remoteMoonContinuation = {
+                    .phase = RemoteMoonPhase::kAwaitingParentFeed,
+                    .finalKind = BodyKind::kMoon,
+                    .finalFormID = a_destination.formID,
+                    .system = a_destination.galaxy.system,
+                    .parentFormID = parent.formID,
+                    .parentEditorID = parent.editorID,
+                    .feedRevisionFloor = g_hudLowRevision.load(std::memory_order_acquire),
+                    .phaseStarted = Clock::now(),
+                };
+            }
+            g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+            REX::INFO("[moon] final {:08X} '{}' is absent from the settled cockpit feed; exact GNAM parent {:08X} '{}' retained as a private waypoint",
+                a_destination.formID, a_destination.localizedName, parent.formID,
+                parent.editorID);
+            return true;
+        }
+
+        bool StartRemoteStationContinuation(const BodyDestination& a_destination)
+        {
+            if (a_destination.kind != BodyKind::kStation)
+                return false;
+
+            const auto orbitals = BodyIndex::StationOrbitals(a_destination.mapFormID);
+            if (orbitals.size() != 1) {
+                REX::WARN("[station] refusing automatic continuation for {:08X} '{}': CELL {:08X} orbital PNDT identity is {} ({} exact DNAM candidates)",
+                    a_destination.formID, a_destination.localizedName,
+                    a_destination.mapFormID,
+                    orbitals.empty() ? "missing" : "ambiguous", orbitals.size());
+                ClearDestination("missing or ambiguous station CELL/PNDT orbital identity");
+                return false;
+            }
+
+            const auto& orbital = orbitals.front();
+            const auto liveOrbital = RE::TESForm::LookupByID(orbital.formID);
+            if (!liveOrbital || liveOrbital->GetFormType() != RE::FormType::kPNDT ||
+                orbital.galaxy.system != a_destination.galaxy.system) {
+                REX::WARN("[station] refusing automatic continuation for {:08X} '{}': exact CELL/DNAM orbital {:08X} failed live PNDT/system validation",
+                    a_destination.formID, a_destination.localizedName,
+                    orbital.formID);
+                ClearDestination("live station orbital PNDT validation failed");
+                return false;
+            }
+
+            auto child = orbital;
+            std::optional<BodyIndex::IndexedBody> waypoint;
+            std::vector<BodyIndex::IndexedBody> stationWaypoints;
+            std::vector<std::uint32_t> ancestry{ orbital.formID };
+            constexpr std::size_t kMaxStationAncestryDepth = 8;
+            for (std::size_t depth = 0;
+                 depth < kMaxStationAncestryDepth && child.galaxy.parent;
+                 ++depth) {
+                const auto parents = BodyIndex::ParentBodies(child.formID);
+                if (parents.size() != 1) {
+                    REX::WARN("[station] refusing automatic continuation for {:08X} '{}': GNAM parent of {:08X} '{}' is {} ({} exact candidates)",
+                        a_destination.formID, a_destination.localizedName,
+                        child.formID, child.editorID,
+                        parents.empty() ? "missing" : "ambiguous", parents.size());
+                    ClearDestination("missing or ambiguous station GNAM ancestry");
+                    return false;
+                }
+
+                const auto& parent = parents.front();
+                if (std::ranges::find(ancestry, parent.formID) != ancestry.end()) {
+                    ClearDestination("station GNAM ancestry contains a cycle");
+                    return false;
+                }
+                const auto liveParent = RE::TESForm::LookupByID(parent.formID);
+                if (!liveParent || liveParent->GetFormType() != RE::FormType::kPNDT ||
+                    parent.galaxy.system != a_destination.galaxy.system ||
+                    parent.galaxy.planet != child.galaxy.parent) {
+                    REX::WARN("[station] refusing automatic continuation for {:08X} '{}': exact GNAM ancestor {:08X} failed live PNDT/system/planet validation",
+                        a_destination.formID, a_destination.localizedName,
+                        parent.formID);
+                    ClearDestination("live station GNAM ancestry validation failed");
+                    return false;
+                }
+
+                const auto rows = CurrentHudTargets(parent.formID);
+                if (rows.size() > 1) {
+                    ClearDestination("station GNAM ancestor has ambiguous cockpit HUD rows");
+                    return false;
+                }
+                REX::INFO("[station] exact orbital ancestry depth {}: child {:08X} '{}' parent {:08X} '{}' HUD rows={}",
+                    depth + 1, child.formID, child.editorID, parent.formID,
+                    parent.editorID, rows.size());
+                stationWaypoints.push_back(parent);
+                if (!waypoint && rows.size() == 1)
+                    waypoint = parent;
+                ancestry.push_back(parent.formID);
+                child = parent;
+            }
+
+            if (child.galaxy.parent) {
+                ClearDestination("station GNAM ancestry exceeds the guarded depth limit");
+                return false;
+            }
+            if (stationWaypoints.empty()) {
+                ClearDestination("station orbital PNDT has no GNAM parent ancestry");
+                return false;
+            }
+            if (!waypoint)
+                waypoint = stationWaypoints.back();
+            std::ranges::reverse(stationWaypoints);
+            const auto waypointAt = std::ranges::find(stationWaypoints,
+                waypoint->formID, &BodyIndex::IndexedBody::formID);
+            if (waypointAt == stationWaypoints.end()) {
+                ClearDestination("selected station ancestry waypoint was not retained");
+                return false;
+            }
+            const auto waypointIndex = static_cast<std::size_t>(
+                std::distance(stationWaypoints.begin(), waypointAt));
+
+            {
+                std::lock_guard lock{ g_remoteMoonMutex };
+                if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kNone)
+                    return g_remoteMoonContinuation.finalKind == a_destination.kind &&
+                           g_remoteMoonContinuation.finalFormID == a_destination.formID;
+                g_remoteMoonContinuation = {
+                    .phase = RemoteMoonPhase::kAwaitingParentFeed,
+                    .finalKind = BodyKind::kStation,
+                    .finalFormID = a_destination.formID,
+                    .system = a_destination.galaxy.system,
+                    .stationOrbitalFormID = orbital.formID,
+                    .parentFormID = waypoint->formID,
+                    .parentEditorID = waypoint->editorID,
+                    .stationWaypoints = std::move(stationWaypoints),
+                    .waypointIndex = waypointIndex,
+                    .feedRevisionFloor = g_hudLowRevision.load(
+                        std::memory_order_acquire),
+                    .phaseStarted = Clock::now(),
+                };
+            }
+            g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+            REX::INFO("[station] retained public destination {:08X} '{}' maps exactly from CELL {:08X} to orbital PNDT {:08X}; exact GNAM ancestor {:08X} '{}' retained as private waypoint {}/{} and must expose one HUD row before activation",
+                a_destination.formID, a_destination.localizedName,
+                a_destination.mapFormID, orbital.formID, waypoint->formID,
+                waypoint->editorID, waypointIndex + 1,
+                ancestry.size() - 1);
+            return true;
+        }
+
+        bool BeginRemoteMoonCourse()
+        {
+            const auto destination = Destination();
+            const auto continuation = RemoteMoonState();
+            if (!continuation || !destination ||
+                destination->kind != continuation->finalKind ||
+                destination->formID != continuation->finalFormID ||
+                continuation->phase != RemoteMoonPhase::kAwaitingParentFeed)
+                return false;
+
+            const auto now = Clock::now();
+            if (g_cruiseActive.load(std::memory_order_acquire)) {
+                {
+                    std::lock_guard lock{ g_remoteMoonMutex };
+                    if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kAwaitingParentFeed)
+                        return false;
+                    g_remoteMoonContinuation.phase = RemoteMoonPhase::kAwaitingParentLock;
+                    g_remoteMoonContinuation.feedRevisionFloor =
+                        CurrentProcessedHudSnapshot().revision;
+                    g_remoteMoonContinuation.phaseStarted = now;
+                    g_remoteMoonContinuation.inactiveSince = {};
+                }
+                g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                QueueCourse(destination->formID, false);
+                REX::INFO("[orbital] Cruise already active; dispatched retained final {} {:08X} '{}' once and awaiting exact final or optional waypoint readback",
+                    DestinationKindName(destination->kind), destination->formID,
+                    destination->localizedName);
+                return true;
+            }
+
+            if (!g_cruiseEngageAvailable.load(std::memory_order_acquire))
+                return false;
+            auto device = g_pendingJumpDevice.load(std::memory_order_acquire);
+            if (device == RE::InputEvent::DeviceType::kNone)
+                device = RE::InputEvent::DeviceType::kKeyboard;
+            if (!QueueHudCruisePress(device))
+                return false;
+            {
+                std::lock_guard lock{ g_remoteMoonMutex };
+                if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kAwaitingParentFeed)
+                    return false;
+                g_remoteMoonContinuation.phase = RemoteMoonPhase::kAwaitingParentCruise;
+                g_remoteMoonContinuation.feedRevisionFloor =
+                    CurrentProcessedHudSnapshot().revision;
+                g_remoteMoonContinuation.phaseStarted = now;
+                g_remoteMoonContinuation.inactiveSince = {};
+            }
+            g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+            REX::INFO("[orbital] queued one latched stock HUD Cruise press for retained final {} {:08X} '{}'; stock may resolve it latently through waypoint {:08X} '{}'",
+                DestinationKindName(destination->kind), destination->formID,
+                destination->localizedName,
+                continuation->parentFormID, continuation->parentName);
+            return true;
+        }
+
+        std::optional<RemoteMoonContinuation> TakeRemoteMoonCruiseActivation()
+        {
+            std::lock_guard lock{ g_remoteMoonMutex };
+            auto& continuation = g_remoteMoonContinuation;
+            if (continuation.phase != RemoteMoonPhase::kAwaitingParentCruise)
+                return std::nullopt;
+            continuation.phase = RemoteMoonPhase::kAwaitingParentLock;
+            continuation.feedRevisionFloor =
+                CurrentProcessedHudSnapshot().revision;
+            continuation.phaseStarted = Clock::now();
+            continuation.inactiveSince = {};
+            return continuation;
+        }
+
         bool DispatchHudEvent(RE::Scaleform::GFx::ASMovieRootBase* a_root, const char* a_type,
             const V* a_params)
         {
@@ -2071,11 +2389,15 @@ namespace CFS::Bridge
                     g_hudCruiseInputLatched = false;
                     g_hudCruiseInputStarted = {};
                 }
-                g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                    std::memory_order_release);
-            } else if (release) {
+                if (RemoteMoonContinuationActive())
+                    FailRemoteMoonContinuation("stock HUD Cruise press invocation failed");
+                else if (RemoteStationContinuationActive())
+                    FailRemoteStationContinuation("stock HUD Cruise press invocation failed");
+                else
+                    g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
+                        std::memory_order_release);
+            } else if (release)
                 InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, false);
-            }
         }
 
         void RunCourseRequest(RE::Scaleform::GFx::ASMovieRootBase* a_root)
@@ -2095,8 +2417,13 @@ namespace CFS::Bridge
             a_root->CreateObject(&params);
             if (!params.IsObject()) {
                 REX::WARN("[course] could not create event payload for {:08X}", request.id);
-                g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                    std::memory_order_release);
+                if (RemoteMoonContinuationActive())
+                    FailRemoteMoonContinuation("could not create the internal course event payload");
+                else if (RemoteStationContinuationActive())
+                    FailRemoteStationContinuation("could not create the remote station course event payload");
+                else
+                    g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
+                        std::memory_order_release);
                 return;
             }
             params.SetMember("uBodyID", V{ static_cast<double>(request.id) });
@@ -2109,8 +2436,13 @@ namespace CFS::Bridge
             } else {
                 REX::WARN("[course] HUD rejected {} dispatch for {:08X}; mark preserved",
                     request.clearing ? "clear" : "lock", request.id);
-                g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                    std::memory_order_release);
+                if (RemoteMoonContinuationActive())
+                    FailRemoteMoonContinuation("HUD rejected the internal course dispatch");
+                else if (RemoteStationContinuationActive())
+                    FailRemoteStationContinuation("HUD rejected the remote station course dispatch");
+                else
+                    g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
+                        std::memory_order_release);
             }
         }
 
@@ -2138,14 +2470,20 @@ namespace CFS::Bridge
                 return;
             }
             const auto& selected = *eligibility.destination;
-            const bool remotePlanetary = IsPlanetary(selected) &&
+            const bool remoteRoutable = UsesRemoteSystemRoute(selected) &&
                 g_haveCurrentSystem.load(std::memory_order_acquire) &&
                 selected.galaxy.system != g_currentSystem.load(std::memory_order_acquire);
+            if (remoteRoutable &&
+                g_cruiseActive.load(std::memory_order_acquire)) {
+                g_mapUiDirty.store(true, std::memory_order_release);
+                REX::INFO("[jump] remote action rejected before mutation: Cruise is active; exit Cruise in the cockpit before selecting JUMP THEN CRUISE");
+                return;
+            }
 
             RE::Scaleform::GFx::ASMovieRootBase* mapRoot = nullptr;
             std::string expectedSystemName;
             std::uint32_t expectedSystemBodyID = 0;
-            if (remotePlanetary) {
+            if (remoteRoutable) {
                 V menuRoot;
                 if (!GetLiveMapMenuRoot(snapshot, mapRoot, menuRoot)) {
                     REX::WARN("[jump] remote action rejected: live Starmap root is unavailable");
@@ -2181,8 +2519,9 @@ namespace CFS::Bridge
             const auto existing = Destination();
             const bool same = existing && existing->mapFormID == selected.mapFormID &&
                 existing->mapType == selected.mapType &&
-                existing->formID == selected.formID;
-            if (same && a_action == MapAction::kTap && !remotePlanetary) {
+                existing->formID == selected.formID &&
+                existing->targetBaseFormID == selected.targetBaseFormID;
+            if (same && a_action == MapAction::kTap && !remoteRoutable) {
                 const bool courseMatches = g_confirmedCourseID.load(std::memory_order_acquire) == selected.formID;
                 ClearDestination("explicit same-target toggle");
                 if (courseMatches && g_cruiseActive.load(std::memory_order_acquire))
@@ -2203,14 +2542,14 @@ namespace CFS::Bridge
                 g_hold.completed = liveHold;
                 g_claimMapKey = liveHold;
             }
-            if (remotePlanetary && Destination()) {
+            if (remoteRoutable && Destination()) {
                 if (selectionDevice == RE::InputEvent::DeviceType::kNone)
                     selectionDevice = RE::InputEvent::DeviceType::kKeyboard;
                 g_pendingJumpDevice.store(selectionDevice, std::memory_order_release);
             }
             g_selectionAcceptedThisOpen.store(true, std::memory_order_release);
-            if (remotePlanetary) {
-                // Preserve the body only as our Cruise destination. First emit
+            if (remoteRoutable) {
+                // Preserve the final target only as our Cruise destination. First emit
                 // the exact stock Back event so native returns from the body
                 // system view to the focused system node in galaxy view. A
                 // later post-advance pass proves that focus before asking
@@ -2262,6 +2601,15 @@ namespace CFS::Bridge
             return g_remoteRouteRequest.phase != RemoteRoutePhase::kNone;
         }
 
+        bool ConsumeRemoteExecuteCloseAcknowledgement()
+        {
+            std::lock_guard lock{ g_remoteRouteMutex };
+            if (g_remoteRouteRequest.phase != RemoteRoutePhase::kAwaitExecuteAck)
+                return false;
+            g_remoteRouteRequest = {};
+            return true;
+        }
+
         void DriveRemoteRouteRequest()
         {
             if (!g_applicationForeground.load(std::memory_order_acquire))
@@ -2291,6 +2639,18 @@ namespace CFS::Bridge
                 g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
                 ClearDestination("remote Set Course session or destination changed");
                 REX::WARN("[jump] remote route request lost its guarded map identity; mark cleared");
+                return;
+            }
+
+            if (request.phase == RemoteRoutePhase::kAwaitExecuteAck) {
+                if (age <= kRemoteExecuteAckTimeout)
+                    return;
+                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+                ClearDestination(
+                    "stock Execute Route produced no map-close acknowledgement");
+                g_mapUiDirty.store(true, std::memory_order_release);
+                REX::WARN("[jump] stock Execute Route produced no map-close acknowledgement after {} ms; remote mark cleared",
+                    std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
                 return;
             }
 
@@ -2545,13 +2905,25 @@ namespace CFS::Bridge
             if (readyAge < kRemoteRouteExecuteSettleTime)
                 return;
 
+            if (g_cruiseActive.load(std::memory_order_acquire)) {
+                g_selectionAcceptedThisOpen.store(false,
+                    std::memory_order_release);
+                ClearDestination(
+                    "Cruise became active before remote Execute");
+                g_mapUiDirty.store(true, std::memory_order_release);
+                REX::WARN("[jump] Cruise became active after remote selection; route cleared before Execute");
+                return;
+            }
+
             {
                 std::lock_guard lock{ g_remoteRouteMutex };
                 if (g_remoteRouteRequest.phase != RemoteRoutePhase::kAwaitRoute ||
                     g_remoteRouteRequest.targetFormID != request.targetFormID ||
                     g_remoteRouteRequest.generation != request.generation)
                     return;
-                g_remoteRouteRequest.phase = RemoteRoutePhase::kNone;
+                g_remoteRouteRequest.phase = RemoteRoutePhase::kAwaitExecuteAck;
+                g_remoteRouteRequest.started = now;
+                g_remoteRouteRequest.executeReadySince = {};
             }
 
             // SendExecuteEvent is the callback behind the visible vanilla
@@ -3161,10 +3533,10 @@ namespace CFS::Bridge
                 snapshot = g_map;
             }
             auto eligibility = EvaluateMapSelection(snapshot);
-            const bool remotePlanetary = eligibility.destination &&
-                IsPlanetary(*eligibility.destination) &&
+            const bool remoteRoutable = eligibility.destination &&
+                UsesRemoteSystemRoute(*eligibility.destination) &&
                 eligibility.destination->galaxy.system != snapshot.capturedSystem;
-            const bool tapOnly = remotePlanetary || snapshot.wasCruising ||
+            const bool tapOnly = remoteRoutable || snapshot.wasCruising ||
                                  !snapshot.cruiseEngageAvailable;
 
             RE::Scaleform::GFx::ASMovieRootBase* root = nullptr;
@@ -3180,7 +3552,7 @@ namespace CFS::Bridge
             if (!(hintBar.IsObject() || hintBar.IsDisplayObject()) ||
                 !(buttonData.IsObject() || buttonData.IsDisplayObject()))
                 return;
-            if (remotePlanetary && eligibility.enabled) {
+            if (remoteRoutable && eligibility.enabled) {
                 const auto treeSystemID = MapTreeSystemID(snapshot.treeBodyID);
                 const bool systemRootReady = treeSystemID && eligibility.destination &&
                     *treeSystemID == eligibility.destination->galaxy.system;
@@ -3244,7 +3616,7 @@ namespace CFS::Bridge
             if (Settings::Verbose() && signatureChanged)
                 REX::INFO("[map] action hint -> {} {} '{}' ({}, session={} generation={})",
                     eligibility.show ? (eligibility.enabled ? "ENABLED" : "DISABLED") : "HIDDEN",
-                    remotePlanetary ? "TAP/REMOTE" :
+                    remoteRoutable ? "TAP/REMOTE" :
                         snapshot.wasCruising ? "TAP/ACTIVE" :
                         (snapshot.cruiseEngageAvailable ? "TAP/HOLD" : "TAP/UNAVAILABLE"),
                     eligibility.show ? eligibility.label : "",
@@ -3540,6 +3912,9 @@ namespace CFS::Bridge
             if (!g_hudLowDirty.exchange(false, std::memory_order_acq_rel))
                 return;
 
+            const auto feedRevision =
+                g_hudLowRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
+
             std::vector<HudRow> rows;
             {
                 std::lock_guard lock{ g_hudRowsMutex };
@@ -3553,7 +3928,15 @@ namespace CFS::Bridge
                     course = row.id;
                     break;
                 }
+            {
+                std::lock_guard lock{ g_processedHudMutex };
+                g_processedHudSnapshot = { rows, course, feedRevision };
+            }
             const auto previousCourse = g_confirmedCourseID.exchange(course, std::memory_order_acq_rel);
+            if (previousCourse != course && Settings::Verbose()) {
+                REX::INFO("[course] engine lock transition {:08X} -> {:08X} on low-frequency feed {}",
+                    previousCourse, course, feedRevision);
+            }
             const auto asked = g_courseAskedID.load(std::memory_order_acquire);
             if (asked && g_courseAskedClearing.load(std::memory_order_acquire) && course != asked) {
                 g_courseAskedID.store(0, std::memory_order_release);
@@ -3565,14 +3948,42 @@ namespace CFS::Bridge
             if (!destination)
                 return;
 
+            if (RemoteMoonContinuationActive())
+                return;
+
+            if (RemoteStationContinuationActive() && course != 0 &&
+                course != destination->formID) {
+                FailRemoteStationContinuation(
+                    "engine selected an unrelated course before exact station lock");
+                return;
+            }
+
             if (course == destination->formID) {
+                if (RemoteStationContinuationActive()) {
+                    const auto matchingRows = std::ranges::count_if(rows,
+                        [&](const HudRow& a_row) {
+                            return a_row.id == destination->formID;
+                        });
+                    if (matchingRows != 1) {
+                        FailRemoteStationContinuation(
+                            "exact station course appeared on ambiguous cockpit HUD rows");
+                        return;
+                    }
+                    g_pendingStationResolveTicks.store(0,
+                        std::memory_order_release);
+                    g_pendingStationAssignedID.store(0,
+                        std::memory_order_release);
+                    REX::INFO("[station] exact remote station lock confirmed for {:08X} '{}'",
+                        destination->formID, destination->localizedName);
+                }
                 g_courseWasLocked.store(true, std::memory_order_release);
                 g_courseAskedID.store(0, std::memory_order_release);
                 g_courseAskedClearing.store(false, std::memory_order_release);
                 g_state.store(NavState::kAutopilotLocked, std::memory_order_release);
-                if (previousCourse != course)
+                if (previousCourse != course) {
                     REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
                         destination->formID, destination->localizedName);
+                }
             } else if (previousCourse == destination->formID &&
                 g_courseWasLocked.exchange(false, std::memory_order_acq_rel)) {
                 g_arrivalCheckID.store(destination->formID, std::memory_order_release);
@@ -3999,7 +4410,19 @@ namespace CFS::Bridge
                 CancelOrReleaseHudCruiseInput("CruiseModeHUDActive confirmed");
                 const auto state = g_state.load(std::memory_order_acquire);
                 const auto destination = Destination();
-                if (destination &&
+                if (RemoteMoonContinuationActive()) {
+                    const auto continuation = TakeRemoteMoonCruiseActivation();
+                    if (!continuation) {
+                        FailRemoteMoonContinuation("Cruise activated outside the guarded continuous orbital transition");
+                    } else {
+                        g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                        REX::INFO("[orbital] stock Cruise activation confirmed; dispatching retained final {} {:08X} '{}' once; exact final readback remains the success gate",
+                            DestinationKindName(continuation->finalKind),
+                            continuation->finalFormID,
+                            destination ? destination->localizedName : "");
+                        QueueCourse(continuation->finalFormID, false);
+                    }
+                } else if (destination &&
                     (state == NavState::kAwaitingCruise || state == NavState::kMarked)) {
                     g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                     if (state == NavState::kMarked)
@@ -4008,9 +4431,12 @@ namespace CFS::Bridge
                     QueueCourse(destination->formID, false);
                 }
             }
-            if (!active && wasActive &&
-                g_state.load(std::memory_order_acquire) == NavState::kAutopilotLocked)
-                g_state.store(NavState::kMarked, std::memory_order_release);
+            if (!active && wasActive) {
+                if (g_state.load(std::memory_order_acquire) ==
+                    NavState::kAutopilotLocked) {
+                    g_state.store(NavState::kMarked, std::memory_order_release);
+                }
+            }
 
             UpdateMarker(root, rootPath, bearings);
             RunCourseRequest(root);
@@ -4155,26 +4581,31 @@ namespace CFS::Bridge
                         std::lock_guard lock{ g_mapMutex };
                         wasCruising = g_map.wasCruising;
                     }
-                    if (accepted && RemoteRouteRequestActive()) {
+                    const bool executeAcknowledged = accepted &&
+                        ConsumeRemoteExecuteCloseAcknowledgement();
+                    if (executeAcknowledged) {
+                        REX::INFO("[jump] stock Execute Route acknowledged by Starmap close");
+                    } else if (accepted && RemoteRouteRequestActive()) {
+                        CancelOrReleaseHudCruiseInput(
+                            "Starmap closed during remote route handoff");
                         ClearDestination("Starmap closed before vanilla route became executable");
                         accepted = false;
                         REX::WARN("[jump] Starmap closed during remote Set Course handoff; mark cleared");
                     }
-                    if (accepted) {
-                        const auto destination = Destination();
-                        if (destination && (destination->kind == BodyKind::kStation ||
-                                destination->kind == BodyKind::kShip) &&
-                            !AssignNativeShipTarget(*destination)) {
-                            ClearDestination("native station/ship target assignment failed");
-                            accepted = false;
-                        }
-                    }
-                    const auto acceptedDestination = accepted ? Destination() : std::nullopt;
+                    auto acceptedDestination = accepted ? Destination() : std::nullopt;
                     const bool pendingJump = acceptedDestination &&
-                        IsPlanetary(*acceptedDestination) &&
-                        g_haveCurrentSystem.load(std::memory_order_acquire) &&
-                        acceptedDestination->galaxy.system !=
-                            g_currentSystem.load(std::memory_order_acquire);
+                        UsesRemoteSystemRoute(*acceptedDestination) &&
+                        (g_state.load(std::memory_order_acquire) == NavState::kPendingJump ||
+                            (g_haveCurrentSystem.load(std::memory_order_acquire) &&
+                                acceptedDestination->galaxy.system !=
+                                    g_currentSystem.load(std::memory_order_acquire)));
+                    if (acceptedDestination && !pendingJump &&
+                        acceptedDestination->kind == BodyKind::kStation &&
+                        !AssignNativeShipTarget(*acceptedDestination)) {
+                        ClearDestination("native station target assignment failed");
+                        accepted = false;
+                        acceptedDestination.reset();
+                    }
                     bool held = false;
                     bool holdCompleted = false;
                     auto heldDevice = RE::InputEvent::DeviceType::kNone;
@@ -4258,10 +4689,468 @@ namespace CFS::Bridge
             } }.detach();
         }
 
+        void DriveRemoteMoonContinuation(const BodyDestination& a_destination)
+        {
+            const auto continuation = RemoteMoonState();
+            if (!continuation)
+                return;
+            if ((a_destination.kind != BodyKind::kMoon &&
+                    a_destination.kind != BodyKind::kStation) ||
+                continuation->finalKind != a_destination.kind ||
+                continuation->finalFormID != a_destination.formID ||
+                continuation->system != a_destination.galaxy.system) {
+                FailRemoteMoonContinuation("retained final orbital-target identity changed");
+                return;
+            }
+            if (g_mapOpen.load(std::memory_order_acquire)) {
+                // Browsing does not cancel an engine-owned latent course. Any
+                // accepted selection calls SetDestination(), which replaces the
+                // public mark and resets this private continuation atomically.
+                return;
+            }
+
+            const auto player = RE::PlayerCharacter::GetSingleton();
+            const auto ship = player ? player->GetSpaceship() : nullptr;
+            if (!IsShipInSpace(ship)) {
+                if (WorldSettled())
+                    FailRemoteMoonContinuation("landing, docking, or leaving the pilot seat during remote orbital continuation");
+                return;
+            }
+            if (!WorldSettled())
+                return;
+            if (g_haveCurrentSystem.load(std::memory_order_acquire) &&
+                g_currentSystem.load(std::memory_order_acquire) != continuation->system) {
+                FailRemoteMoonContinuation("cockpit system no longer matches the retained final orbital target");
+                return;
+            }
+            if (a_destination.kind == BodyKind::kStation) {
+                const auto stations = ResolveStationTargets(a_destination.mapFormID);
+                if (stations.size() != 1 ||
+                    stations.front().referenceFormID != a_destination.formID ||
+                    stations.front().baseFormID != a_destination.targetBaseFormID) {
+                    FailRemoteMoonContinuation("retained station CELL no longer resolves to its exact live REFR/base identity");
+                    return;
+                }
+            }
+
+            const auto now = Clock::now();
+            const auto phaseAge = now - continuation->phaseStarted;
+            const auto hud = CurrentProcessedHudSnapshot();
+            const auto feedRevision = hud.revision;
+            const auto course = hud.course;
+            const auto cruiseActive =
+                g_cruiseActive.load(std::memory_order_acquire);
+            const auto snapshotTargets = [&](std::uint32_t a_formID) {
+                std::vector<HudRow> matches;
+                for (const auto& row : hud.rows) {
+                    if (row.id == a_formID)
+                        matches.push_back(row);
+                }
+                return matches;
+            };
+            const auto parentRows = snapshotTargets(continuation->parentFormID);
+            const auto finalRows = snapshotTargets(a_destination.formID);
+            if (parentRows.size() > 1) {
+                FailRemoteMoonContinuation("private waypoint became ambiguous in the cockpit target feed");
+                return;
+            }
+            if (finalRows.size() > 1) {
+                FailRemoteMoonContinuation("retained final target became ambiguous in the cockpit target feed");
+                return;
+            }
+            std::optional<std::size_t> exactStationWaypoint;
+            if (a_destination.kind == BodyKind::kStation) {
+                if (continuation->stationWaypoints.empty() ||
+                    continuation->waypointIndex >=
+                        continuation->stationWaypoints.size() ||
+                    continuation->stationWaypoints[continuation->waypointIndex].formID !=
+                        continuation->parentFormID) {
+                    FailRemoteMoonContinuation("private station waypoint chain state is invalid");
+                    return;
+                }
+                for (std::size_t index = continuation->waypointIndex;
+                     index < continuation->stationWaypoints.size(); ++index) {
+                    const auto rows = snapshotTargets(
+                        continuation->stationWaypoints[index].formID);
+                    if (rows.size() > 1) {
+                        FailRemoteMoonContinuation("station ancestry waypoint became ambiguous in the cockpit target feed");
+                        return;
+                    }
+                    if (course == continuation->stationWaypoints[index].formID &&
+                        rows.size() == 1 && rows.front().courseLocked) {
+                        exactStationWaypoint = index;
+                    }
+                }
+            }
+
+            const auto continuousCruiseExitExpired =
+                [&](RemoteMoonPhase a_phase) {
+                    std::lock_guard lock{ g_remoteMoonMutex };
+                    auto& live = g_remoteMoonContinuation;
+                    if (live.phase != a_phase)
+                        return false;
+                    if (cruiseActive) {
+                        live.inactiveSince = {};
+                        return false;
+                    }
+                    if (live.inactiveSince == Clock::time_point{})
+                        live.inactiveSince = now;
+                    return now - live.inactiveSince > kRemoteMoonLockExitTimeout;
+                };
+
+            const auto completeFinalLock = [&](bool a_stagedThroughParent) {
+                g_courseWasLocked.store(true, std::memory_order_release);
+                g_courseAskedID.store(0, std::memory_order_release);
+                g_courseAskedClearing.store(false, std::memory_order_release);
+                g_state.store(NavState::kAutopilotLocked, std::memory_order_release);
+                if (a_stagedThroughParent) {
+                    REX::INFO("[orbital] engine confirmed exact final {} lock on {:08X} '{}' after exact waypoint {:08X} '{}' staging in one continuous Cruise session",
+                        DestinationKindName(a_destination.kind),
+                        a_destination.formID, a_destination.localizedName,
+                        continuation->parentFormID, continuation->parentName);
+                } else {
+                    REX::INFO("[orbital] engine confirmed exact final {} lock on {:08X} '{}' after one retained-target dispatch and latent stock course resolution",
+                        DestinationKindName(a_destination.kind),
+                        a_destination.formID, a_destination.localizedName);
+                }
+                REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
+                    a_destination.formID, a_destination.localizedName);
+                if (a_destination.kind == BodyKind::kStation) {
+                    g_pendingStationResolveTicks.store(0,
+                        std::memory_order_release);
+                    g_pendingStationAssignedID.store(0,
+                        std::memory_order_release);
+                }
+                ResetRemoteMoonContinuation();
+            };
+
+            const bool stationWaypointPhase =
+                continuation->phase == RemoteMoonPhase::kAwaitingParentLock ||
+                continuation->phase == RemoteMoonPhase::kAwaitingLatentFinalLock ||
+                continuation->phase == RemoteMoonPhase::kParentLocked ||
+                continuation->phase == RemoteMoonPhase::kAwaitingParentArrival ||
+                continuation->phase == RemoteMoonPhase::kAwaitingFinalLock;
+            if (exactStationWaypoint && stationWaypointPhase &&
+                feedRevision > continuation->feedRevisionFloor &&
+                (continuation->phase != RemoteMoonPhase::kParentLocked ||
+                    *exactStationWaypoint != continuation->waypointIndex)) {
+                const auto nextWaypoint =
+                    continuation->stationWaypoints[*exactStationWaypoint];
+                const auto nextRows = snapshotTargets(nextWaypoint.formID);
+                {
+                    std::lock_guard lock{ g_remoteMoonMutex };
+                    auto& live = g_remoteMoonContinuation;
+                    if (live.finalKind != BodyKind::kStation ||
+                        live.finalFormID != a_destination.formID ||
+                        *exactStationWaypoint < live.waypointIndex ||
+                        *exactStationWaypoint >= live.stationWaypoints.size() ||
+                        live.stationWaypoints[*exactStationWaypoint].formID !=
+                            nextWaypoint.formID)
+                        return;
+                    live.waypointIndex = *exactStationWaypoint;
+                    live.parentFormID = nextWaypoint.formID;
+                    live.parentEditorID = nextWaypoint.editorID;
+                    live.parentName = nextRows.front().name.empty() ?
+                        nextWaypoint.editorID : nextRows.front().name;
+                    live.phase = RemoteMoonPhase::kParentLocked;
+                    live.phaseStarted = now;
+                    live.feedRevisionFloor = feedRevision;
+                    live.inactiveSince = {};
+                }
+                g_courseAskedID.store(0, std::memory_order_release);
+                g_courseAskedClearing.store(false, std::memory_order_release);
+                g_state.store(NavState::kAwaitingCruise,
+                    std::memory_order_release);
+                REX::INFO("[station] engine confirmed ordered exact ancestry-waypoint lock {}/{} on {:08X} '{}'; retained public destination remains {:08X} '{}'",
+                    *exactStationWaypoint + 1,
+                    continuation->stationWaypoints.size(), nextWaypoint.formID,
+                    nextRows.front().name.empty() ? nextWaypoint.editorID :
+                                                   nextRows.front().name,
+                    a_destination.formID, a_destination.localizedName);
+                return;
+            }
+
+            switch (continuation->phase) {
+            case RemoteMoonPhase::kAwaitingParentFeed: {
+                if (phaseAge > kRemoteMoonFeedTimeout) {
+                    FailRemoteMoonContinuation("private orbital waypoint did not remain a unique cockpit HUD row within 10 seconds");
+                    return;
+                }
+                if (!g_haveCurrentSystem.load(std::memory_order_acquire))
+                    return;
+                if (parentRows.empty())
+                    return;
+                bool firstResolved = false;
+                {
+                    std::lock_guard lock{ g_remoteMoonMutex };
+                    if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kAwaitingParentFeed)
+                        return;
+                    firstResolved = g_remoteMoonContinuation.parentName.empty();
+                    g_remoteMoonContinuation.parentName = parentRows.front().name.empty() ?
+                        g_remoteMoonContinuation.parentEditorID : parentRows.front().name;
+                }
+                if (firstResolved) {
+                    REX::INFO("[orbital] exact private waypoint {:08X} '{}' confirmed as one HUD row; retained public {} destination remains {:08X} '{}'",
+                        continuation->parentFormID,
+                        parentRows.front().name.empty() ? continuation->parentEditorID : parentRows.front().name,
+                        DestinationKindName(a_destination.kind),
+                        a_destination.formID, a_destination.localizedName);
+                }
+                BeginRemoteMoonCourse();
+                return;
+            }
+            case RemoteMoonPhase::kAwaitingParentCruise:
+                if (phaseAge > kRemoteMoonCruiseTimeout)
+                    FailRemoteMoonContinuation("stock Cruise did not activate for the continuous final-target course within 5 seconds");
+                return;
+            case RemoteMoonPhase::kAwaitingParentLock: {
+                if (!cruiseActive) {
+                    if (continuousCruiseExitExpired(RemoteMoonPhase::kAwaitingParentLock))
+                        FailRemoteMoonContinuation("Cruise exited before stock resolved the retained final-target dispatch");
+                    return;
+                }
+                const auto asked = g_courseAskedID.load(std::memory_order_acquire);
+                if (asked != 0 && asked != a_destination.formID) {
+                    FailRemoteMoonContinuation("another course request replaced the retained final-target dispatch");
+                    return;
+                }
+                if (asked != a_destination.formID)
+                    return;
+                if (feedRevision > continuation->feedRevisionFloor) {
+                    if (course == a_destination.formID && finalRows.size() == 1 &&
+                        finalRows.front().courseLocked) {
+                        completeFinalLock(false);
+                        return;
+                    }
+                    if (course == continuation->parentFormID && parentRows.size() == 1 &&
+                        parentRows.front().courseLocked) {
+                        std::lock_guard lock{ g_remoteMoonMutex };
+                        auto& live = g_remoteMoonContinuation;
+                        if (live.phase != RemoteMoonPhase::kAwaitingParentLock ||
+                            live.finalFormID != a_destination.formID ||
+                            live.parentFormID != course)
+                            return;
+                        live.phase = RemoteMoonPhase::kParentLocked;
+                        live.phaseStarted = now;
+                        live.feedRevisionFloor = feedRevision;
+                        live.inactiveSince = {};
+                        g_courseAskedID.store(0, std::memory_order_release);
+                        g_courseAskedClearing.store(false, std::memory_order_release);
+                        g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                        REX::INFO("[orbital] engine resolved retained final {} {:08X} '{}' through exact private-waypoint lock {:08X} '{}' in one continuous Cruise session",
+                            DestinationKindName(a_destination.kind),
+                            a_destination.formID, a_destination.localizedName,
+                            continuation->parentFormID, continuation->parentName);
+                        return;
+                    }
+                    if (course != 0) {
+                        FailRemoteMoonContinuation("final-target dispatch exact-locked an unrelated cockpit target");
+                        return;
+                    }
+                }
+                if (phaseAge > kRemoteMoonCruiseTimeout) {
+                    {
+                        std::lock_guard lock{ g_remoteMoonMutex };
+                        auto& live = g_remoteMoonContinuation;
+                        if (live.phase != RemoteMoonPhase::kAwaitingParentLock)
+                            return;
+                        live.phase = RemoteMoonPhase::kAwaitingLatentFinalLock;
+                        live.phaseStarted = now;
+                        live.feedRevisionFloor = feedRevision;
+                        live.inactiveSince = {};
+                    }
+                    REX::INFO("[orbital] no immediate exact waypoint/final lock after 5 seconds; stock Cruise remains active and the single retained-target dispatch is entering its unbounded engine-owned travel phase");
+                }
+                return;
+            }
+            case RemoteMoonPhase::kAwaitingLatentFinalLock: {
+                if (!cruiseActive) {
+                    if (continuousCruiseExitExpired(RemoteMoonPhase::kAwaitingLatentFinalLock))
+                        FailRemoteMoonContinuation("Cruise exited before exact final-target readback during latent resolution");
+                    return;
+                }
+                const auto asked = g_courseAskedID.load(std::memory_order_acquire);
+                if (asked != a_destination.formID) {
+                    FailRemoteMoonContinuation("retained final-target course request changed during latent resolution");
+                    return;
+                }
+                if (feedRevision <= continuation->feedRevisionFloor)
+                    return;
+                if (course == a_destination.formID && finalRows.size() == 1 &&
+                    finalRows.front().courseLocked) {
+                    completeFinalLock(false);
+                    return;
+                }
+                if (course == continuation->parentFormID && parentRows.size() == 1 &&
+                    parentRows.front().courseLocked) {
+                    std::lock_guard lock{ g_remoteMoonMutex };
+                    auto& live = g_remoteMoonContinuation;
+                    if (live.phase != RemoteMoonPhase::kAwaitingLatentFinalLock ||
+                        live.finalFormID != a_destination.formID ||
+                        live.parentFormID != course)
+                        return;
+                    live.phase = RemoteMoonPhase::kParentLocked;
+                    live.phaseStarted = now;
+                    live.feedRevisionFloor = feedRevision;
+                    live.inactiveSince = {};
+                    g_courseAskedID.store(0, std::memory_order_release);
+                    g_courseAskedClearing.store(false, std::memory_order_release);
+                    REX::INFO("[orbital] latent stock course published exact private-waypoint lock {:08X} '{}' for retained final {} {:08X} '{}'",
+                        continuation->parentFormID, continuation->parentName,
+                        DestinationKindName(a_destination.kind),
+                        a_destination.formID, a_destination.localizedName);
+                    return;
+                }
+                if (course != 0)
+                    FailRemoteMoonContinuation("latent stock course exact-locked an unrelated cockpit target");
+                return;
+            }
+            case RemoteMoonPhase::kParentLocked: {
+                if (course == continuation->parentFormID) {
+                    if (parentRows.size() != 1 || !parentRows.front().courseLocked) {
+                        FailRemoteMoonContinuation("private waypoint readback no longer has one exact locked HUD row");
+                        return;
+                    }
+                    {
+                        std::lock_guard lock{ g_remoteMoonMutex };
+                        auto& live = g_remoteMoonContinuation;
+                        if (live.phase == RemoteMoonPhase::kParentLocked) {
+                            live.feedRevisionFloor = std::max(
+                                live.feedRevisionFloor, feedRevision);
+                            if (cruiseActive)
+                                live.inactiveSince = {};
+                        }
+                    }
+                    if (!cruiseActive) {
+                        if (continuousCruiseExitExpired(RemoteMoonPhase::kParentLocked))
+                            FailRemoteMoonContinuation("Cruise exited while the exact private waypoint course was still active");
+                    }
+                    return;
+                }
+                if (feedRevision <= continuation->feedRevisionFloor)
+                    return;
+                if (course != 0 && course != a_destination.formID) {
+                    FailRemoteMoonContinuation("engine course left the exact private waypoint for an unrelated target");
+                    return;
+                }
+                if (!cruiseActive) {
+                    if (continuousCruiseExitExpired(RemoteMoonPhase::kParentLocked))
+                        FailRemoteMoonContinuation("Cruise exited before the final target became exact-lockable");
+                    return;
+                }
+
+                const bool finalExposed = finalRows.size() == 1;
+                {
+                    std::lock_guard lock{ g_remoteMoonMutex };
+                    auto& live = g_remoteMoonContinuation;
+                    if (live.phase != RemoteMoonPhase::kParentLocked)
+                        return;
+                    live.phase = finalExposed ? RemoteMoonPhase::kAwaitingFinalLock :
+                                               RemoteMoonPhase::kAwaitingParentArrival;
+                    live.phaseStarted = now;
+                    live.feedRevisionFloor = feedRevision;
+                    live.inactiveSince = {};
+                }
+                g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                if (finalExposed) {
+                    REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: its exact lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
+                        continuation->parentFormID, continuation->parentName,
+                        feedRevision, DestinationKindName(a_destination.kind),
+                        a_destination.formID,
+                        a_destination.localizedName);
+                    if (course == a_destination.formID && finalRows.front().courseLocked)
+                        completeFinalLock(true);
+                } else {
+                    REX::INFO("[orbital] exact waypoint lock left {:08X} '{}'; continuous Cruise remains active while awaiting a newer feed that uniquely exposes retained final {} {:08X} '{}'",
+                        continuation->parentFormID, continuation->parentName,
+                        DestinationKindName(a_destination.kind),
+                        a_destination.formID, a_destination.localizedName);
+                }
+                return;
+            }
+            case RemoteMoonPhase::kAwaitingParentArrival: {
+                if (phaseAge > kRemoteMoonFeedTimeout) {
+                    FailRemoteMoonContinuation("waypoint lock ended without a newer unique final-target HUD row within 10 seconds");
+                    return;
+                }
+                if (!cruiseActive) {
+                    if (continuousCruiseExitExpired(RemoteMoonPhase::kAwaitingParentArrival))
+                        FailRemoteMoonContinuation("continuous Cruise exited before the final-target feed refresh");
+                    return;
+                }
+                if (!g_haveCurrentSystem.load(std::memory_order_acquire))
+                    return;
+                if (feedRevision <= continuation->feedRevisionFloor)
+                    return;
+                if (course == continuation->parentFormID && parentRows.size() == 1 &&
+                    parentRows.front().courseLocked) {
+                    std::lock_guard lock{ g_remoteMoonMutex };
+                    auto& live = g_remoteMoonContinuation;
+                    if (live.phase != RemoteMoonPhase::kAwaitingParentArrival)
+                        return;
+                    live.phase = RemoteMoonPhase::kParentLocked;
+                    live.phaseStarted = now;
+                    live.feedRevisionFloor = feedRevision;
+                    live.inactiveSince = {};
+                    REX::INFO("[orbital] exact waypoint lock {:08X} '{}' republished before the final-target feed transition",
+                        continuation->parentFormID, continuation->parentName);
+                    return;
+                }
+                if (course != 0 && course != a_destination.formID) {
+                    FailRemoteMoonContinuation("engine selected an unrelated course while awaiting the final-target feed");
+                    return;
+                }
+                if (finalRows.empty())
+                    return;
+                {
+                    std::lock_guard lock{ g_remoteMoonMutex };
+                    auto& live = g_remoteMoonContinuation;
+                    if (live.phase != RemoteMoonPhase::kAwaitingParentArrival)
+                        return;
+                    live.phase = RemoteMoonPhase::kAwaitingFinalLock;
+                    live.phaseStarted = now;
+                    live.feedRevisionFloor = feedRevision;
+                    live.inactiveSince = {};
+                }
+                g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: exact prior lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
+                    continuation->parentFormID, continuation->parentName, feedRevision,
+                    DestinationKindName(a_destination.kind), a_destination.formID,
+                    a_destination.localizedName);
+                if (course == a_destination.formID && finalRows.front().courseLocked)
+                    completeFinalLock(true);
+                return;
+            }
+            case RemoteMoonPhase::kAwaitingFinalLock: {
+                if (phaseAge > kRemoteMoonFeedTimeout) {
+                    FailRemoteMoonContinuation("continuous Cruise did not produce exact final-target lock within 10 seconds of the waypoint feed transition");
+                    return;
+                }
+                if (!cruiseActive) {
+                    if (continuousCruiseExitExpired(RemoteMoonPhase::kAwaitingFinalLock))
+                        FailRemoteMoonContinuation("continuous Cruise exited before exact final-target lock readback");
+                    return;
+                }
+                if (course == a_destination.formID && finalRows.size() == 1 &&
+                    finalRows.front().courseLocked) {
+                    completeFinalLock(true);
+                    return;
+                }
+                if (course != 0 && course != continuation->parentFormID) {
+                    FailRemoteMoonContinuation("continuous Cruise selected an unrelated target before exact final-target lock");
+                }
+                return;
+            }
+            default:
+                return;
+            }
+        }
+
         void ReconcilePendingJump(const BodyDestination& a_destination)
         {
-            if (!IsPlanetary(a_destination)) {
-                ClearDestination("invalid non-planet pending-jump state");
+            if (!IsPlanetary(a_destination) &&
+                a_destination.kind != BodyKind::kStation) {
+                ClearDestination("invalid non-routable pending-jump state");
                 return;
             }
 
@@ -4274,16 +5163,105 @@ namespace CFS::Bridge
                     ClearDestination("landing, docking, or leaving the pilot seat during pending jump");
                 return;
             }
-            if (!g_haveCurrentSystem.load(std::memory_order_acquire) ||
-                g_currentSystem.load(std::memory_order_acquire) != a_destination.galaxy.system ||
+            const bool haveCurrentSystem =
+                g_haveCurrentSystem.load(std::memory_order_acquire);
+            const auto currentSystem =
+                g_currentSystem.load(std::memory_order_acquire);
+            if (a_destination.kind == BodyKind::kStation &&
+                g_pendingStationResolveTicks.load(std::memory_order_acquire) != 0 &&
+                haveCurrentSystem && currentSystem != a_destination.galaxy.system &&
+                WorldSettled()) {
+                ClearDestination(
+                    "system mismatch after remote station arrival processing began");
+                return;
+            }
+            if (!haveCurrentSystem ||
+                currentSystem != a_destination.galaxy.system ||
                 g_mapOpen.load(std::memory_order_acquire) || !WorldSettled())
                 return;
 
-            // Resolver agreement alone is not enough: require the marked body
-            // to be present exactly once in the settled cockpit target feed.
-            // This also keeps remote station/POI identities out of this path.
-            if (CurrentHudTargets(a_destination.formID).size() != 1)
+            if (a_destination.kind == BodyKind::kStation) {
+                const auto now = Clock::now();
+                auto startedTicks =
+                    g_pendingStationResolveTicks.load(std::memory_order_acquire);
+                if (startedTicks == 0) {
+                    const auto desired = now.time_since_epoch().count();
+                    g_pendingStationResolveTicks.compare_exchange_strong(startedTicks,
+                        desired, std::memory_order_acq_rel);
+                    startedTicks = g_pendingStationResolveTicks.load(
+                        std::memory_order_acquire);
+                    REX::INFO("[station] settled target system {}; resolving remote CELL {:08X}/{} to retained indexed REFR/base {:08X}/{:08X}",
+                        a_destination.galaxy.system, a_destination.mapFormID,
+                        a_destination.mapType, a_destination.formID,
+                        a_destination.targetBaseFormID);
+                }
+                auto phaseStarted = Clock::time_point{ Clock::duration{
+                    startedTicks } };
+                const auto stationTargets =
+                    ResolveStationTargets(a_destination.mapFormID);
+                if (stationTargets.size() > 1) {
+                    ClearDestination("remote station CELL resolved to ambiguous live references after arrival");
+                    return;
+                }
+                if (stationTargets.empty()) {
+                    if (now - phaseStarted > kRemoteStationResolveTimeout)
+                        ClearDestination("remote station REFR did not become live within 10 seconds of settled system arrival");
+                    return;
+                }
+                if (!a_destination.targetBaseFormID ||
+                    stationTargets.front().referenceFormID != a_destination.formID ||
+                    stationTargets.front().baseFormID != a_destination.targetBaseFormID) {
+                    REX::WARN("[station] remote CELL {:08X} live identity REFR/base {:08X}/{:08X} does not match retained index {:08X}/{:08X}",
+                        a_destination.mapFormID,
+                        stationTargets.front().referenceFormID,
+                        stationTargets.front().baseFormID,
+                        a_destination.formID,
+                        a_destination.targetBaseFormID);
+                    ClearDestination("remote station live identity differs from retained index identity");
+                    return;
+                }
+                if (g_pendingStationAssignedID.load(std::memory_order_acquire) !=
+                    a_destination.formID) {
+                    if (!AssignNativeShipTarget(a_destination)) {
+                        ClearDestination("remote station native target assignment failed after arrival");
+                        return;
+                    }
+                    g_pendingStationAssignedID.store(a_destination.formID,
+                        std::memory_order_release);
+                    g_pendingStationResolveTicks.store(
+                        now.time_since_epoch().count(), std::memory_order_release);
+                    REX::INFO("[station] exact live remote station {:08X} assigned after system arrival; checking direct HUD exposure before exact orbital staging",
+                        a_destination.formID);
+                }
+
+                const auto stationRows = CurrentHudTargets(a_destination.formID);
+                if (stationRows.size() > 1) {
+                    ClearDestination("remote station has ambiguous cockpit HUD rows after native assignment");
+                    return;
+                }
+                if (stationRows.empty()) {
+                    StartRemoteStationContinuation(a_destination);
+                    return;
+                }
+            }
+
+            // Resolver agreement alone is not enough. A directly exposed final
+            // body retains the original exact-one-row path. A missing remote
+            // moon may stage only through its unique live PNDT/GNAM parent. A
+            // station reaches this shared path only when its exact REFR is
+            // already exposed; otherwise its separately validated CELL/DNAM/
+            // GNAM ancestry owns the private continuation. Remote planets and
+            // ambiguous final rows never take either detour.
+            const auto finalRows = CurrentHudTargets(a_destination.formID);
+            if (finalRows.size() > 1) {
+                ClearDestination("pending-jump destination has ambiguous cockpit HUD rows");
                 return;
+            }
+            if (finalRows.empty()) {
+                if (a_destination.kind == BodyKind::kMoon)
+                    StartRemoteMoonContinuation(a_destination);
+                return;
+            }
 
             if (g_cruiseActive.load(std::memory_order_acquire)) {
                 auto expected = NavState::kPendingJump;
@@ -4347,19 +5325,45 @@ namespace CFS::Bridge
                     queuedExpired = true;
                 }
             }
-            if (queuedExpired)
+            if (queuedExpired) {
+                if (RemoteMoonContinuationActive()) {
+                    FailRemoteMoonContinuation("internal course request expired before the Cruise HUD became ready");
+                    return;
+                }
+                if (RemoteStationContinuationActive()) {
+                    FailRemoteStationContinuation(
+                        "remote station course request expired before the Cruise HUD became ready");
+                    return;
+                }
                 g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
                     std::memory_order_release);
+            }
 
             const auto asked = g_courseAskedID.load(std::memory_order_acquire);
             if (asked) {
                 const auto at = Clock::time_point{ Clock::duration{
                     g_courseAskedTicks.load(std::memory_order_acquire) } };
-                if (Clock::now() - at > std::chrono::milliseconds(1500)) {
+                const auto continuation = RemoteMoonState();
+                const bool awaitingStockCourseResolution = continuation &&
+                    (continuation->phase == RemoteMoonPhase::kAwaitingParentLock ||
+                        continuation->phase == RemoteMoonPhase::kAwaitingLatentFinalLock) &&
+                    continuation->finalFormID == asked &&
+                    !g_courseAskedClearing.load(std::memory_order_acquire);
+                if (!awaitingStockCourseResolution &&
+                    Clock::now() - at > std::chrono::milliseconds(1500)) {
                     g_courseAskedID.store(0, std::memory_order_release);
                     g_courseAskedClearing.store(false, std::memory_order_release);
                     REX::WARN("[course] no bIsCruiseTargetLock confirmation for {:08X} after 1.5 seconds; mark preserved",
                         asked);
+                    if (RemoteMoonContinuationActive()) {
+                        FailRemoteMoonContinuation("internal course dispatch received no exact bIsCruiseTargetLock readback");
+                        return;
+                    }
+                    if (RemoteStationContinuationActive()) {
+                        FailRemoteStationContinuation(
+                            "remote station course dispatch received no exact bIsCruiseTargetLock readback");
+                        return;
+                    }
                     g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
                         std::memory_order_release);
                 }
@@ -4375,6 +5379,15 @@ namespace CFS::Bridge
             if (hudHoldExpired) {
                 CancelOrReleaseHudCruiseInput("four-second activation safety limit");
                 REX::WARN("[input] latched HUD Cruise hold did not make CruiseModeHUDActive within 4 seconds; released automatically and preserved destination");
+                if (RemoteMoonContinuationActive()) {
+                    FailRemoteMoonContinuation("stock Cruise activation timed out during remote orbital continuation");
+                    return;
+                }
+                if (RemoteStationContinuationActive()) {
+                    FailRemoteStationContinuation(
+                        "stock Cruise activation timed out during remote-station continuation");
+                    return;
+                }
                 g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
                     std::memory_order_release);
             }
@@ -4403,16 +5416,23 @@ namespace CFS::Bridge
                     queue->AddMessage(RE::BSFixedString{ kMapMenu }, RE::UI_MESSAGE_TYPE::kHide);
             }
 
-            const auto destination = Destination();
+            auto destination = Destination();
+            if (destination && RemoteMoonContinuationActive()) {
+                DriveRemoteMoonContinuation(*destination);
+                destination = Destination();
+            }
             if (destination) {
                 const auto state = g_state.load(std::memory_order_acquire);
                 const bool remoteMapSelection =
                     (state == NavState::kMapSelection || RemoteRouteRequestActive()) &&
-                    IsPlanetary(*destination) &&
+                    UsesRemoteSystemRoute(*destination) &&
                     g_haveCurrentSystem.load(std::memory_order_acquire) &&
                     g_currentSystem.load(std::memory_order_acquire) !=
                         destination->galaxy.system;
-                if (state == NavState::kPendingJump) {
+                if (RemoteMoonContinuationActive()) {
+                    // The private orbital-waypoint driver owns all mutation and
+                    // safety boundaries until exact final-target lock readback.
+                } else if (state == NavState::kPendingJump) {
                     ReconcilePendingJump(*destination);
                 } else if (!remoteMapSelection) {
                     const auto player = RE::PlayerCharacter::GetSingleton();
@@ -4518,6 +5538,10 @@ namespace CFS::Bridge
                 std::lock_guard lock{ g_hudRowsMutex };
                 g_hudRows.clear();
             }
+            {
+                std::lock_guard lock{ g_processedHudMutex };
+                g_processedHudSnapshot = {};
+            }
             g_hudLowDirty.store(false, std::memory_order_release);
             g_markerReady.store(false, std::memory_order_release);
             g_markerFailed.store(false, std::memory_order_release);
@@ -4527,6 +5551,11 @@ namespace CFS::Bridge
             g_cruiseEngageAvailable.store(false, std::memory_order_release);
             g_hudUiDirty.store(true, std::memory_order_release);
             g_uiResetMask.fetch_or(kResetHudUi, std::memory_order_acq_rel);
+            if (RemoteMoonContinuationActive())
+                FailRemoteMoonContinuation("Spaceship HUD movie was replaced during automatic continuation");
+            else if (RemoteStationContinuationActive())
+                FailRemoteStationContinuation(
+                    "Spaceship HUD movie was replaced during automatic continuation");
         }
         REX::INFO("[ui] movie created: {} generation={}", name,
             state->generation.load(std::memory_order_acquire));

@@ -1,11 +1,11 @@
 # Cruise From Starmap
 
-Highlight a destination—including a planet, moon, current-system station, or
-other addressable current-system marker—and use the separate Cruise action. For
+Highlight a destination—including a planet, moon, or indexed station—and use
+the separate Cruise action. For
 a current-system target, tap/release remembers it and returns to the cockpit, or
 a completed Starmap hold enters vanilla Cruise immediately and locks it. For a
-remote planet or moon with an executable matching vanilla route, the tap starts
-a system-level route and remembers which body Cruise should lock after arrival. The key
+remote planet, moon, or exact indexed station with an executable matching vanilla route, the tap starts
+a system-level route and remembers which target Cruise should lock after arrival. The key
 may be released once a local hold completes. In flight system view, the action
 remains visible but disabled with a short reason when the highlighted marker
 cannot be accepted. A fixed cockpit label confirms the marked target even when
@@ -15,8 +15,7 @@ the selection as the one `StarMapMenuMarkersData` row whose
 the dossier PNDT identity. A station marker may identify either its live
 reference or its map cell; the active-plugin index resolves the latter to one
 indexed, currently live reference whose ship base carries `IsStarstation`.
-Other non-planet markers must match exactly one row in the current cockpit target
-feed. Zero,
+Ship POIs and every other non-station marker are intentionally hidden; zero,
 multiple, mismatched, or invalid-view candidates remain entirely vanilla-owned.
 
 This is a standalone native SFSE plugin. It has no ESP, scripts, save data,
@@ -29,13 +28,12 @@ inter-plugin API.
 - Matching SFSE
 - Address Library v21 (`versionlib-1-16-244-0.bin`)
 - Highlighted planets and moons in the current or another system
-- Highlighted stations, resolvable Ship POIs, and addressable non-planet markers
-  in the currently loaded system
+- Highlighted indexed stations in the current or another system
 - Keyboard/mouse and controller for the separate Starmap action, using the
   player's live `Cruise`/`SHMonocle` bindings and native button glyphs
 
 Native grav-jump route construction or modification remains outside this
-plugin's scope. For a remote planet or moon, one tap arms the process-local body
+plugin's scope. For a remote planet, moon, or indexed station, one tap arms the process-local target
 mark and emits vanilla Back from system view. Once galaxy view is active, the
 plugin invokes vanilla's non-entering selected-system setter with the captured
 STDT root, verifies the native readback, and dispatches the exact custom event
@@ -46,24 +44,39 @@ the visible vanilla travel panel, verifies that it remains an executable route
 to the captured system for 500 ms, and invokes the same public method as the
 vanilla Execute button. Vanilla still owns fuel, range,
 exploration, travel, and every route leg. The mark survives intermediate jumps and is
-reconciled only after arrival in the target system. A remote station or other
-non-planet marker remains unavailable. A station marker must be a live station reference
-or a cell that resolves to exactly one indexed, currently live station reference.
-On map close, that reference becomes the native ship target before Cruise is
-requested. A Ship POI CELL must resolve through its loaded-reference list to
-exactly one live, in-space, non-station ship, excluding the player ship; that
-reference receives the same guarded native assignment. A remote non-planet
-marker exposes no Cruise action until its system is the loaded cockpit system.
-Another non-planet marker must already expose exactly one
-matching current HUD target row. Targets the HUD/Cruise system itself cannot lock remain marked rather
-than being reported as confirmed.
+reconciled only after arrival in the target system. A final body already exposed
+as exactly one cockpit HUD row uses the direct Cruise lock. If a retained remote
+moon is absent, the plugin resolves its parent planet from the active-load-order
+PNDT/GNAM hierarchy and requires exactly one parent HUD row, but dispatches only
+the retained moon after one stock Cruise activation. Starfield may resolve that
+request latently through the parent without publishing the parent as
+`bIsCruiseTargetLock`. Dispatch success is never course success: the continuation
+stays pending only while Cruise remains active in the same settled system and
+has no arbitrary travel-duration limit. It completes solely when a unique
+retained-moon row reports the exact lock. A
+published exact parent lock, when present, receives the stronger parent/feed
+transition audit. The public destination remains the moon throughout.
+A remote station marker must be a CELL with exactly one active-load-order indexed
+REFR/base tuple. After vanilla arrives in the retained system and the world
+settles, that same REFR must become live with that exact `IsStarstation` base.
+Only then does the plugin assign it as the native ship target and require exact
+setter readback. A station already exposed as exactly one HUD row takes the
+direct path. Otherwise the index joins the station CELL EDID to PNDT `DNAM`,
+walks its unique same-system `GNAM` ancestry, and requires an exact ancestor
+with exactly one HUD row as the first private waypoint. One stock Cruise
+activation and one retained-station dispatch may then resolve latently through
+that waypoint and only ordered inward ancestors;
+only the station REFR's exact `bIsCruiseTargetLock` completes the course. The
+public destination remains the station, and the travel phase has no arbitrary
+duration limit. Current-system stations continue to resolve and assign on map
+close. Ship POIs and generic non-planet markers expose no plugin action.
 
 ## Interaction
 
 - Tap/release marks the target, closes the complete Starmap/Data Menu stack,
   and returns to the cockpit. Starting Cruise normally afterward locks that
   marked target.
-- A remote planet or moon uses a tap-only `JUMP THEN CRUISE` action. It is
+- A remote planet, moon, or exact indexed station uses a tap-only `JUMP THEN CRUISE` action. It is
   enabled only when the system/star root is exact and vanilla **Set Course** is
   available. The tap records the body as the Cruise target, dispatches stock
   `StarMapMenu_OnCancel`, and waits for galaxy view. It then establishes the
@@ -83,18 +96,41 @@ than being reported as confirmed.
   dispatches stock `StarMapMenu_ExecuteRoute`. Every transient mismatch gets the
   full five-second route-build window; a route that is still missing, mismatched,
   or non-executable then fails closed: the Cruise mark is cleared, the map stays open, and
-  vanilla's route/warning remains untouched. On settled arrival in the target
-  system, one exact cockpit target-feed row is required before the plugin
-  requests stock Cruise and queues the marked course.
+  vanilla's route/warning remains untouched. A remote selection is disabled
+  while Cruise is active because the stock HUD Cruise control is not handled
+  while the Starmap owns the UI; exit Cruise in the cockpit first. Execute itself
+  is accepted only when stock closes the Starmap; a dispatched event without that
+  acknowledgement fails closed. On settled arrival in the target
+  system, one exact final-body cockpit target-feed row is required for the
+  direct path. A missing remote moon may continue only through one exact
+  PNDT/GNAM parent planet that itself has one HUD row. After one stock Cruise
+  activation, the plugin dispatches the retained moon—not the parent—and
+  remains pending through the engine-owned latent travel while Cruise is active.
+  Only a unique retained-moon row with exact `bIsCruiseTargetLock` readback
+  completes the course. If Starfield publishes the exact parent lock on the way,
+  that lock must end while Cruise remains active and the target system remains
+  settled; a newer cockpit feed must then uniquely expose the retained moon.
+  For a station, settled arrival instead requires the retained static CELL,
+  REFR, and base to resolve to the same live identity. Native target assignment
+  and readback must succeed. A missing final row can continue only when the CELL
+  maps uniquely through PNDT `DNAM` and every traversed `GNAM` parent is unique,
+  live, in-system, and exact; an ancestor with one HUD row becomes the first
+  private waypoint, and later exact intermediate locks must move inward along
+  the retained ancestry chain. Cruise remains pending through unbounded active travel, and
+  only the retained station's exact course-lock readback succeeds. Identity,
+  HUD-row, activation, dispatch, and feed-transition timeouts fail closed.
 - When the cockpit's stock Cruise action is currently available, completing the
   Starmap hold fill marks the target, closes the complete Starmap/Data Menu
   stack, and latches a held state through the stock
   `SpaceshipHudMenu.ProcessUserEvent` path. Vanilla owns the cockpit threshold;
   the latch releases when Cruise becomes active or after a four-second safety
   limit.
-- If Cruise was already active when the map opened, the Starmap instead shows one
-  `SET CRUISE TARGET` action. A tap closes the map and queues the selected target
-  as the new course; there is no hold action or `HOLD TO CRUISE` affordance.
+- If Cruise was already active when the map opened, a current-system target uses
+  one `SET CRUISE TARGET` action: a tap closes the map and queues the new course.
+  A remote target is disabled with `EXIT CRUISE FIRST`; after Cruise is exited,
+  reopening the map exposes the normal `JUMP THEN CRUISE` action. No automatic
+  exit is claimed because the proven HUD input path is rejected while the
+  Starmap is open.
 - If Cruise is inactive but the stock cockpit action is temporarily unavailable,
   such as its short post-exit cooldown, the same tap-only action marks the target
   without advertising or attempting a hold-to-engage action.
@@ -136,23 +172,48 @@ A Starmap press may be consumed only when all of these gates pass:
    creation they require the public Execute hint to remain visible
    (`bCanExecuteRoute=true`) and its destination-system text to match the system
    name captured with the mark continuously for 500 ms. Vanilla may choose a body within that system as
-   its grav-jump entry point; Cruise still owns the marked final body.
-5. A station marker must be a live reference whose base carries `IsStarstation`,
-   or a cell that resolves to exactly one indexed, currently live reference with
-   such a base. A Ship POI must be a CELL containing exactly one live, in-space,
-   non-station GBFM reference after excluding the player ship. Other non-planet
-   markers must match exactly one current cockpit HUD row by ID.
+   its grav-jump entry point; Cruise still owns the marked final body. Remote
+   route acceptance requires Cruise to be inactive and rechecks that condition
+   immediately before Execute.
+   Stock Starmap close is required as Execute acknowledgement. At
+   settled system arrival, a missing remote moon can resolve only through the
+   unique live PNDT whose GNAM system matches and whose planet index equals the
+   moon's GNAM parent index. One stock Cruise activation and one retained-moon
+   course event are sent. Dispatch success is not acceptance: the request may
+   remain latent for as long as Cruise is continuously active, and only the
+   final moon's exact lock completes it. If an exact parent lock is
+   published, its end and a later unique final-moon feed are additionally
+   required. Missing/ambiguous identities or rows, unrelated exact courses,
+   handshake timeouts, manual interruption, load, landing/docking, or system
+   mismatch stop the continuation fail-closed. Opening the Starmap pauses the
+   private driver; accepting another destination replaces the retained moon and
+   resets its continuation through the normal `SetDestination` path.
+5. A current-system station marker must be a live reference whose base carries
+   `IsStarstation`, or a cell that resolves to exactly one indexed, currently live
+   reference with such a base. A remote station must be a CELL with exactly one
+   indexed REFR/base tuple and the guarded load-event sink. It uses the same exact
+   STDT/DNAM system route as a remote body; after settled arrival, the retained
+   REFR and base must resolve live and native target setter/readback must agree.
+   A missing final row requires one exact CELL-EDID/PNDT-DNAM orbital identity,
+   a unique live GNAM ancestry chain, and one exact visible ancestor row before
+   Cruise. Only the retained station REFR's exact `bIsCruiseTargetLock` succeeds.
+   Ship POIs and other non-station markers are hidden.
    The map id/type and resolved target ID are retained separately.
 
 The highlight-radius discriminator was proven with planet, moon, revisit,
 rapid-switch, invalid-view, station, empty-space, and movie-reopen controls.
-Planet/moon course dispatch and readback are runtime-proven. Static 1.16.244
-analysis verifies the station resolution and native target-assignment path.
-Station gameplay is runtime-proven; Ship POI and generic non-planet confirmation
-remain pending.
+Planet/moon direct course dispatch and readback are runtime-proven. Current-system
+station gameplay is runtime-proven. Static 1.16.244 analysis verifies the remote
+station identity, native target assignment, and CELL/DNAM/GNAM ancestry path;
+its end-to-end remote continuation remains pending. Ship POIs and generic
+non-planet markers are intentionally unsupported and hidden. The two-activation parent-staged remote-moon flow is
+runtime-proven by a no-mouse Triton trace. A one-activation Chawla trace proved
+that Starfield can retain the final-moon event without publishing a parent lock
+and later exact-lock and reach Chawla; the corrected plugin-side latent-retention
+gate remains pending a fresh trace.
 
 No raw `TESForm*` survives a menu transition. Destination state is a value
-containing only kind, map id/type, resolved target id, target-system identity,
+containing only kind, map id/type, resolved target/base ids, target-system identity,
 localized name, and menu generation.
 
 ## Configuration
@@ -188,9 +249,10 @@ custom-INI example to `<mods>/CruiseFromStarmap/SFSE/Plugins`. It never deploys
 an ESP, replaces a SWF, or writes a body cache. While an active-flight system
 view is open, the plugin adds a stock Starmap control. Before Cruise starts it is
 a `ReleaseHoldComboButton`: `SET CRUISE TARGET` on top and `HOLD TO CRUISE`
-below. If Cruise is already active or its stock cockpit hold action is currently
-unavailable, it is a tap-only `BasicButton` labeled `SET CRUISE TARGET`. The
-active variant is enabled only while the destination gate passes; otherwise its
+  below. If Cruise is already active or its stock cockpit hold action is currently
+  unavailable, it is a tap-only `BasicButton`. Current-system targets retain
+  `SET CRUISE TARGET`; remote targets show disabled `EXIT CRUISE FIRST` while
+  Cruise is active. The active variant is enabled only while the destination gate passes; otherwise its
 disabled label explains the rejection, such as `HIGHLIGHT A DESTINATION`,
 `TARGET HAS NO CRUISE ID`, or `TARGET IS NOT AVAILABLE TO CRUISE`. This separate
 action uses the player's `Cruise`

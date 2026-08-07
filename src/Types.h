@@ -11,7 +11,6 @@ namespace CFS
         kPlanet = 2,
         kMoon = 3,
         kStation = 4,
-        kShip = 5,
     };
 
     struct GalaxyIdentity
@@ -27,6 +26,7 @@ namespace CFS
     {
         BodyKind kind{ BodyKind::kPlanet };
         std::uint32_t formID{ 0 };
+        std::uint32_t targetBaseFormID{ 0 };
         std::uint32_t mapFormID{ 0 };
         std::uint32_t mapType{ 0 };
         GalaxyIdentity galaxy;

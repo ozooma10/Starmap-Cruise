@@ -15,15 +15,13 @@ GalaxyStarMapMenu movie
                     |   + guarded load sink when system is remote
                     | stations: marker live reference or CELL
                     |   + active-load-order IsStarstation base
-                    |   + exactly one indexed, currently live reference
-                    | ship POIs: CELL loaded-reference walk
-                    |   + exactly one live in-space non-station GBFM reference
-                    |   + player ship excluded
-                    | other non-planets: exact current HUD target ID
+                    |   + current: exactly one indexed, live reference
+                    |   + remote: exactly one indexed REFR/base tuple
+                    | non-station markers: hidden / vanilla-owned
                     v
-              BodyDestination value (map id/type + target id)
+              BodyDestination value (map id/type + target/base ids)
                     |
-                    +---- remote planet/moon: stock Back to galaxy
+                    +---- remote planet/moon/station: stock Back to galaxy
                     |       + verify same focused system/root
                     |       + stock system-level SetRouteDestination
                     |       + vanilla builds route
@@ -31,7 +29,10 @@ GalaxyStarMapMenu movie
                     |       + JumpDataPanel.SendExecuteEvent()
                     |       + PendingJump until target system
                     |
-                    +---- station/ship map close: native ship-target assignment
+                    +---- current station: map-close native target assignment
+                    +---- remote station: post-arrival live identity + assignment
+                    |       + CELL EDID <-> PNDT DNAM orbital identity
+                    |       + unique GNAM ancestor HUD waypoint when needed
                     |
                     v
 SpaceshipHudMenu movie
@@ -50,8 +51,15 @@ The active load order is parsed in memory on a background thread. Planet records
 retain their PNDT/GNAM identity and star records retain their STDT/DNAM system
 identity. Station bases are identified by the vanilla
 `IsStarstation` keyword; CELL placed references are then indexed by
-cell and validated again as live references when selected. Full, medium, and
-light master mappings are respected. No cache is read or written.
+cell. CELL EDIDs and PNDT `DNAM` space-cell names are also indexed so a remote
+station can be joined to its exact orbital PNDT and unique `GNAM` ancestry.
+Current-system selections validate station references live immediately; remote
+station selections retain one exact indexed REFR/base tuple and validate it live
+only after vanilla reaches the target system. Full, medium, and
+light master mappings are respected. For a moon, parent lookup returns every
+live PNDT in the same GNAM system with `parent == 0` and `planet ==
+moon.parent`; automatic staging requires exactly one result and revalidates it
+as a live PNDT. No FormID is inferred or hard-coded. No cache is read or written.
 
 ## State machine
 
@@ -68,21 +76,17 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
 - `MapSelection` begins only after the selection gate passes: one nonzero
   highlight-radius marker, captured current system, active flight, and current
   session/movie generation. Planet/moon markers additionally require matching
-  dossier id/type, a live PNDT, and parsed GNAM. A remote planet/moon also
-  requires the guarded load-event sink. A station marker
+  dossier id/type, a live PNDT, and parsed GNAM. Every remote routable target also
+  requires the guarded load-event sink. A current-system station marker
   must be a live station reference or a CELL resolving to exactly one indexed,
-  currently live reference whose base carries `IsStarstation`. A Ship POI must
-  be a CELL resolving through the verified loaded-reference walker to exactly one
-  live, in-space, non-station GBFM reference after excluding the player ship.
-  A non-planet marker whose live STDT system differs from the captured cockpit
-  system is hidden before station/ship resolution: its target is not safe until
-  that system is loaded. Another non-planet marker must
-  match exactly one row in the current cockpit target feed.
-- For a resolved station or ship CELL/reference, map close assigns the reference
-  as the native ship target before any Cruise input or course event is issued. Exact
-  current-feed non-planets already have a course-addressable target ID.
+  currently live reference whose base carries `IsStarstation`; a remote station
+  CELL must have exactly one indexed REFR/base tuple. Ship POIs and every other
+  non-station marker are hidden and remain vanilla-owned.
+- For a resolved current-system station CELL/reference, map close assigns the
+  reference as the native ship target before any Cruise input or course event is
+  issued.
 - `Marked` owns the process-local destination but not autopilot.
-- `PendingJump` is used only for a remote planet or moon. It preserves the mark
+- `PendingJump` is used for a remote planet, moon, or exact indexed station. It preserves the mark
   across intermediate system changes and `LoadingMenu`, without constructing or
   altering the vanilla route itself. A remote tap first captures the body as the
   Cruise target plus the browsed system name/root, then emits the exact
@@ -115,7 +119,37 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   window. Vanilla may choose any body within that matching system as its grav-jump
   entry point. The plugin then enters `PendingJump` and invokes public
   `JumpDataPanel.SendExecuteEvent()`, which rechecks the same Execute visibility
-  before dispatching `StarMapMenu_ExecuteRoute`.
+  before dispatching `StarMapMenu_ExecuteRoute`. Remote route acceptance requires
+  Cruise to be inactive. The stock HUD `ProcessUserEvent` Cruise path is not
+  handled while the Starmap owns the UI, so an active-Cruise remote target is
+  disabled with `EXIT CRUISE FIRST` rather than starting a partial Back transition.
+  Execute is held in an acknowledgement phase until vanilla closes the Starmap; a
+  successful ActionScript invocation without that close fails closed.
+  Once the target system is settled, an exact-one final HUD row keeps the direct
+  Cruise path. If and only if the retained destination is a moon with no row, a
+  private continuation resolves the unique live GNAM parent planet, requires
+  exactly one planet HUD row, activates stock Cruise once, and dispatches the
+  retained moon ID once. Dispatch success is not a course acknowledgement:
+  Starfield may keep the request latent without publishing the parent as an
+  exact lock. The destination value remains pending and cockpit status continues
+  to name the final moon while Cruise stays active and system/world identity
+  remains valid. Latent travel has no arbitrary duration limit. Only exact
+  final-moon readback completes that path. If Starfield does publish the unique
+  parent as an intermediate exact lock, the stronger parent-lock end and newer
+  unique final-feed transition is required before the final lock. No second
+  activation or dispatch occurs.
+  A retained remote station instead waits for its exact indexed REFR/base tuple
+  to become live after settled arrival. A live mismatch or ambiguity fails
+  closed. Exact native ship-target assignment/readback is required. One exact
+  station HUD row keeps the direct path. If the final row is absent, the station
+  CELL EDID must match exactly one PNDT `DNAM`; every traversed same-system GNAM
+  parent must be unique and a live PNDT. An exact ancestor with one HUD row
+  becomes the first private waypoint; the retained inward ancestry segment
+  permits only ordered exact intermediate locks. The shared continuation activates Cruise once
+  and dispatches only the retained station REFR. Stock may hold that request
+  latently or publish the waypoint as an intermediate exact lock. Active travel
+  is unbounded; matching exact station `bIsCruiseTargetLock` is the sole success
+  gate, and the public destination never changes to the waypoint.
   Physical-hold and application-focus cleanup does not demote the accepted
   `MapSelection` state. While either that state or the guarded remote-route
   request remains active, ordinary current-system reconciliation cannot clear
@@ -146,8 +180,9 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   activation never arrives. A later vanilla inactive-to-active Cruise transition
   moves the destination to `AwaitingCruise` and queues its target id.
 - If Cruise was already active when the map opened, the stacked control is
-  replaced by a stock tap-only `BasicButton`. Its accepted tap queues the course
-  request immediately; no hold action is exposed or accepted.
+  replaced by a stock tap-only `BasicButton`. A current-system tap queues the
+  course request immediately. A remote target is disabled with
+  `EXIT CRUISE FIRST`; no remote input is accepted and no hold action is exposed.
 - The same tap-only control is used while the stock cockpit
   `ShipReticle.CanActivateCruiseMode` getter is false, including the short
   post-exit cooldown. The tap still marks the destination but does not attempt
@@ -158,6 +193,22 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   confirmation.
 - `AutopilotLocked` is entered only when the low feed reports
   `bIsCruiseTargetLock` on the same target id.
+- Orbital staging never enters public `AutopilotLocked`: the public destination
+  and status remain the final moon or station. After the unique waypoint row is
+  known, the private phases activate stock Cruise once and dispatch only the
+  final target. Starfield may hold that request latently, exact-lock the final
+  target directly, or publish the unique waypoint as an intermediate exact
+  lock. Latent dispatch is never reported as course success; only the unique
+  final target's exact readback
+  completes it. In the published-parent case, the parent lock must end while
+  Cruise stays active and a newer feed must uniquely expose the final moon.
+  Every engine course-ID transition is logged from the low feed. A loading
+  transition, HUD replacement, settled non-space state, system mismatch,
+  ambiguous identity/row, manual Cruise exit, unrelated exact course, or bounded
+  handshake timeout clears the automation fail-closed. Opening the map pauses
+  the private driver; `SetDestination` atomically replaces the final mark and
+  resets the continuation when another target is accepted. Completing the
+  internal parent course alone never clears the final mark.
 
 The mark survives manual Cruise exits and interruptions. A lost Cruise lock
 starts a two-second arrival audit; the mark clears only when the prior lock and
@@ -213,9 +264,9 @@ replacement.
   `SetRouteDestination`
   button is never changed. Each variant is created at most once per movie and
   hidden when inactive; no SWF bytecode is replaced.
-- For a remote planet/moon, the tap-only control is additionally gated by an
-  exact live STDT star whose parsed DNAM system ID matches the selected PNDT's
-  GNAM system ID, plus the live public
+- For a remote planet/moon/station, the tap-only control is additionally gated by an
+  exact live STDT star whose parsed DNAM system ID matches the retained target
+  system ID, inactive Cruise, plus the live public
   `SetRouteDestinationButtonData` enabled/visible state. Acceptance captures
   `SystemNameHeader_mc` for later route-display comparison, emits stock Back,
   carries the exact captured STDT/DNAM root into galaxy view, and then invokes

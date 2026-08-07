@@ -19,17 +19,16 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
 - A selection is invalid unless exactly one `StarMapMenuMarkersData` row has
   `bIsInHighlightRadius=true` and a nonzero id. Planet/moon rows must also
   exactly match the dossier PNDT and its GNAM/current-system identity.
-  A station-backed non-planet row may be a live station reference or a CELL that
-  resolves through placed children to exactly one currently live reference
-  whose base carries `IsStarstation`. A Ship POI row may resolve only when its
-  CELL contains exactly one live, in-space, non-station GBFM reference after
-  excluding the player ship. Any non-planet marker in a browsed system other
-  than the cockpit system is hidden before station/ship resolution rather than
-  advertised as an unavailable Cruise target. Another non-planet row must match exactly one current
-  cockpit target-feed row by the same ID. Keep the map id/type and resolved
+  A current-system station-backed row may be a live station reference or a CELL
+  that resolves through placed children to exactly one currently live reference
+  whose base carries `IsStarstation`. A remote station CELL may be accepted only
+  when the active-load-order index contains exactly one REFR/base tuple; retain
+  both IDs for exact live revalidation after arrival. Any non-planet marker
+  other than an exact indexed station is hidden; Ship POIs and generic markers
+  are intentionally unsupported. Keep the map id/type and resolved
   target reference separate. Unmatched generic POIs, tree focus, `bIsFocused`,
   timing heuristics, and last-dossier-wins are invalid.
-- A remote planet/moon handoff must prove the captured STDT/DNAM system root
+- A remote planet/moon/station handoff must prove the captured STDT/DNAM system root
   after stock Back, then allow every non-ready route state the full five-second
   build window. Route-end system identity and public `bCanExecuteRoute` must
   remain continuously ready for 500 ms before invoking stock Execute Route.
@@ -58,7 +57,43 @@ The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
   enabled state, and never synthesize cursor input.
   An ActionScript invocation is not proof that travel began; only the guarded,
   player-filtered `GravJumpEvent` stream provides jump acknowledgement.
-- Anything outside the currently loaded system's system view is vanilla-owned.
+  Do not accept a remote route while Cruise is active: expose disabled
+  `EXIT CRUISE FIRST`, preserve the current destination, and never dispatch Back,
+  Set Course, or Execute. Recheck inactivity before Execute in case state changes
+  after acceptance. Keep a bounded post-Execute phase and
+  accept only stock Starmap close as the UI acknowledgement; invocation success
+  alone is not Execute success.
+- After a remote system jump, keep the direct final-body path when exactly one
+  matching HUD row exists. If a remote moon has no row, resolve its parent only
+  from the live load-order PNDT/GNAM index: require one candidate in the same
+  system with `parent == 0` and `planet == moon.parent`, then require exactly one
+  planet HUD row. Keep the final moon in `g_destination`; the parent is a private
+  identity and must never appear in public destination/status state. Activate
+  stock Cruise once and dispatch only the retained final moon. Starfield may
+  retain that request without publishing an exact parent lock; keep it pending
+  without an arbitrary travel timeout while Cruise remains continuously active
+  and system/world identity stays valid. Opening the Starmap pauses this driver;
+  an accepted new destination replaces it through `SetDestination`. Never treat dispatch success as
+  course success: require the unique final moon's exact `bIsCruiseTargetLock`.
+  If Starfield publishes the exact parent lock, require that lock to end and a
+  newer unique final-moon feed before accepting the final exact lock. Fail
+  closed on ambiguity, missing rows/handshake timeouts, manual interruption, load, HUD
+  replacement, landing/docking, or system mismatch. Do not clear the final mark
+  merely because the parent course completed.
+- After a remote station route settles in the retained system, allow a bounded
+  window for its exact indexed REFR/base tuple to become live, then require
+  native target assignment/readback. If the station has one HUD row, keep the
+  direct path. Otherwise join its CELL EDID to exactly one PNDT `DNAM`, walk only
+  unique live same-system `GNAM` parents, and require an exact ancestor with
+  exactly one HUD row as the first private waypoint. Retain the proven inward
+  ancestry segment so only ordered exact intermediate locks are accepted. Keep the public destination as the
+  station, activate stock Cruise once, dispatch only the retained REFR, and
+  allow the engine-owned travel phase to remain unbounded while Cruise/system/
+  world identity stays valid. Require the station REFR's exact
+  `bIsCruiseTargetLock`; ambiguity, identity drift, bounded handshake/feed
+  timeout, unrelated course, interruption, load, landing/docking, or system
+  mismatch clears it fail-closed.
+- Ship POIs and generic non-planet POIs are hidden and remain vanilla-owned.
 - SFSE permanent tasks are worker-thread producers only. Marshal ordinary
   engine work through `RE::BSService::TaskQueue`; enter Scaleform only from the
   byte-verified post-`UI_AdvanceActiveMenus` pump, when the owning main thread's
