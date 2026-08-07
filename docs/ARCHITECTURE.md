@@ -64,24 +64,46 @@ as a live PNDT. No FormID is inferred or hard-coded. No cache is read or written
 
 ## Source layout
 
-`src/Bridge.cpp` remains the one translation-unit facade so anonymous-namespace
-linkage, shared-state initialization order, and hook ownership are unchanged.
-The implementation is organized into ordered `src/Bridge/*.inl` fragments:
+`src/Bridge.cpp` remains the one translation-unit facade for navigation
+orchestration so anonymous shared-state initialization order and hook ownership
+stay unchanged. Only stateful orchestration remains in ordered `.inl` fragments:
 
-- `State.inl`: constants, enums, snapshots, and shared process state
-- `Selection.inl`: runtime guards, current identity, destination lifecycle, and
-  map eligibility
-- `RemoteRoute.inl`: GalaxyState/Quick Select handoff, route execution, and
-  continuation setup
-- `MapUi.inl`: physical input interception, map controls, and Starmap providers
-- `HudCruise.inl`: low/high HUD feeds, Cruise activation, exact course readback,
-  and retained-target distance sampling
-- `Lifecycle.inl`: subscriptions, menu/focus/load lifecycle, continuation
-  drivers, arrival audit, and the main-thread frame pump
+```text
+src/Bridge/
+  State.inl                    constants, snapshots, process state
+  Destination.inl              current-system and destination lifecycle
+  SafetyEvents.inl             guarded load and grav-jump sinks
+  Selection.inl                exact map eligibility and identity construction
+  RemoteRoute/
+    Inspection.inl             read-only vanilla focus/route proof
+    Course.inl                 course requests, continuation setup, UI dispatch
+    MapAction.inl              accepted action -> navigation transition
+    Driver.inl                 Back -> Set Course -> Execute state machine
+  MapUi/
+    Input.inl                  physical input and native hook
+    ActionHint.inl             runtime map controls
+    Providers.inl              provider callbacks -> plain snapshots
+  HudCruise.inl                HUD feeds, Cruise, course and distance readback
+  Lifecycle/
+    Subscriptions.inl          movie subscriptions and menu/focus events
+    Continuation.inl           remote moon/station and arrival reconciliation
+    FramePump.inl              audits and queued main-thread work
+```
 
-This is a behavior-preserving physical split, not a claim that the fragments are
-independent modules. Converting them to separate translation units requires an
-explicit state owner and a new runtime regression campaign.
+Infrastructure with an independent lifetime is compiled as a normal module:
+
+- `Engine/RuntimeBindings.*`: routing/target-assignment native callables and
+  galaxy vtables; the complete set is published only after every required check
+  passes.
+- `Engine/RuntimeMemory.*`: bounded process-memory reads and executable-image
+  range helpers.
+- `Input/CruiseBindingResolver.*`: read-only live ControlMap discovery.
+- `Scaleform/ValueAccess.*`: typed GFx payload/member decoding.
+
+The Bridge fragments are still ordered pieces of one translation unit, not
+independent modules. New reusable infrastructure should use a normal header and
+source file. Converting stateful fragments into separate translation units
+still requires an explicit state owner and a new runtime regression campaign.
 
 ## State machine
 

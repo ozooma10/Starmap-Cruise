@@ -16,11 +16,20 @@ development fallback is `../OSF RE/lib/commonlibsf`. Do not edit the deployed
 payload by hand. `tools/package-release.ps1` deliberately clears the deploy
 environment while producing verified main and symbols archives.
 
-`src/Bridge.cpp` is the public facade and single translation-unit owner. Its
-`src/Bridge/*.inl` fragments are behavior-preserving internal boundaries for
-state, selection, remote routing, map UI, HUD Cruise, and lifecycle work. Keep
-them included in that order unless shared-state ownership and initialization
-order are redesigned and revalidated explicitly.
+`src/Bridge.cpp` is the public facade and single translation-unit owner for
+navigation orchestration. Its ordered `src/Bridge/**/*.inl` fragments keep the
+anonymous shared state and hook ownership in one unit while subdividing
+destination state, safety events, eligibility, remote-route inspection/course/
+action/driver stages, map input/action/provider work, HUD Cruise, and lifecycle
+work. Keep the include order documented in `src/Bridge/README.md` unless shared
+state ownership and initialization order are redesigned and revalidated.
+
+Reusable low-level work does not belong in a Bridge fragment. Core navigation
+callable fingerprints and ownership live in `src/Engine/RuntimeBindings.*`,
+safe process-memory reads in `src/Engine/RuntimeMemory.*`, live ControlMap
+discovery in `src/Input/CruiseBindingResolver.*`, and GFx value decoding in
+`src/Scaleform/ValueAccess.*`. Hook-local and event-source guards remain beside
+the hook or subscription that owns them.
 
 ## Invariants
 

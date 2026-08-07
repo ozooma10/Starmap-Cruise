@@ -1,6 +1,9 @@
 #pragma once
 
-#include "RE/Starfield.h"
+namespace RE
+{
+    class IMenu;
+}
 
 namespace CFS::Bridge
 {

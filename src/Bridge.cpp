@@ -1,7 +1,11 @@
 #include "Bridge.h"
 
 #include "BodyIndex.h"
+#include "Engine/RuntimeBindings.h"
+#include "Engine/RuntimeMemory.h"
+#include "Input/CruiseBindingResolver.h"
 #include "MainThreadUiPump.h"
+#include "Scaleform/ValueAccess.h"
 #include "Settings.h"
 #include "Types.h"
 
@@ -32,12 +36,30 @@ namespace CFS::Bridge
 {
     namespace
     {
+        using Engine::HexBytes;
+        using Engine::ReadMemory;
+        using ScaleformValue::AsNumber;
+        using ScaleformValue::BooleanMember;
+        using ScaleformValue::ObjectMember;
+        using ScaleformValue::Payload;
+        using ScaleformValue::StringMember;
+        using ScaleformValue::UIntMember;
+
 #include "Bridge/State.inl"
+#include "Bridge/Destination.inl"
+#include "Bridge/SafetyEvents.inl"
 #include "Bridge/Selection.inl"
-#include "Bridge/RemoteRoute.inl"
-#include "Bridge/MapUi.inl"
+#include "Bridge/RemoteRoute/Inspection.inl"
+#include "Bridge/RemoteRoute/Course.inl"
+#include "Bridge/RemoteRoute/MapAction.inl"
+#include "Bridge/RemoteRoute/Driver.inl"
+#include "Bridge/MapUi/Input.inl"
+#include "Bridge/MapUi/ActionHint.inl"
+#include "Bridge/MapUi/Providers.inl"
 #include "Bridge/HudCruise.inl"
-#include "Bridge/Lifecycle.inl"
+#include "Bridge/Lifecycle/Subscriptions.inl"
+#include "Bridge/Lifecycle/Continuation.inl"
+#include "Bridge/Lifecycle/FramePump.inl"
     }
 
     void OnMovieCreated(RE::IMenu* a_menu)
@@ -176,8 +198,7 @@ namespace CFS::Bridge
             return;
         }
 
-        if (!ValidateIsInSpaceBinding() || !ValidateShipTargetBinding() ||
-            !ValidateGalaxySystemSelectionBindings())
+        if (!RuntimeBindings::Initialize())
             return;
         TryInstallLoadGameSink();
         TryInstallGravJumpSink();

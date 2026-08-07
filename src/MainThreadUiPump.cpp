@@ -3,7 +3,9 @@
 #include "Bridge.h"
 
 #include "REL/ASM.h"
+#include "REL/Relocation.h"
 #include "REL/Trampoline.h"
+#include "REX/REX.h"
 
 #include <array>
 #include <atomic>

@@ -20,6 +20,10 @@
 
 - Cruise targeting leaves all route construction and execution to vanilla.
 - Configuration now exposes only `bVerboseLog`.
+- Reorganized bridge orchestration into focused route, map UI, lifecycle,
+  destination, and safety boundaries; extracted runtime-memory, native-binding,
+  ControlMap, and Scaleform helpers into normal modules without changing the
+  navigation state machine.
 
 ### Removed
 

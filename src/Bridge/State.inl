@@ -30,59 +30,23 @@
         // The unit is completed AS3 advances, not wall clock: each pass means
         // native finished one advance with the selection already applied.
         constexpr std::uint32_t kGalaxyFocusRungPasses = 10;
-        constexpr REL::ID kControlMapSingletonPtr{ 938003 };
-        constexpr REL::ID kSetShipHudTarget{ 97892 };
-        constexpr REL::ID kCurrentShipHudTarget{ 883585 };
         // Starfield 1.16.244: GalaxyState's non-entering selected-system setter
         // and the stock Quick Select close/consume path. The setter is vtable
         // slot +0x48; SetRouteDestination reads that selected ID when Quick
         // Select mode is active, then closes the mode itself.
-        constexpr REL::ID kSelectGalaxySystem{ 94292 };
-        constexpr REL::ID kCloseGalaxyQuickSelect{ 94308 };
-        constexpr REL::ID kStarMapMenuPrimaryVtable{ 446845 };
-        constexpr REL::ID kGalaxyStatePrimaryVtable{ 446425 };
         constexpr REL::ID kLoadGameGetEventSource{ 64149 };
         constexpr REL::ID kLoadGameSourceStatic{ 838425 };
         constexpr REL::ID kLoadGameSourceVtable{ 413741 };
         constexpr REL::ID kGravJumpGetEventSource{ 93876 };
         constexpr REL::ID kGravJumpSourceVtable{ 445846 };
-        constexpr std::size_t kControlMapSize = 0x3A0;
-        constexpr std::size_t kControlMapContextSlotsOffset = 0x10;
-        constexpr std::size_t kControlMapMappingStride = 0x28;
-        constexpr std::size_t kMaxControlMappings = 4096;
         constexpr std::size_t kStarMapMenuDataModelOffset = 0x1B8;
         constexpr std::size_t kStarMapMenuGalaxyStateOffset = 0x1240;
         constexpr std::size_t kGalaxyStateSelectedSystemOffset = 0x880;
         constexpr std::size_t kGalaxyStateQuickSelectOpenOffset = 0x8F8;
-        constexpr std::array<std::uint8_t, 2> kCruiseControlContexts{ 0x21, 0x4D };
-        constexpr std::array<std::uint8_t, 16> kIsInSpace116244Prologue{
-            0x48, 0x89, 0x5C, 0x24, 0x10, 0x55, 0x56, 0x57,
-            0x48, 0x83, 0xEC, 0x40, 0x40, 0x32, 0xF6, 0x48,
-        };
-        constexpr std::array<std::uint8_t, 6> kSetShipHudTarget116244Prefix{
-            0x48, 0x83, 0xEC, 0x48, 0x89, 0x0D,
-        };
-        constexpr std::array<std::uint8_t, 16> kSelectGalaxySystem116244Prologue{
-            0x48, 0x89, 0x5C, 0x24, 0x18, 0x48, 0x89, 0x74,
-            0x24, 0x20, 0x55, 0x48, 0x8D, 0x6C, 0x24, 0xA9,
-        };
-        constexpr std::array<std::uint8_t, 16> kCloseGalaxyQuickSelect116244Prologue{
-            0x48, 0x89, 0x5C, 0x24, 0x10, 0x48, 0x89, 0x6C,
-            0x24, 0x18, 0x48, 0x89, 0x74, 0x24, 0x20, 0x57,
-        };
         constexpr std::array<std::uint8_t, 16> kGlobalEventGetEventSource116244Prologue{
             0x48, 0x83, 0xEC, 0x28, 0x65, 0x48, 0x8B, 0x04,
             0x25, 0x58, 0x00, 0x00, 0x00, 0xBA, 0xB8, 0x00,
         };
-
-        using IsInSpace_t = bool (*)(RE::TESObjectREFR*, bool);
-        using SetShipHudTarget_t = void (*)(std::uint32_t);
-        using SelectGalaxySystem_t = void (*)(void*, std::uint32_t, bool);
-        using CloseGalaxyQuickSelect_t = void (*)(void*, void*);
-        std::atomic<IsInSpace_t> g_isInSpace{ nullptr };
-        std::atomic<SetShipHudTarget_t> g_setShipHudTarget{ nullptr };
-        std::atomic<SelectGalaxySystem_t> g_selectGalaxySystem{ nullptr };
-        std::atomic<CloseGalaxyQuickSelect_t> g_closeGalaxyQuickSelect{ nullptr };
 
         struct MovieState
         {
