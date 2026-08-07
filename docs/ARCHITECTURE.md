@@ -62,6 +62,27 @@ live PNDT in the same GNAM system with `parent == 0` and `planet ==
 moon.parent`; automatic staging requires exactly one result and revalidates it
 as a live PNDT. No FormID is inferred or hard-coded. No cache is read or written.
 
+## Source layout
+
+`src/Bridge.cpp` remains the one translation-unit facade so anonymous-namespace
+linkage, shared-state initialization order, and hook ownership are unchanged.
+The implementation is organized into ordered `src/Bridge/*.inl` fragments:
+
+- `State.inl`: constants, enums, snapshots, and shared process state
+- `Selection.inl`: runtime guards, current identity, destination lifecycle, and
+  map eligibility
+- `RemoteRoute.inl`: GalaxyState/Quick Select handoff, route execution, and
+  continuation setup
+- `MapUi.inl`: physical input interception, map controls, and Starmap providers
+- `HudCruise.inl`: low/high HUD feeds, Cruise activation, exact course readback,
+  and retained-target distance sampling
+- `Lifecycle.inl`: subscriptions, menu/focus/load lifecycle, continuation
+  drivers, arrival audit, and the main-thread frame pump
+
+This is a behavior-preserving physical split, not a claim that the fragments are
+independent modules. Converting them to separate translation units requires an
+explicit state owner and a new runtime regression campaign.
+
 ## State machine
 
 ```text
@@ -137,9 +158,9 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   exactly one planet HUD row, activates stock Cruise once, and dispatches the
   retained moon ID once. Dispatch success is not a course acknowledgement:
   Starfield may keep the request latent without publishing the parent as an
-  exact lock. The destination value remains pending and cockpit status continues
-  to name the final moon while Cruise stays active and system/world identity
-  remains valid. Latent travel has no arbitrary duration limit. Only exact
+  exact lock. The destination value continues to retain the final moon while
+  Cruise stays active and system/world identity remains valid. Latent travel has
+  no arbitrary duration limit. Only exact
   final-moon readback completes that path. If Starfield does publish the unique
   parent as an intermediate exact lock, the stronger parent-lock end and newer
   unique final-feed transition is required before the final lock. No second

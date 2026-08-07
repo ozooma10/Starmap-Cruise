@@ -1,4 +1,7 @@
-# Cruise From Starmap — new-computer handoff
+# Historical Cruise From Starmap new-computer handoff
+
+This snapshot is retained only as development history. Current setup, build,
+and validation instructions live in the repository root and `docs/`.
 
 Prepared: 2026-08-04  
 Game/runtime target: Starfield 1.16.244.0 (Steam)  

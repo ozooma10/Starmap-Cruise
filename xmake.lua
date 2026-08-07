@@ -1,9 +1,13 @@
 set_config("commonlib_ini", true)
 
--- Use the clean, runtime-proven shared mirror that OSF RE builds against. The
--- workspace-root CommonLibSF checkout may carry unrelated active branch work;
--- this mod does not vendor or modify either dependency tree.
-includes("../OSF RE/lib/commonlibsf")
+local commonlibsf_root = os.getenv("COMMONLIBSF_PATH")
+if not commonlibsf_root or #commonlibsf_root == 0 then
+    commonlibsf_root = path.join(os.scriptdir(), "../OSF RE/lib/commonlibsf")
+end
+if not os.isdir(commonlibsf_root) then
+    raise("CommonLibSF not found; set COMMONLIBSF_PATH to a CommonLibSF checkout")
+end
+includes(commonlibsf_root)
 
 add_requires("zlib")
 
@@ -27,7 +31,7 @@ target("CruiseFromStarmap", function()
     })
 
     add_files("src/**.cpp")
-    add_headerfiles("src/**.h")
+    add_headerfiles("src/**.h", "src/**.inl")
     add_includedirs("src")
     add_packages("zlib")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN")
@@ -38,23 +42,4 @@ target("CruiseFromStarmap", function()
     if not os.getenv("XSE_SF_MODS_PATH") and not os.getenv("XSE_SF_GAME_PATH") then
         set_installdir("$(builddir)/deploy/Data")
     end
-
-    after_build(function(target)
-        local modsroot = os.getenv("XSE_SF_MODS_PATH")
-        if not modsroot or #modsroot == 0 then
-            return
-        end
-        local plugindir = path.join(modsroot, target:name(), "SFSE", "Plugins")
-        os.mkdir(plugindir)
-        os.trycp(target:targetfile(), path.join(plugindir, path.filename(target:targetfile())))
-        if target:symbolfile() and os.isfile(target:symbolfile()) then
-            os.trycp(target:symbolfile(), path.join(plugindir, path.filename(target:symbolfile())))
-        end
-        os.trycp("CruiseFromStarmap.ini", path.join(plugindir, "CruiseFromStarmap.ini"))
-        if not os.isfile(path.join(plugindir, "CruiseFromStarmapCustom.ini.example")) then
-            os.trycp("CruiseFromStarmapCustom.ini.example",
-                path.join(plugindir, "CruiseFromStarmapCustom.ini.example"))
-        end
-        cprint("${green}[CruiseFromStarmap] deployed DLL/PDB/default INI to %s", plugindir)
-    end)
 end)

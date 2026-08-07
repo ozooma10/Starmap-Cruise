@@ -11,7 +11,16 @@ xmake -y
 ```
 
 The xmake target deploys to `MO2/mods/CruiseFromStarmap` through
-`XSE_SF_MODS_PATH`. Do not edit that payload by hand.
+`XSE_SF_MODS_PATH`. Set `COMMONLIBSF_PATH` for a standalone checkout; the local
+development fallback is `../OSF RE/lib/commonlibsf`. Do not edit the deployed
+payload by hand. `tools/package-release.ps1` deliberately clears the deploy
+environment while producing verified main and symbols archives.
+
+`src/Bridge.cpp` is the public facade and single translation-unit owner. Its
+`src/Bridge/*.inl` fragments are behavior-preserving internal boundaries for
+state, selection, remote routing, map UI, HUD Cruise, and lifecycle work. Keep
+them included in that order unless shared-state ownership and initialization
+order are redesigned and revalidated explicitly.
 
 ## Invariants
 
