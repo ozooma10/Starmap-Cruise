@@ -7,6 +7,19 @@
                    (a_buttonBar.IsObject() || a_buttonBar.IsDisplayObject());
         }
 
+        // Called from OnMovieCreated on the menu-creation thread: plain-state
+        // resets only, no Scaleform access.
+        void OnMapMovieReplaced()
+        {
+            ResetHold("Starmap movie replacement");
+            g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+            g_mapActionHintSignature.store(0, std::memory_order_release);
+            g_mapActionInteractive.store(false, std::memory_order_release);
+            g_mapActionTapOnly.store(false, std::memory_order_release);
+            g_mapUiDirty.store(true, std::memory_order_release);
+            g_uiResetMask.fetch_or(kResetMapUi, std::memory_order_acq_rel);
+        }
+
         void ReleaseStaleMapUiState()
         {
             const auto reset = g_uiResetMask.fetch_and(

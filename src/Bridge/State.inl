@@ -206,6 +206,18 @@
 
         std::mutex g_destinationMutex;
         std::optional<BodyDestination> g_destination;
+        // NavState has no single owning fragment; its transitions are
+        // published where their evidence lives. StoreDestination/
+        // ClearDestination (Destination.inl) set kMapSelection/kIdle with the
+        // mark itself; ReleaseNavStateToMark CASes kAwaitingCruise back to
+        // kMarked/kIdle; MapAction.inl sets kMapSelection on a remote accept;
+        // Driver.inl sets kPendingJump immediately before stock Execute;
+        // Course.inl/Continuation.inl publish kAwaitingCruise around queued
+        // Cruise presses and waypoint commits (Continuation also CASes
+        // kPendingJump->kAwaitingCruise on arrival); completeFinalLock and the
+        // HudCruise course confirmation publish kAutopilotLocked. Several
+        // stores are CAS- or lock-context-dependent; do not funnel them
+        // through a wrapper that cannot enforce those contexts.
         std::atomic<NavState> g_state{ NavState::kIdle };
 
         std::atomic<bool> g_haveCurrentSystem{ false };

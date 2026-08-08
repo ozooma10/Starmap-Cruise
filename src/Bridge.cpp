@@ -83,48 +83,10 @@ namespace CFS::Bridge
         state->generation.fetch_add(1, std::memory_order_acq_rel);
         state->subscriptions.store(0, std::memory_order_release);
         state->bornTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
-        if (state == &g_mapMovie) {
-            ResetHold("Starmap movie replacement");
-            g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-            g_mapActionHintSignature.store(0, std::memory_order_release);
-            g_mapActionInteractive.store(false, std::memory_order_release);
-            g_mapActionTapOnly.store(false, std::memory_order_release);
-            g_mapUiDirty.store(true, std::memory_order_release);
-            g_uiResetMask.fetch_or(kResetMapUi, std::memory_order_acq_rel);
-        } else {
-            ResetHold("Spaceship HUD movie replacement");
-            {
-                std::lock_guard lock{ g_hudCruiseInputMutex };
-                g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
-                g_hudCruiseUserEvent = "Cruise";
-                g_hudCruiseInputLatched = false;
-                g_hudCruiseInputStarted = {};
-            }
-            {
-                std::lock_guard lock{ g_courseMutex };
-                g_courseRequest = {};
-            }
-            g_courseAskedID.store(0, std::memory_order_release);
-            g_courseAskedClearing.store(false, std::memory_order_release);
-            g_confirmedCourseID.store(0, std::memory_order_release);
-            g_haveCurrentSystem.store(false, std::memory_order_release);
-            {
-                std::lock_guard lock{ g_hudRowsMutex };
-                g_hudRows.clear();
-                g_hudRowsGeneration = 0;
-            }
-            {
-                std::lock_guard lock{ g_processedHudMutex };
-                g_processedHudSnapshot = {};
-            }
-            g_hudLowDirty.store(false, std::memory_order_release);
-            g_cruiseActive.store(false, std::memory_order_release);
-            g_cruiseEngageAvailable.store(false, std::memory_order_release);
-            g_hudUiDirty.store(true, std::memory_order_release);
-            g_uiResetMask.fetch_or(kResetHudUi, std::memory_order_acq_rel);
-            FailActiveContinuationsOrRelease(
-                "Spaceship HUD movie was replaced during automatic continuation");
-        }
+        if (state == &g_mapMovie)
+            OnMapMovieReplaced();
+        else
+            OnHudMovieReplaced();
         REX::INFO("[ui] movie created: {} generation={}", name,
             state->generation.load(std::memory_order_acquire));
     }

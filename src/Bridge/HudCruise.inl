@@ -235,6 +235,44 @@
             }
         } g_highHandler;
 
+        // Called from OnMovieCreated on the menu-creation thread: plain-state
+        // resets only, no Scaleform access.
+        void OnHudMovieReplaced()
+        {
+            ResetHold("Spaceship HUD movie replacement");
+            {
+                std::lock_guard lock{ g_hudCruiseInputMutex };
+                g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
+                g_hudCruiseUserEvent = "Cruise";
+                g_hudCruiseInputLatched = false;
+                g_hudCruiseInputStarted = {};
+            }
+            {
+                std::lock_guard lock{ g_courseMutex };
+                g_courseRequest = {};
+            }
+            g_courseAskedID.store(0, std::memory_order_release);
+            g_courseAskedClearing.store(false, std::memory_order_release);
+            g_confirmedCourseID.store(0, std::memory_order_release);
+            g_haveCurrentSystem.store(false, std::memory_order_release);
+            {
+                std::lock_guard lock{ g_hudRowsMutex };
+                g_hudRows.clear();
+                g_hudRowsGeneration = 0;
+            }
+            {
+                std::lock_guard lock{ g_processedHudMutex };
+                g_processedHudSnapshot = {};
+            }
+            g_hudLowDirty.store(false, std::memory_order_release);
+            g_cruiseActive.store(false, std::memory_order_release);
+            g_cruiseEngageAvailable.store(false, std::memory_order_release);
+            g_hudUiDirty.store(true, std::memory_order_release);
+            g_uiResetMask.fetch_or(kResetHudUi, std::memory_order_acq_rel);
+            FailActiveContinuationsOrRelease(
+                "Spaceship HUD movie was replaced during automatic continuation");
+        }
+
         void ReleaseStaleHudUiState()
         {
             const auto reset = g_uiResetMask.fetch_and(
