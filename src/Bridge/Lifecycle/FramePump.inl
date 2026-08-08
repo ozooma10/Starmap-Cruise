@@ -3,24 +3,64 @@
 
         void CheckArrival()
         {
-            const auto id = g_arrivalCheckID.load(std::memory_order_acquire);
-            if (!id)
+            ArrivalAuditState audit;
+            {
+                std::lock_guard lock{ g_arrivalAuditMutex };
+                audit = g_arrivalAudit;
+            }
+            if (!audit.checkID)
                 return;
-            const auto since = Clock::time_point{ Clock::duration{
-                g_arrivalCheckTicks.load(std::memory_order_acquire) } };
+
+            const auto destination = Destination();
+            if (!destination || destination->formID != audit.checkID) {
+                std::lock_guard lock{ g_arrivalAuditMutex };
+                if (g_arrivalAudit.checkID == audit.checkID &&
+                    g_arrivalAudit.checkGeneration == audit.checkGeneration) {
+                    g_arrivalAudit.checkID = 0;
+                    g_arrivalAudit.checkGeneration = 0;
+                    g_arrivalAudit.checkTicks = 0;
+                }
+                return;
+            }
+
+            const auto since = Clock::time_point{ Clock::duration{ audit.checkTicks } };
             const auto age = Clock::now() - since;
-            const double distance = g_markedDistance.load(std::memory_order_acquire);
-            const bool evidence = distance >= 0.0 && distance <= kArrivalDistanceMeters;
+            const auto currentGeneration =
+                g_hudMovie.generation.load(std::memory_order_acquire);
+            const bool sameGeneration = audit.checkGeneration != 0 &&
+                audit.checkGeneration == audit.distanceGeneration &&
+                audit.checkGeneration == currentGeneration;
+            const bool evidence = sameGeneration && audit.markedDistance >= 0.0 &&
+                audit.markedDistance <= kArrivalDistanceMeters;
             if (evidence) {
-                g_arrivalCheckID.store(0, std::memory_order_release);
-                REX::INFO("[arrival] exact prior lock plus close distance {:.3f} m <= {:.3f} m confirmed arrival for {:08X}",
-                    distance, kArrivalDistanceMeters, id);
+                {
+                    std::lock_guard lock{ g_arrivalAuditMutex };
+                    if (g_arrivalAudit.checkID != audit.checkID ||
+                        g_arrivalAudit.checkGeneration != audit.checkGeneration)
+                        return;
+                    g_arrivalAudit.checkID = 0;
+                    g_arrivalAudit.checkGeneration = 0;
+                    g_arrivalAudit.checkTicks = 0;
+                }
+                REX::INFO("[arrival] exact prior lock plus same-generation close distance {:.3f} m <= {:.3f} m confirmed arrival for {:08X} on HUD generation {}",
+                    audit.markedDistance, kArrivalDistanceMeters, audit.checkID,
+                    audit.checkGeneration);
                 ClearDestination("confirmed arrival (course transition plus close distance)");
             } else if (age > std::chrono::seconds(2)) {
-                g_arrivalCheckID.store(0, std::memory_order_release);
+                {
+                    std::lock_guard lock{ g_arrivalAuditMutex };
+                    if (g_arrivalAudit.checkID != audit.checkID ||
+                        g_arrivalAudit.checkGeneration != audit.checkGeneration)
+                        return;
+                    g_arrivalAudit.checkID = 0;
+                    g_arrivalAudit.checkGeneration = 0;
+                    g_arrivalAudit.checkTicks = 0;
+                }
                 if (Settings::Verbose())
-                    REX::INFO("[arrival] no arrival evidence after lock transition: distance={:.3f} m threshold={:.3f} m; preserving mark {:08X}",
-                        distance, kArrivalDistanceMeters, id);
+                    REX::INFO("[arrival] no same-generation arrival evidence after lock transition: distance={:.3f} m threshold={:.3f} m sampleGeneration={} auditGeneration={} currentGeneration={}; preserving mark {:08X}",
+                        audit.markedDistance, kArrivalDistanceMeters,
+                        audit.distanceGeneration, audit.checkGeneration,
+                        currentGeneration, audit.checkID);
             }
         }
 
@@ -47,8 +87,7 @@
                         "remote station course request expired before the Cruise HUD became ready");
                     return;
                 }
-                g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                    std::memory_order_release);
+                ReleaseNavStateToMark();
             }
 
             const auto asked = g_courseAskedID.load(std::memory_order_acquire);
@@ -76,8 +115,7 @@
                             "remote station course dispatch received no exact bIsCruiseTargetLock readback");
                         return;
                     }
-                    g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                        std::memory_order_release);
+                    ReleaseNavStateToMark();
                 }
             }
 
@@ -100,9 +138,71 @@
                         "stock Cruise activation timed out during remote-station continuation");
                     return;
                 }
-                g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                    std::memory_order_release);
+                ReleaseNavStateToMark();
             }
+        }
+
+        bool FailClosedPostAdvanceState(const char* a_reason) noexcept
+        {
+            g_pendingMapAction.store(MapAction::kNone, std::memory_order_release);
+            g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+            g_closeRequested.store(false, std::memory_order_release);
+            g_mapActionInteractive.store(false, std::memory_order_release);
+            g_mapActionTapOnly.store(false, std::memory_order_release);
+
+            try {
+                std::lock_guard lock{ g_holdMutex };
+                g_hold = {};
+                g_claimMapKey = false;
+            } catch (...) {
+            }
+
+            bool unresolvedPressedEdge = false;
+            try {
+                std::lock_guard lock{ g_hudCruiseInputMutex };
+                unresolvedPressedEdge =
+                    g_hudCruiseInputPhase == HudCruiseInputPhase::kPressed ||
+                    g_hudCruiseInputPhase == HudCruiseInputPhase::kReleasePending;
+                g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
+                g_hudCruiseUserEvent = "Cruise";
+                g_hudCruiseInputLatched = false;
+                g_hudCruiseInputStarted = {};
+            } catch (...) {
+                unresolvedPressedEdge = true;
+            }
+
+            try {
+                ClearDestination(a_reason);
+            } catch (...) {
+                // The fatal path must not throw out of the exception handler.
+                // Repeat the lock-owned pieces independently, then publish Idle
+                // even if one best-effort lock reset itself fails.
+                try {
+                    std::lock_guard lock{ g_destinationMutex };
+                    g_destination.reset();
+                } catch (...) {
+                }
+                try {
+                    std::lock_guard lock{ g_courseMutex };
+                    g_courseRequest = {};
+                } catch (...) {
+                }
+                try {
+                    std::lock_guard lock{ g_remoteRouteMutex };
+                    g_remoteRouteRequest = {};
+                } catch (...) {
+                }
+                try {
+                    ResetDestinationDependentState(NavState::kIdle);
+                } catch (...) {
+                }
+                g_courseAskedID.store(0, std::memory_order_release);
+                g_courseAskedClearing.store(false, std::memory_order_release);
+                g_pendingStationResolveTicks.store(0, std::memory_order_release);
+                g_pendingStationAssignedID.store(0, std::memory_order_release);
+                g_state.store(NavState::kIdle, std::memory_order_release);
+            }
+            return unresolvedPressedEdge;
         }
 
         void RunMainThreadFrame()

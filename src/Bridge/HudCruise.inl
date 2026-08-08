@@ -27,6 +27,8 @@
         public:
             void Call(const Params& a_params) override
             {
+                const auto generation =
+                    g_hudMovie.generation.load(std::memory_order_acquire);
                 V data;
                 if (!Payload(a_params, data))
                     return;
@@ -41,9 +43,13 @@
 
                 LowCollector collector;
                 array.VisitElements(&collector);
+                if (!generation ||
+                    g_hudMovie.generation.load(std::memory_order_acquire) != generation)
+                    return;
                 {
                     std::lock_guard lock{ g_hudRowsMutex };
                     g_hudRows = std::move(collector.rows);
+                    g_hudRowsGeneration = generation;
                 }
                 g_hudLowDirty.store(true, std::memory_order_release);
                 g_hudUiDirty.store(true, std::memory_order_release);
@@ -59,10 +65,15 @@
                 g_hudLowRevision.fetch_add(1, std::memory_order_acq_rel) + 1;
 
             std::vector<HudRow> rows;
+            std::uint32_t hudGeneration = 0;
             {
                 std::lock_guard lock{ g_hudRowsMutex };
                 rows = g_hudRows;
+                hudGeneration = g_hudRowsGeneration;
             }
+            if (!hudGeneration ||
+                g_hudMovie.generation.load(std::memory_order_acquire) != hudGeneration)
+                return;
             ResolveCurrentSystem(rows);
 
             std::uint32_t course = 0;
@@ -73,7 +84,7 @@
                 }
             {
                 std::lock_guard lock{ g_processedHudMutex };
-                g_processedHudSnapshot = { rows, course, feedRevision };
+                g_processedHudSnapshot = { rows, course, feedRevision, hudGeneration };
             }
             const auto previousCourse = g_confirmedCourseID.exchange(course, std::memory_order_acq_rel);
             if (previousCourse != course && Settings::Verbose()) {
@@ -121,7 +132,7 @@
                         destination->formID, courseTarget,
                         destination->localizedName);
                 }
-                g_courseWasLocked.store(true, std::memory_order_release);
+                RecordCourseLock(hudGeneration);
                 g_courseAskedID.store(0, std::memory_order_release);
                 g_courseAskedClearing.store(false, std::memory_order_release);
                 g_state.store(NavState::kAutopilotLocked, std::memory_order_release);
@@ -129,15 +140,15 @@
                     REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
                         courseTarget, destination->localizedName);
                 }
-            } else if (previousCourse == courseTarget &&
-                g_courseWasLocked.exchange(false, std::memory_order_acq_rel)) {
-                g_arrivalCheckID.store(destination->formID, std::memory_order_release);
-                g_arrivalCheckTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
+            } else if (previousCourse == courseTarget) {
+                const auto arrival = ArmArrivalCheck(destination->formID, hudGeneration);
+                if (!arrival.armed)
+                    return;
                 g_state.store(NavState::kMarked, std::memory_order_release);
                 if (Settings::Verbose())
-                    REX::INFO("[arrival] Cruise lock left {:08X}; last distance={:.3f} m, threshold={:.3f} m; waiting for arrival evidence",
+                    REX::INFO("[arrival] Cruise lock left {:08X}; last distance={:.3f} m from HUD generation {}, threshold={:.3f} m; waiting for same-generation arrival evidence",
                         courseTarget,
-                        g_markedDistance.load(std::memory_order_acquire),
+                        arrival.lastDistance, arrival.distanceGeneration,
                         kArrivalDistanceMeters);
             }
         }
@@ -180,8 +191,12 @@
             return Clock::now() - born >= kHudMovieSettleTime;
         }
 
-        void UpdateMarkedDistance(const std::vector<DistanceSample>& a_distances)
+        void UpdateMarkedDistance(const std::vector<DistanceSample>& a_distances,
+            std::uint32_t a_hudGeneration)
         {
+            if (!a_hudGeneration ||
+                g_hudMovie.generation.load(std::memory_order_acquire) != a_hudGeneration)
+                return;
             const auto destination = Destination();
             if (!destination)
                 return;
@@ -196,9 +211,11 @@
                         break;
                     }
             }
-            if (index != static_cast<std::size_t>(-1) && a_distances[index].valid)
-                g_markedDistance.store(a_distances[index].distance,
-                    std::memory_order_release);
+            if (index != static_cast<std::size_t>(-1) && a_distances[index].valid) {
+                std::lock_guard lock{ g_arrivalAuditMutex };
+                g_arrivalAudit.markedDistance = a_distances[index].distance;
+                g_arrivalAudit.distanceGeneration = a_hudGeneration;
+            }
         }
 
         class HighHandler : public RE::Scaleform::GFx::FunctionHandler
@@ -206,6 +223,8 @@
         public:
             void Call(const Params& a_params) override
             {
+                const auto generation =
+                    g_hudMovie.generation.load(std::memory_order_acquire);
                 V data;
                 if (!Payload(a_params, data))
                     return;
@@ -220,9 +239,13 @@
 
                 HighCollector collector;
                 array.VisitElements(&collector);
+                if (!generation ||
+                    g_hudMovie.generation.load(std::memory_order_acquire) != generation)
+                    return;
                 {
                     std::lock_guard lock{ g_hudDistancesMutex };
                     g_hudDistances = std::move(collector.rows);
+                    g_hudDistancesGeneration = generation;
                 }
                 // Passed GFx values die with this callback. The post-advance
                 // pump consumes only copied C++ rows before entering AS3.
@@ -243,6 +266,7 @@
                 {
                     std::lock_guard lock{ g_hudDistancesMutex };
                     g_hudDistances.clear();
+                    g_hudDistancesGeneration = 0;
                 }
             }
         }
@@ -284,9 +308,11 @@
             DriveHudCruiseInput(root, rootPath);
 
             std::vector<DistanceSample> distances;
+            std::uint32_t distancesGeneration = 0;
             {
                 std::lock_guard lock{ g_hudDistancesMutex };
                 distances = g_hudDistances;
+                distancesGeneration = g_hudDistancesGeneration;
             }
 
             V cruise;
@@ -359,6 +385,6 @@
                 }
             }
 
-            UpdateMarkedDistance(distances);
+            UpdateMarkedDistance(distances, distancesGeneration);
             RunCourseRequest(root);
         }

@@ -108,6 +108,7 @@ namespace CFS::Bridge
             {
                 std::lock_guard lock{ g_hudRowsMutex };
                 g_hudRows.clear();
+                g_hudRowsGeneration = 0;
             }
             {
                 std::lock_guard lock{ g_processedHudMutex };
@@ -179,11 +180,19 @@ namespace CFS::Bridge
             }
             ReconcileHudUi();
         } catch (const std::exception& e) {
+            const bool unresolvedPressedEdge = FailClosedPostAdvanceState(
+                "post-advance UI pump exception");
             faulted.store(true, std::memory_order_release);
-            REX::ERROR("post-advance UI pump threw '{}'; disabling further Scaleform work", e.what());
+            REX::ERROR("post-advance UI pump threw '{}'; guarded navigation state cleared and further Scaleform work disabled{}",
+                e.what(), unresolvedPressedEdge ?
+                              "; a dispatched HUD Cruise press could not be safely released" : "");
         } catch (...) {
+            const bool unresolvedPressedEdge = FailClosedPostAdvanceState(
+                "unknown post-advance UI pump exception");
             faulted.store(true, std::memory_order_release);
-            REX::ERROR("post-advance UI pump threw an unknown exception; disabling further Scaleform work");
+            REX::ERROR("post-advance UI pump threw an unknown exception; guarded navigation state cleared and further Scaleform work disabled{}",
+                unresolvedPressedEdge ?
+                    "; a dispatched HUD Cruise press could not be safely released" : "");
         }
     }
 

@@ -283,6 +283,62 @@
             g_remoteMoonContinuation = {};
         }
 
+        void RecordCourseLock(std::uint32_t a_hudGeneration)
+        {
+            std::lock_guard lock{ g_arrivalAuditMutex };
+            g_arrivalAudit.courseWasLocked = a_hudGeneration != 0;
+            g_arrivalAudit.courseLockGeneration = a_hudGeneration;
+            // Reacquiring an exact lock invalidates any still-armed audit from
+            // its previous loss while preserving the latest valid distance.
+            g_arrivalAudit.checkID = 0;
+            g_arrivalAudit.checkGeneration = 0;
+            g_arrivalAudit.checkTicks = 0;
+        }
+
+        struct ArmedArrivalCheck
+        {
+            bool armed{ false };
+            double lastDistance{ -1.0 };
+            std::uint32_t distanceGeneration{ 0 };
+        };
+
+        ArmedArrivalCheck ArmArrivalCheck(std::uint32_t a_destinationID,
+            std::uint32_t a_hudGeneration)
+        {
+            std::lock_guard lock{ g_arrivalAuditMutex };
+            ArmedArrivalCheck result{
+                .lastDistance = g_arrivalAudit.markedDistance,
+                .distanceGeneration = g_arrivalAudit.distanceGeneration,
+            };
+            if (!a_destinationID || !a_hudGeneration ||
+                !g_arrivalAudit.courseWasLocked ||
+                g_arrivalAudit.courseLockGeneration != a_hudGeneration) {
+                if (g_arrivalAudit.courseWasLocked &&
+                    g_arrivalAudit.courseLockGeneration != a_hudGeneration) {
+                    g_arrivalAudit.courseWasLocked = false;
+                    g_arrivalAudit.courseLockGeneration = 0;
+                }
+                return result;
+            }
+
+            g_arrivalAudit.courseWasLocked = false;
+            g_arrivalAudit.courseLockGeneration = 0;
+            g_arrivalAudit.checkID = a_destinationID;
+            g_arrivalAudit.checkGeneration = a_hudGeneration;
+            g_arrivalAudit.checkTicks =
+                Clock::now().time_since_epoch().count();
+            result.armed = true;
+            return result;
+        }
+
+        bool ReleaseNavStateToMark()
+        {
+            auto expected = NavState::kAwaitingCruise;
+            const auto released = Destination() ? NavState::kMarked : NavState::kIdle;
+            return g_state.compare_exchange_strong(expected, released,
+                std::memory_order_acq_rel, std::memory_order_acquire);
+        }
+
         void CancelOrReleaseHudCruiseInput(const char* a_reason)
         {
             const char* action = nullptr;
@@ -340,15 +396,30 @@
                 g_claimMapKey = false;
             }
             CancelOrReleaseHudCruiseInput(a_reason);
-            const auto state = g_state.load(std::memory_order_acquire);
-            if (state == NavState::kAwaitingCruise)
-                g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                    std::memory_order_release);
-            else if (state == NavState::kMapSelection && Settings::Verbose())
+            if (!ReleaseNavStateToMark() &&
+                g_state.load(std::memory_order_acquire) == NavState::kMapSelection &&
+                Settings::Verbose())
                 REX::INFO("[input] active Starmap selection preserved across hold reset: {}",
                     a_reason);
             if (changed && Settings::Verbose())
                 REX::INFO("[input] pending physical hold reset: {}", a_reason);
+        }
+
+        void ResetDestinationDependentState(NavState a_state)
+        {
+            ResetRemoteMoonContinuation();
+            g_courseAskedID.store(0, std::memory_order_release);
+            g_courseAskedClearing.store(false, std::memory_order_release);
+            g_state.store(a_state, std::memory_order_release);
+            {
+                std::lock_guard lock{ g_arrivalAuditMutex };
+                g_arrivalAudit = {};
+            }
+            g_pendingJumpDevice.store(RE::InputEvent::DeviceType::kNone,
+                std::memory_order_release);
+            g_pendingStationResolveTicks.store(0, std::memory_order_release);
+            g_pendingStationAssignedID.store(0, std::memory_order_release);
+            g_hudUiDirty.store(true, std::memory_order_release);
         }
 
         void ClearDestination(const char* a_reason)
@@ -367,18 +438,7 @@
                 std::lock_guard lock{ g_remoteRouteMutex };
                 g_remoteRouteRequest = {};
             }
-            ResetRemoteMoonContinuation();
-            g_courseAskedID.store(0, std::memory_order_release);
-            g_courseAskedClearing.store(false, std::memory_order_release);
-            g_state.store(NavState::kIdle, std::memory_order_release);
-            g_markedDistance.store(-1.0, std::memory_order_release);
-            g_courseWasLocked.store(false, std::memory_order_release);
-            g_arrivalCheckID.store(0, std::memory_order_release);
-            g_pendingJumpDevice.store(RE::InputEvent::DeviceType::kNone,
-                std::memory_order_release);
-            g_pendingStationResolveTicks.store(0, std::memory_order_release);
-            g_pendingStationAssignedID.store(0, std::memory_order_release);
-            g_hudUiDirty.store(true, std::memory_order_release);
+            ResetDestinationDependentState(NavState::kIdle);
             if (old)
                 REX::INFO("[destination] cleared {:08X} '{}': {}", old->formID,
                     old->localizedName, a_reason);
@@ -396,18 +456,10 @@
                 std::lock_guard lock{ g_courseMutex };
                 g_courseRequest = {};
             }
-            ResetRemoteMoonContinuation();
-            g_courseAskedID.store(0, std::memory_order_release);
-            g_courseAskedClearing.store(false, std::memory_order_release);
-            g_state.store(NavState::kMapSelection, std::memory_order_release);
-            g_markedDistance.store(-1.0, std::memory_order_release);
-            g_courseWasLocked.store(false, std::memory_order_release);
-            g_arrivalCheckID.store(0, std::memory_order_release);
-            g_pendingJumpDevice.store(RE::InputEvent::DeviceType::kNone,
-                std::memory_order_release);
-            g_pendingStationResolveTicks.store(0, std::memory_order_release);
-            g_pendingStationAssignedID.store(0, std::memory_order_release);
-            g_hudUiDirty.store(true, std::memory_order_release);
+            // Do not clear g_remoteRouteRequest here. An active guarded route is
+            // authoritative: if another mark appears, its retained target must
+            // differ and let the driver fail the whole handoff closed.
+            ResetDestinationDependentState(NavState::kMapSelection);
             if (old && old->formID != a_destination.formID)
                 REX::INFO("[destination] replaced {:08X} '{}' with {:08X} '{}'",
                     old->formID, old->localizedName, a_destination.formID,

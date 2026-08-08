@@ -288,12 +288,14 @@
         };
         std::mutex g_hudRowsMutex;
         std::vector<HudRow> g_hudRows;
+        std::uint32_t g_hudRowsGeneration{ 0 };
 
         struct ProcessedHudSnapshot
         {
             std::vector<HudRow> rows;
             std::uint32_t course{ 0 };
             std::uint64_t revision{ 0 };
+            std::uint32_t generation{ 0 };
         };
         std::mutex g_processedHudMutex;
         ProcessedHudSnapshot g_processedHudSnapshot;
@@ -308,11 +310,21 @@
         };
         std::mutex g_hudDistancesMutex;
         std::vector<DistanceSample> g_hudDistances;
+        std::uint32_t g_hudDistancesGeneration{ 0 };
         std::atomic<bool> g_hudUiDirty{ false };
-        std::atomic<double> g_markedDistance{ -1.0 };
-        std::atomic<bool> g_courseWasLocked{ false };
-        std::atomic<std::uint32_t> g_arrivalCheckID{ 0 };
-        std::atomic<std::int64_t> g_arrivalCheckTicks{ 0 };
+
+        struct ArrivalAuditState
+        {
+            double markedDistance{ -1.0 };
+            std::uint32_t distanceGeneration{ 0 };
+            bool courseWasLocked{ false };
+            std::uint32_t courseLockGeneration{ 0 };
+            std::uint32_t checkID{ 0 };
+            std::uint32_t checkGeneration{ 0 };
+            std::int64_t checkTicks{ 0 };
+        };
+        std::mutex g_arrivalAuditMutex;
+        ArrivalAuditState g_arrivalAudit;
 
         std::atomic<std::int64_t> g_lastUnsettledTicks{ 0 };
 

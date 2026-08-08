@@ -98,8 +98,7 @@
                     }
                     if (g_state.load(std::memory_order_acquire) == NavState::kAwaitingCruise &&
                         !g_cruiseActive.load(std::memory_order_acquire))
-                        g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                            std::memory_order_release);
+                        ReleaseNavStateToMark();
                 }
                 return true;
             }
@@ -118,8 +117,7 @@
                 g_hold.active = false;
                 if (g_state.load(std::memory_order_acquire) == NavState::kAwaitingCruise &&
                     !g_cruiseActive.load(std::memory_order_acquire))
-                    g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                        std::memory_order_release);
+                    ReleaseNavStateToMark();
                 if (Settings::Verbose())
                     REX::INFO("[input] physical hold released (device={} id={} event='{}')",
                         static_cast<std::uint32_t>(a_button->deviceType), a_button->idCode, name);

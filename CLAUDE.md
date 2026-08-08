@@ -118,8 +118,11 @@ the hook or subscription that owns them.
 - Exact retained-target high-frequency distance sampling is navigation evidence,
   not presentation. Preserve the index-aligned low/high row join and the last
   valid sample across lock loss because the independent close-distance arrival
-  audit depends on it. `TargetHighFrequencyProvider.distance` is meters; convert
-  the guarded `0.05` light-second threshold to meters before comparing it.
+  audit depends on it. Bind the distance sample and exact lock-loss audit to the
+  HUD movie generation that produced them, and never clear a public destination
+  from evidence that crossed a HUD replacement. `TargetHighFrequencyProvider.distance`
+  is meters; convert the guarded `0.05` light-second threshold to meters before
+  comparing it.
 - SFSE permanent tasks are worker-thread producers only. Marshal ordinary
   engine work through `RE::BSService::TaskQueue`; enter Scaleform only from the
   byte-verified post-`UI_AdvanceActiveMenus` pump, when the owning main thread's
@@ -130,6 +133,10 @@ the hook or subscription that owns them.
   those mutations. Subscriptions still require movie/world settle gates; the
   Starmap additionally requires its visible `MenuOpenCloseEvent`, because
   `UI::IsMenuOpen` can expose its incomplete background movie.
+- A permanent post-advance fault latch must first fail every guarded destination,
+  route, continuation, pending action, physical hold, and synthetic HUD-input
+  state closed without re-entering AS3. If a press may already have reached AS3,
+  report that it cannot be safely released after the latch.
 - Track physical input by `(deviceType,idCode)`. Reset pending holds on release,
   focus loss, load, or Starmap movie replacement.
 - Suppress a carried map key until physical release. Keyboard testing proved

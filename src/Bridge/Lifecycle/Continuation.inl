@@ -127,7 +127,7 @@
                 };
 
             const auto completeFinalLock = [&](bool a_stagedThroughParent) {
-                g_courseWasLocked.store(true, std::memory_order_release);
+                RecordCourseLock(hud.generation);
                 g_courseAskedID.store(0, std::memory_order_release);
                 g_courseAskedClearing.store(false, std::memory_order_release);
                 g_state.store(NavState::kAutopilotLocked, std::memory_order_release);

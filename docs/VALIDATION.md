@@ -34,6 +34,14 @@ captures remain under [`history/captures/`](history/captures/).
 - [x] Exact marker/dossier/body, STDT/DNAM system, route dwell, player grav-jump,
   settled-world, HUD-row, and course-lock readback gates remain present
 - [x] Exact retained-target distance sampling remains independent of presentation
+- [x] Arrival evidence, exact lock loss, and the consuming audit must share the
+  current HUD movie generation; stale pre-replacement distance cannot clear a mark
+- [x] Fatal post-advance exception handling clears guarded navigation, route,
+  continuation, pending action, hold, and HUD-input state before latching off AS3
+- [x] Conditional `AwaitingCruise` demotions use compare-exchange and cannot
+  overwrite a newer `MapSelection` or `AutopilotLocked` publication
+- [x] Destination replacement and clear share one dependent-state reset while
+  only clear cancels the authoritative active remote-route request
 
 Latest verified artifacts after the repository cleanup:
 
@@ -74,7 +82,7 @@ MO2 overwrite, or Documents paths. The active default has `bVerboseLog=true`.
 - [ ] Require the log to prove vanilla system jump, exact final or parent-assisted
   course transition, exact final-moon lock, and no fail-closed clear
 - [ ] Continue to physical arrival and require exact prior lock plus converted
-  close-distance evidence to clear the public destination
+  same-HUD-generation close-distance evidence to clear the public destination
 - [ ] Confirm that only vanilla cockpit target presentation appears
 
 Do not mark this smoke complete from visual impression alone. Preserve the
@@ -86,6 +94,10 @@ matching `CruiseFromStarmap.log` excerpt or add a capture under
 - [ ] Current-system indexed station such as The Eye
 - [ ] Controller tap and completed hold on the final release build
 - [ ] Focus loss, loading, landing, docking, and pilot-seat exit fail closed
+- [ ] Focus loss during an active remote-route build preserves `MapSelection`,
+  restarts the route timeout on return, and does not trigger system-change cleanup
+- [ ] HUD replacement during an armed ordinary arrival audit never consumes the
+  prior movie's distance sample; the public mark remains available
 - [ ] Encounter interruption preserves an ordinary mark
 - [ ] Cruise Navigation Panel and other input-hook chaining
 - [ ] Save made during use loads after uninstall

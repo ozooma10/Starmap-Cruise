@@ -573,8 +573,7 @@
                 else if (RemoteStationContinuationActive())
                     FailRemoteStationContinuation("stock HUD Cruise press invocation failed");
                 else
-                    g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                        std::memory_order_release);
+                    ReleaseNavStateToMark();
             } else if (release)
                 InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, false);
         }
@@ -601,8 +600,7 @@
                 else if (RemoteStationContinuationActive())
                     FailRemoteStationContinuation("could not create the remote station course event payload");
                 else
-                    g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                        std::memory_order_release);
+                    ReleaseNavStateToMark();
                 return;
             }
             params.SetMember("uBodyID", V{ static_cast<double>(request.id) });
@@ -620,7 +618,6 @@
                 else if (RemoteStationContinuationActive())
                     FailRemoteStationContinuation("HUD rejected the remote station course dispatch");
                 else
-                    g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
-                        std::memory_order_release);
+                    ReleaseNavStateToMark();
             }
         }
