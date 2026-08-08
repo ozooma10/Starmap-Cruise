@@ -64,6 +64,14 @@ as a live PNDT. The only hard-coded identity is the vanilla `IsStarstation`
 keyword `0x003402A3` used to classify station bases; no other FormID is
 inferred or hard-coded. No cache is read or written.
 
+`src/BodyIndex/RecordReader.*` owns the pure standard-library/zlib record layer:
+subrecords including `XXXX` extended sizes, compressed bodies, three-tier
+load-order FormID remapping, and PNDT/STDT/CELL/GBFM extraction. `BodyIndex.cpp`
+supplies active plugin metadata and a predicate that admits only matching live
+PNDT/STDT forms. Synthetic fixtures exercise the record rules without launching
+Starfield; live-form identity and the final gameplay behavior remain runtime
+validation gates.
+
 ## Source layout
 
 `src/Bridge.cpp` remains the one translation-unit facade for navigation

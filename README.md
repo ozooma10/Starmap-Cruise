@@ -143,6 +143,15 @@ xmake f -m releasedbg -y
 xmake -y
 ```
 
+The root xmake `set_version` is the single version literal; release archive names
+are derived from the built DLL version resource.
+The pure plugin-record reader can be validated without Starfield:
+
+```powershell
+xmake -y RecordReaderTests
+xmake run RecordReaderTests
+```
+
 With `XSE_SF_MODS_PATH` set, the target deploys to
 `<mods>/CruiseFromStarmap/SFSE/Plugins`. Create and verify a release archive with:
 

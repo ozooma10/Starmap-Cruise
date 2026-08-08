@@ -43,3 +43,12 @@ target("CruiseFromStarmap", function()
         set_installdir("$(builddir)/deploy/Data")
     end
 end)
+
+target("RecordReaderTests", function()
+    set_kind("binary")
+    set_default(false)
+    add_files("tests/RecordReaderTests.cpp", "src/BodyIndex/RecordReader.cpp")
+    add_includedirs("src")
+    add_packages("zlib")
+    add_tests("record-reader")
+end)

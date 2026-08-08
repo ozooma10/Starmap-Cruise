@@ -1,7 +1,5 @@
 [CmdletBinding()]
 param(
-    [ValidatePattern('^\d+\.\d+\.\d+$')]
-    [string]$Version = '0.1.0',
     [switch]$SkipBuild
 )
 
@@ -107,6 +105,17 @@ $sourceIni = Join-Path $projectRoot 'CruiseFromStarmap.ini'
 $sourceExample = Join-Path $projectRoot 'CruiseFromStarmapCustom.ini.example'
 $stagedExample = Join-Path $pluginRoot 'CruiseFromStarmapCustom.ini.example'
 
+$builtVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($builtDll)
+if ($builtVersion.FileMajorPart -lt 0 -or $builtVersion.FileMinorPart -lt 0 -or
+    $builtVersion.FileBuildPart -lt 0 -or $builtVersion.FilePrivatePart -ne 0) {
+    throw "Built DLL has an invalid release version: $($builtVersion.FileVersion)"
+}
+$Version = '{0}.{1}.{2}' -f $builtVersion.FileMajorPart,
+    $builtVersion.FileMinorPart, $builtVersion.FileBuildPart
+if ($Version -eq '0.0.0') {
+    throw 'Built DLL is missing the xmake project version resource.'
+}
+
 $hashPairs = @(
     @($builtDll, $stagedDll, 'DLL'),
     @($builtPdb, $stagedPdb, 'PDB'),
@@ -129,20 +138,18 @@ $removedTokens = @(
     'sMode',
     'CRUISE TARGET:'
 )
-$rg = Get-Command rg -ErrorAction SilentlyContinue
-if ($rg) {
-    $arguments = @('-a', '-n')
-    foreach ($token in $removedTokens) {
-        $arguments += @('-e', $token)
+$binaryText = [System.Text.Encoding]::GetEncoding(28591).GetString(
+    [System.IO.File]::ReadAllBytes($builtDll))
+$staleStrings = @(
+    $removedTokens | Where-Object {
+        $pattern = '(?<![A-Za-z0-9_])' + [regex]::Escape($_) +
+            '(?![A-Za-z0-9_])'
+        [regex]::IsMatch($binaryText, $pattern,
+            [System.Text.RegularExpressions.RegexOptions]::CultureInvariant)
     }
-    $arguments += $builtDll
-    $staleStrings = & $rg.Source @arguments 2>$null
-    if ($LASTEXITCODE -gt 1) {
-        throw "rg failed while scanning the built DLL (exit $LASTEXITCODE)."
-    }
-    if ($staleStrings) {
-        throw "Built DLL contains retired feature strings:`n$($staleStrings -join [Environment]::NewLine)"
-    }
+)
+if ($staleStrings) {
+    throw "Built DLL contains retired feature strings:`n$($staleStrings -join [Environment]::NewLine)"
 }
 
 $verifiedPackageWork = Assert-ProjectChildPath $packageWork

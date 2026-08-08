@@ -26,7 +26,8 @@ captures remain under [`history/captures/`](history/captures/).
 - [x] Clean releasedbg configure and build
 - [x] `git diff --check`
 - [x] Release payload allowlist: DLL, default INI, custom-INI example, and PDB
-- [x] Built, active MO2, and release-package DLL/PDB/INI hashes match
+- [x] Built and release-package DLL/PDB/INI hashes match
+- [ ] Active MO2 payload matches the latest build (not deployed by release packaging)
 - [x] Default and example INIs expose only `bVerboseLog`
 - [x] Built DLL contains no retired cockpit-status, custom-marker, or `sMode`
   identifiers
@@ -42,16 +43,29 @@ captures remain under [`history/captures/`](history/captures/).
   overwrite a newer `MapSelection` or `AutopilotLocked` publication
 - [x] Destination replacement and clear share one dependent-state reset while
   only clear cancels the authoritative active remote-route request
+- [x] Off-target `RecordReaderTests` fixtures cover `XXXX` extended subrecords,
+  zlib-compressed bodies, full/medium/small master remapping, strict PNDT DNAM
+  termination, live-form predicate rejection, and exact-versus-ambiguous
+  CELL/XMRK station links
+- [x] Release retired-string verification uses a built-in byte-preserving,
+  identifier-boundary scan and cannot silently disappear when `rg` is
+  unavailable; release archive naming derives from xmake's built DLL version
+  resource instead of a second version literal
 
 Latest verified artifacts after the repository cleanup:
 
-- DLL: `C5CB36B12AA8FDF2F63C5485871DCA90D0E07B1A633FA2AED7E8AB99CCD9A3DB`
-- PDB: `816B570C7D66CAA15F823653038EF1C461CBCC1C0D8A44E8AAE25F4AB6C81EDF`
-- INI: `EC6DEC97ACA8723DE975C1EB987C8B1943BEADC7A3B534BFF7C92BB2404852BC`
+- DLL: `178DC69FF330A01C2E51D4B603349D0D97EBD54A96FAFC84B8ED9E054B2DD616`
+- PDB: `4F290F1ADC46A6981118253BA7F13ACF6DCB09C841EF9E65BB1954A13CE2B01B`
+- INI: `86D9199F8472EF0282E65C0531502FDF77B30AC1B62DC83CC8585D498707AF1B`
 - Main ZIP:
-  `0DD5CEB3C02D0AE8CF194E2E17E27F37303BD909D4AFAD6BF5EC174C45A9E42A`
+  `9BC36327CCFB0BC04D99FA6055EF93F72F85CFC9A0C21EFE6B496A3E7E309281`
 - Symbols ZIP:
-  `28D65C188088BBF1756C32084A65EA32A4A0418DE1ED49D4903C30B246D4D41B`
+  `E59DA1AD1049B97B5CB2FA404214CC905E8AC668467F2ACB85AC3F731D7C7FFB`
+
+The active MO2 DLL remains the prior build
+`0278D1C4D8C4B723F7D0141A9F7EA45882898E28750F5CEBB2F4756108DAFA6C`.
+Release packaging deliberately did not deploy the new artifact, and no current
+gameplay claim is derived from the hashes above.
 
 No winning `CruiseFromStarmapCustom.ini` override was found in the active mod,
 MO2 overwrite, or Documents paths. The active default has `bVerboseLog=true`.
@@ -105,6 +119,10 @@ build and a startup-log diff against a captured baseline instead.
   `RemoteStationContinuationActive` renamed `RemoteStationTargetAssigned`,
   fingerprint failures now log observed vs expected bytes, doc drift fixed.
   Clean releasedbg build; startup-log diff still required.
+- [x] Follow-up structural verification: pure BodyIndex record decoding moved to
+  `src/BodyIndex/RecordReader.*` behind a live-form predicate and passed its
+  synthetic fixture suite; release scanning/version ownership no longer depends
+  on the caller environment.
 - [x] Stage 2 (code): `iGalaxyDiagnosticsMode` capture modes 1/2 added
   (custom-INI only). **Captures not yet run** — run scenario A once in each
   mode, diff the two dumps, then decide Stage 2b per the plan.

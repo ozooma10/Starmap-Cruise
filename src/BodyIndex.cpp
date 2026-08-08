@@ -1,19 +1,14 @@
 #include "BodyIndex.h"
 
-#include "RE/Starfield.h"
+#include "BodyIndex/RecordReader.h"
 
-#include <zlib.h>
+#include "RE/Starfield.h"
 
 #include <algorithm>
 #include <atomic>
 #include <chrono>
-#include <cctype>
 #include <cstring>
-#include <filesystem>
-#include <fstream>
-#include <format>
 #include <mutex>
-#include <span>
 #include <thread>
 #include <unordered_map>
 #include <unordered_set>
@@ -23,77 +18,8 @@ namespace CFS::BodyIndex
 {
     namespace
     {
-        constexpr std::uint32_t kDeleted = 0x00000020;
-        constexpr std::uint32_t kCompressed = 0x00040000;
-        constexpr std::uint32_t kCellChildren = 6;
-        constexpr std::uint32_t kCellPersistentChildren = 8;
-        constexpr std::uint32_t kCellTemporaryChildren = 9;
-        constexpr std::uint32_t kStarstationKeyword = 0x003402A3;
-
-        struct RecordHeader
-        {
-            char signature[4];
-            std::uint32_t dataSize;
-            std::uint32_t flagsOrLabel;
-            std::uint32_t formID;
-            std::uint32_t unk10;
-            std::uint32_t unk14;
-        };
-        static_assert(sizeof(RecordHeader) == 24);
-
-        struct PluginInfo
-        {
-            enum class Tier : std::uint8_t
-            {
-                kFull,
-                kSmall,
-                kMedium,
-            };
-
-            std::string name;
-            Tier tier{ Tier::kFull };
-            std::uint16_t index{ 0 };
-        };
-
-        struct PluginContext
-        {
-            PluginInfo plugin;
-            std::vector<PluginInfo> masters;
-        };
-
-        struct StationPlacement
-        {
-            std::uint32_t cellFormID{ 0 };
-            StationTarget target;
-        };
-
-        struct MapMarkerPlacement
-        {
-            std::uint32_t cellFormID{ 0 };
-            std::uint32_t referenceFormID{ 0 };
-        };
-
-        constexpr std::uint32_t EncodeRuntimeFormID(std::uint32_t a_local,
-            PluginInfo::Tier a_tier, std::uint16_t a_index)
-        {
-            switch (a_tier) {
-            case PluginInfo::Tier::kSmall:
-                return 0xFE000000u | (static_cast<std::uint32_t>(a_index) << 12) |
-                       (a_local & 0x00000FFFu);
-            case PluginInfo::Tier::kMedium:
-                return 0xFD000000u | (static_cast<std::uint32_t>(a_index) << 16) |
-                       (a_local & 0x0000FFFFu);
-            default:
-                return (static_cast<std::uint32_t>(a_index) << 24) |
-                       (a_local & 0x00FFFFFFu);
-            }
-        }
-        static_assert(EncodeRuntimeFormID(0x01001234u, PluginInfo::Tier::kFull, 5) ==
-                      0x05001234u);
-        static_assert(EncodeRuntimeFormID(0x01001234u, PluginInfo::Tier::kMedium, 3) ==
-                      0xFD031234u);
-        static_assert(EncodeRuntimeFormID(0x01001234u, PluginInfo::Tier::kSmall, 2) ==
-                      0xFE002234u);
+        using RecordReader::PluginInfo;
+        using RecordReader::PluginTier;
 
         std::mutex g_mutex;
         std::unordered_map<std::uint32_t, Entry> g_entries;
@@ -104,63 +30,6 @@ namespace CFS::BodyIndex
         std::atomic<bool> g_started{ false };
         std::atomic<bool> g_ready{ false };
 
-        bool ReadExact(std::ifstream& a_file, void* a_out, std::size_t a_size)
-        {
-            a_file.read(static_cast<char*>(a_out), static_cast<std::streamsize>(a_size));
-            return a_file.gcount() == static_cast<std::streamsize>(a_size);
-        }
-
-        template <class F>
-        void ForEachSubrecord(const std::byte* a_data, std::size_t a_size, F&& a_fn)
-        {
-            std::size_t offset = 0;
-            std::uint32_t extended = 0;
-            while (offset + 6 <= a_size) {
-                char signature[4];
-                std::memcpy(signature, a_data + offset, 4);
-                std::uint16_t size16 = 0;
-                std::memcpy(&size16, a_data + offset + 4, 2);
-                offset += 6;
-                std::uint32_t size = size16;
-                if (std::memcmp(signature, "XXXX", 4) == 0 && size == 4) {
-                    if (offset + 4 > a_size)
-                        return;
-                    std::memcpy(&extended, a_data + offset, 4);
-                    offset += 4;
-                    continue;
-                }
-                if (extended != 0) {
-                    size = extended;
-                    extended = 0;
-                }
-                if (offset + size > a_size)
-                    return;
-                if (!a_fn(std::string_view{ signature, 4 }, a_data + offset, size))
-                    return;
-                offset += size;
-            }
-        }
-
-        std::span<const std::byte> RecordBody(std::uint32_t a_flags,
-            const std::vector<std::byte>& a_raw, std::vector<std::byte>& a_scratch)
-        {
-            if ((a_flags & kCompressed) == 0)
-                return { a_raw.data(), a_raw.size() };
-            if (a_raw.size() < 5)
-                return {};
-            std::uint32_t expanded = 0;
-            std::memcpy(&expanded, a_raw.data(), 4);
-            if (expanded == 0 || expanded > 64u * 1024u * 1024u)
-                return {};
-            a_scratch.resize(expanded);
-            uLongf produced = expanded;
-            if (::uncompress(reinterpret_cast<Bytef*>(a_scratch.data()), &produced,
-                    reinterpret_cast<const Bytef*>(a_raw.data() + 4),
-                    static_cast<uLong>(a_raw.size() - 4)) != Z_OK)
-                return {};
-            return { a_scratch.data(), produced };
-        }
-
         std::vector<PluginInfo> CollectPlugins()
         {
             std::vector<PluginInfo> plugins;
@@ -168,7 +37,7 @@ namespace CFS::BodyIndex
             if (!handler)
                 return plugins;
 
-            const auto append = [&plugins](const auto& a_files, PluginInfo::Tier a_tier) {
+            const auto append = [&plugins](const auto& a_files, PluginTier a_tier) {
                 std::uint16_t tierIndex = 0;
                 for (const auto* file : a_files) {
                     if (!file) {
@@ -180,9 +49,10 @@ namespace CFS::BodyIndex
                     if (length == 0 || length >= sizeof(file->fileName))
                         return false;
                     std::string name{ raw, length };
-                    if (!(name.ends_with(".esm") || name.ends_with(".esp") || name.ends_with(".esl")))
+                    if (!(name.ends_with(".esm") || name.ends_with(".esp") ||
+                        name.ends_with(".esl")))
                         return false;
-                    const auto index = a_tier == PluginInfo::Tier::kFull ?
+                    const auto index = a_tier == PluginTier::kFull ?
                         static_cast<std::uint16_t>(file->compileIndex) : tierIndex;
                     plugins.push_back({ std::move(name), a_tier, index });
                     ++tierIndex;
@@ -190,9 +60,9 @@ namespace CFS::BodyIndex
                 return true;
             };
 
-            if (!append(handler->compiledFileCollection.files, PluginInfo::Tier::kFull) ||
-                !append(handler->compiledFileCollection.smallFiles, PluginInfo::Tier::kSmall) ||
-                !append(handler->compiledFileCollection.mediumFiles, PluginInfo::Tier::kMedium)) {
+            if (!append(handler->compiledFileCollection.files, PluginTier::kFull) ||
+                !append(handler->compiledFileCollection.smallFiles, PluginTier::kSmall) ||
+                !append(handler->compiledFileCollection.mediumFiles, PluginTier::kMedium)) {
                 REX::WARN("[bodies] active plugin collection failed validation");
                 return {};
             }
@@ -203,424 +73,6 @@ namespace CFS::BodyIndex
                 handler->compiledFileCollection.mediumFiles.size(), plugins.size());
             return plugins;
         }
-
-        std::uint32_t ResolveFormID(std::uint32_t a_local,
-            const std::vector<PluginInfo>& a_masters, const PluginInfo& a_self)
-        {
-            const auto slot = static_cast<std::size_t>(a_local >> 24);
-            const auto& owner = slot < a_masters.size() ? a_masters[slot] : a_self;
-            return EncodeRuntimeFormID(a_local, owner.tier, owner.index);
-        }
-
-        bool ReadMasters(const std::filesystem::path& a_path, std::vector<std::string>& a_out)
-        {
-            std::ifstream file{ a_path, std::ios::binary };
-            RecordHeader header{};
-            if (!ReadExact(file, &header, sizeof(header)) || std::memcmp(header.signature, "TES4", 4) != 0)
-                return false;
-            std::vector<std::byte> data(header.dataSize);
-            if (header.dataSize && !ReadExact(file, data.data(), data.size()))
-                return false;
-            ForEachSubrecord(data.data(), data.size(), [&](std::string_view a_sig,
-                const std::byte* a_payload, std::size_t a_length) {
-                if (a_sig == "MAST" && a_length > 1) {
-                    const auto* chars = reinterpret_cast<const char*>(a_payload);
-                    a_out.emplace_back(chars, ::strnlen(chars, a_length));
-                }
-                return true;
-            });
-            return true;
-        }
-
-        std::uint64_t SeekGroup(std::ifstream& a_file, const char (&a_label)[5])
-        {
-            while (a_file) {
-                const auto start = static_cast<std::uint64_t>(a_file.tellg());
-                RecordHeader group{};
-                if (!ReadExact(a_file, &group, sizeof(group)) || std::memcmp(group.signature, "GRUP", 4) != 0)
-                    return 0;
-                if (std::memcmp(&group.flagsOrLabel, a_label, 4) == 0)
-                    return start + group.dataSize;
-                a_file.seekg(static_cast<std::streamoff>(start + group.dataSize), std::ios::beg);
-            }
-            return 0;
-        }
-
-        void ParseStationBases(const PluginInfo& a_plugin,
-            const std::vector<PluginInfo>& a_masters,
-            std::unordered_set<std::uint32_t>& a_out)
-        {
-            const auto path = std::filesystem::path{ "Data" } / a_plugin.name;
-            std::ifstream file{ path, std::ios::binary };
-            RecordHeader header{};
-            if (!ReadExact(file, &header, sizeof(header)) ||
-                std::memcmp(header.signature, "TES4", 4) != 0)
-                return;
-            file.seekg(header.dataSize, std::ios::cur);
-            const auto end = SeekGroup(file, "GBFM");
-            if (!end)
-                return;
-
-            std::vector<std::byte> raw;
-            std::vector<std::byte> scratch;
-            while (file &&
-                   static_cast<std::uint64_t>(file.tellg()) + sizeof(RecordHeader) <= end) {
-                const auto start = static_cast<std::uint64_t>(file.tellg());
-                RecordHeader record{};
-                if (!ReadExact(file, &record, sizeof(record)))
-                    break;
-                if (std::memcmp(record.signature, "GRUP", 4) == 0) {
-                    if (record.dataSize < sizeof(RecordHeader) || start + record.dataSize > end)
-                        break;
-                    file.seekg(static_cast<std::streamoff>(start + record.dataSize), std::ios::beg);
-                    continue;
-                }
-                if (start + sizeof(RecordHeader) + record.dataSize > end)
-                    break;
-                raw.resize(record.dataSize);
-                if (record.dataSize && !ReadExact(file, raw.data(), raw.size()))
-                    break;
-                if (std::memcmp(record.signature, "GBFM", 4) != 0)
-                    continue;
-
-                bool isStation = false;
-                const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
-                ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
-                    const std::byte* a_payload, std::size_t a_length) {
-                    if (a_sig != "KWDA")
-                        return true;
-                    for (std::size_t offset = 0; offset + sizeof(std::uint32_t) <= a_length;
-                         offset += sizeof(std::uint32_t)) {
-                        std::uint32_t localKeyword = 0;
-                        std::memcpy(&localKeyword, a_payload + offset, sizeof(localKeyword));
-                        if (ResolveFormID(localKeyword, a_masters, a_plugin) ==
-                            kStarstationKeyword) {
-                            isStation = true;
-                            return false;
-                        }
-                    }
-                    return true;
-                });
-
-                const auto runtimeID = ResolveFormID(record.formID, a_masters, a_plugin);
-                if ((record.flagsOrLabel & kDeleted) != 0 || !isStation)
-                    a_out.erase(runtimeID);
-                else
-                    a_out.insert(runtimeID);
-            }
-        }
-
-        void ParseStationReferenceGroup(std::ifstream& a_file, std::uint64_t a_end,
-            std::uint32_t a_currentCell, bool a_placedChild,
-            const PluginInfo& a_plugin, const std::vector<PluginInfo>& a_masters,
-            const std::unordered_set<std::uint32_t>& a_stationBases,
-            std::unordered_map<std::uint32_t, StationPlacement>& a_out,
-            std::unordered_map<std::uint32_t, MapMarkerPlacement>& a_mapMarkers,
-            std::unordered_map<std::uint32_t, std::string>& a_cellEditorIDs)
-        {
-            std::vector<std::byte> raw;
-            std::vector<std::byte> scratch;
-            while (a_file &&
-                   static_cast<std::uint64_t>(a_file.tellg()) + sizeof(RecordHeader) <= a_end) {
-                const auto start = static_cast<std::uint64_t>(a_file.tellg());
-                RecordHeader record{};
-                if (!ReadExact(a_file, &record, sizeof(record)))
-                    return;
-
-                if (std::memcmp(record.signature, "GRUP", 4) == 0) {
-                    if (record.dataSize < sizeof(RecordHeader) || start + record.dataSize > a_end)
-                        return;
-                    const auto groupEnd = start + record.dataSize;
-                    const auto groupType = record.formID;
-
-                    auto nextCell = a_currentCell;
-                    auto nextPlacedChild = a_placedChild;
-                    if (groupType == kCellChildren) {
-                        nextCell = ResolveFormID(record.flagsOrLabel, a_masters, a_plugin);
-                        nextPlacedChild = false;
-                    } else if (groupType == kCellPersistentChildren ||
-                               groupType == kCellTemporaryChildren) {
-                        // Starfield places course-addressable stations in both
-                        // child groups: The Eye/Nova are persistent, while
-                        // Deimos Staryard is temporary. Selection still requires
-                        // this indexed placement to resolve to a live reference.
-                        nextCell = ResolveFormID(record.flagsOrLabel, a_masters, a_plugin);
-                        nextPlacedChild = true;
-                    }
-                    ParseStationReferenceGroup(a_file, groupEnd, nextCell, nextPlacedChild,
-                        a_plugin, a_masters, a_stationBases, a_out,
-                        a_mapMarkers, a_cellEditorIDs);
-                    a_file.seekg(static_cast<std::streamoff>(groupEnd), std::ios::beg);
-                    continue;
-                }
-
-                if (start + sizeof(RecordHeader) + record.dataSize > a_end)
-                    return;
-                const bool isCell = std::memcmp(record.signature, "CELL", 4) == 0;
-                const bool isPlacedReference = a_currentCell && a_placedChild &&
-                    std::memcmp(record.signature, "REFR", 4) == 0;
-                if (!isCell && !isPlacedReference) {
-                    a_file.seekg(record.dataSize, std::ios::cur);
-                    continue;
-                }
-
-                raw.resize(record.dataSize);
-                if (record.dataSize && !ReadExact(a_file, raw.data(), raw.size()))
-                    return;
-                if (isCell) {
-                    const auto cellID = ResolveFormID(record.formID, a_masters, a_plugin);
-                    if ((record.flagsOrLabel & kDeleted) != 0) {
-                        a_cellEditorIDs.erase(cellID);
-                        std::erase_if(a_out, [cellID](const auto& a_entry) {
-                            return a_entry.second.cellFormID == cellID;
-                        });
-                        std::erase_if(a_mapMarkers, [cellID](const auto& a_entry) {
-                            return a_entry.second.cellFormID == cellID;
-                        });
-                        continue;
-                    }
-                    std::string editorID;
-                    const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
-                    ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
-                        const std::byte* a_payload, std::size_t a_length) {
-                        if (a_sig == "EDID" && a_length > 1) {
-                            const auto* chars = reinterpret_cast<const char*>(a_payload);
-                            editorID.assign(chars, ::strnlen(chars, a_length));
-                            return false;
-                        }
-                        return true;
-                    });
-                    if (!editorID.empty())
-                        a_cellEditorIDs.insert_or_assign(cellID, std::move(editorID));
-                    continue;
-                }
-                const auto referenceID = ResolveFormID(record.formID, a_masters, a_plugin);
-                if ((record.flagsOrLabel & kDeleted) != 0) {
-                    a_out.erase(referenceID);
-                    a_mapMarkers.erase(referenceID);
-                    continue;
-                }
-
-                std::uint32_t baseID = 0;
-                std::string editorID;
-                bool isMapMarker = false;
-                const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
-                ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
-                    const std::byte* a_payload, std::size_t a_length) {
-                    if (a_sig == "NAME" && a_length >= sizeof(std::uint32_t)) {
-                        std::uint32_t localBase = 0;
-                        std::memcpy(&localBase, a_payload, sizeof(localBase));
-                        baseID = ResolveFormID(localBase, a_masters, a_plugin);
-                    } else if (a_sig == "EDID" && a_length > 1) {
-                        const auto* chars = reinterpret_cast<const char*>(a_payload);
-                        editorID.assign(chars, ::strnlen(chars, a_length));
-                    } else if (a_sig == "XMRK") {
-                        isMapMarker = true;
-                    }
-                    return true;
-                });
-
-                if (isMapMarker) {
-                    a_mapMarkers.insert_or_assign(referenceID, MapMarkerPlacement{
-                        .cellFormID = a_currentCell,
-                        .referenceFormID = referenceID,
-                    });
-                } else {
-                    a_mapMarkers.erase(referenceID);
-                }
-
-                if (!baseID) {
-                    a_out.erase(referenceID);
-                    continue;
-                }
-                if (!a_stationBases.contains(baseID)) {
-                    a_out.erase(referenceID);
-                    continue;
-                }
-                a_out.insert_or_assign(referenceID, StationPlacement{
-                    .cellFormID = a_currentCell,
-                    .target = {
-                        .referenceFormID = referenceID,
-                        .baseFormID = baseID,
-                        .editorID = std::move(editorID),
-                    },
-                });
-            }
-        }
-
-        void ParseStationPlacements(const PluginInfo& a_plugin,
-            const std::vector<PluginInfo>& a_masters,
-            const std::unordered_set<std::uint32_t>& a_stationBases,
-            std::unordered_map<std::uint32_t, StationPlacement>& a_out,
-            std::unordered_map<std::uint32_t, MapMarkerPlacement>& a_mapMarkers,
-            std::unordered_map<std::uint32_t, std::string>& a_cellEditorIDs)
-        {
-            const auto path = std::filesystem::path{ "Data" } / a_plugin.name;
-            std::ifstream file{ path, std::ios::binary };
-            RecordHeader header{};
-            if (!ReadExact(file, &header, sizeof(header)) ||
-                std::memcmp(header.signature, "TES4", 4) != 0)
-                return;
-            file.seekg(header.dataSize, std::ios::cur);
-
-            const auto before = a_out.size();
-            while (file) {
-                const auto start = static_cast<std::uint64_t>(file.tellg());
-                RecordHeader group{};
-                if (!ReadExact(file, &group, sizeof(group)) ||
-                    std::memcmp(group.signature, "GRUP", 4) != 0)
-                    break;
-                if (group.dataSize < sizeof(RecordHeader))
-                    break;
-                const auto groupEnd = start + group.dataSize;
-                if (std::memcmp(&group.flagsOrLabel, "CELL", 4) == 0 ||
-                    std::memcmp(&group.flagsOrLabel, "WRLD", 4) == 0) {
-                    ParseStationReferenceGroup(file, groupEnd, 0, false, a_plugin,
-                        a_masters, a_stationBases, a_out, a_mapMarkers,
-                        a_cellEditorIDs);
-                }
-                file.seekg(static_cast<std::streamoff>(groupEnd), std::ios::beg);
-            }
-            if (a_out.size() > before)
-                REX::INFO("[bodies] {} placed station references added/updated from {}",
-                    a_out.size() - before, a_plugin.name);
-        }
-
-        void ParseSystemRoots(const PluginInfo& a_plugin,
-            const std::vector<PluginInfo>& a_masters,
-            std::unordered_map<std::uint32_t, std::uint32_t>& a_out)
-        {
-            const auto path = std::filesystem::path{ "Data" } / a_plugin.name;
-            std::ifstream file{ path, std::ios::binary };
-            RecordHeader header{};
-            if (!ReadExact(file, &header, sizeof(header)) ||
-                std::memcmp(header.signature, "TES4", 4) != 0)
-                return;
-            file.seekg(header.dataSize, std::ios::cur);
-            const auto end = SeekGroup(file, "STDT");
-            if (!end)
-                return;
-
-            std::vector<std::byte> raw;
-            std::vector<std::byte> scratch;
-            std::size_t count = 0;
-            while (file &&
-                   static_cast<std::uint64_t>(file.tellg()) + sizeof(RecordHeader) < end) {
-                const auto start = static_cast<std::uint64_t>(file.tellg());
-                RecordHeader record{};
-                if (!ReadExact(file, &record, sizeof(record)))
-                    break;
-                if (std::memcmp(record.signature, "GRUP", 4) == 0) {
-                    file.seekg(static_cast<std::streamoff>(start + record.dataSize),
-                        std::ios::beg);
-                    continue;
-                }
-                raw.resize(record.dataSize);
-                if (record.dataSize && !ReadExact(file, raw.data(), raw.size()))
-                    break;
-                if (std::memcmp(record.signature, "STDT", 4) != 0)
-                    continue;
-
-                const auto runtimeID = ResolveFormID(record.formID, a_masters, a_plugin);
-                if ((record.flagsOrLabel & kDeleted) != 0) {
-                    a_out.erase(runtimeID);
-                    continue;
-                }
-
-                std::uint32_t systemID = 0;
-                bool haveSystemID = false;
-                const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
-                ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
-                    const std::byte* a_payload, std::size_t a_length) {
-                    if (a_sig == "DNAM" && a_length >= sizeof(systemID)) {
-                        std::memcpy(&systemID, a_payload, sizeof(systemID));
-                        haveSystemID = true;
-                        return false;
-                    }
-                    return true;
-                });
-                if (!haveSystemID)
-                    continue;
-                const auto form = RE::TESForm::LookupByID(runtimeID);
-                if (!form || form->GetFormType() != RE::FormType::kSTDT)
-                    continue;
-                a_out.insert_or_assign(runtimeID, systemID);
-                ++count;
-            }
-            if (count)
-                REX::INFO("[bodies] {} STDT system roots from {}", count, a_plugin.name);
-        }
-
-        void ParsePlugin(const PluginInfo& a_plugin, const std::vector<PluginInfo>& a_masters,
-            std::unordered_map<std::uint32_t, Entry>& a_out)
-        {
-            const auto path = std::filesystem::path{ "Data" } / a_plugin.name;
-            std::ifstream file{ path, std::ios::binary };
-            RecordHeader header{};
-            if (!ReadExact(file, &header, sizeof(header)) || std::memcmp(header.signature, "TES4", 4) != 0)
-                return;
-            file.seekg(header.dataSize, std::ios::cur);
-            const auto end = SeekGroup(file, "PNDT");
-            if (!end)
-                return;
-
-            std::vector<std::byte> raw;
-            std::vector<std::byte> scratch;
-            std::size_t count = 0;
-            while (file && static_cast<std::uint64_t>(file.tellg()) + sizeof(RecordHeader) < end) {
-                const auto start = static_cast<std::uint64_t>(file.tellg());
-                RecordHeader record{};
-                if (!ReadExact(file, &record, sizeof(record)))
-                    break;
-                if (std::memcmp(record.signature, "GRUP", 4) == 0) {
-                    file.seekg(static_cast<std::streamoff>(start + record.dataSize), std::ios::beg);
-                    continue;
-                }
-                raw.resize(record.dataSize);
-                if (record.dataSize && !ReadExact(file, raw.data(), raw.size()))
-                    break;
-                if (std::memcmp(record.signature, "PNDT", 4) != 0)
-                    continue;
-
-                Entry entry;
-                bool haveGalaxy = false;
-                const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
-                ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
-                    const std::byte* a_payload, std::size_t a_length) {
-                    if (a_sig == "EDID" && a_length > 1) {
-                        const auto* chars = reinterpret_cast<const char*>(a_payload);
-                        entry.editorID.assign(chars, ::strnlen(chars, a_length));
-                    } else if (a_sig == "DNAM" && a_length >= 5) {
-                        std::uint32_t stringBytes = 0;
-                        std::memcpy(&stringBytes, a_payload, sizeof(stringBytes));
-                        if (stringBytes > 1 &&
-                            sizeof(stringBytes) + stringBytes <= a_length) {
-                            const auto* chars = reinterpret_cast<const char*>(
-                                a_payload + sizeof(stringBytes));
-                            const auto textLength = ::strnlen(chars, stringBytes);
-                            if (textLength + 1 == stringBytes)
-                                entry.spaceCellEditorID.assign(chars, textLength);
-                        }
-                    } else if (a_sig == "GNAM" && a_length >= 12) {
-                        std::uint32_t values[3]{};
-                        std::memcpy(values, a_payload, sizeof(values));
-                        entry.galaxy = { values[0], values[1], values[2] };
-                        haveGalaxy = true;
-                    }
-                    return true;
-                });
-                if (!haveGalaxy)
-                    continue;
-                const auto runtimeID = ResolveFormID(record.formID, a_masters, a_plugin);
-                const auto form = RE::TESForm::LookupByID(runtimeID);
-                if (!form || form->GetFormType() != RE::FormType::kPNDT)
-                    continue;
-                a_out.insert_or_assign(runtimeID, std::move(entry));
-                ++count;
-            }
-            if (count)
-                REX::INFO("[bodies] {} PNDT records from {}", count, a_plugin.name);
-        }
     }
 
     void StartLoad()
@@ -630,131 +82,39 @@ namespace CFS::BodyIndex
         const auto plugins = CollectPlugins();
         std::thread{ [plugins] {
             const auto started = std::chrono::steady_clock::now();
-            std::unordered_map<std::uint32_t, Entry> entries;
-            std::unordered_map<std::uint32_t, std::uint32_t> systemRoots;
-            std::unordered_set<std::uint32_t> stationBases;
-            std::unordered_map<std::uint32_t, StationPlacement> stationPlacements;
-            std::unordered_map<std::uint32_t, MapMarkerPlacement> mapMarkerPlacements;
-            std::unordered_map<std::uint32_t, std::string> cellEditorIDs;
-            std::unordered_map<std::string, PluginInfo> pluginByName;
-            const auto fold = [](std::string text) {
-                std::ranges::transform(text, text.begin(), [](unsigned char ch) {
-                    return static_cast<char>(std::tolower(ch));
+            auto index = RecordReader::ReadLoadOrder("Data", plugins,
+                [](std::uint32_t a_formID, RecordReader::LiveFormKind a_kind) {
+                    const auto form = RE::TESForm::LookupByID(a_formID);
+                    if (!form)
+                        return false;
+                    const auto expected = a_kind == RecordReader::LiveFormKind::kPlanetData ?
+                        RE::FormType::kPNDT : RE::FormType::kSTDT;
+                    return form->GetFormType() == expected;
                 });
-                return text;
-            };
-            for (const auto& plugin : plugins)
-                pluginByName[fold(plugin.name)] = plugin;
 
-            std::vector<PluginContext> contexts;
-            for (const auto& plugin : plugins) {
-                std::vector<std::string> masterNames;
-                if (!ReadMasters(std::filesystem::path{ "Data" } / plugin.name, masterNames)) {
-                    REX::WARN("[bodies] could not read {}", plugin.name);
-                    continue;
-                }
-                PluginContext context{ .plugin = plugin };
-                for (const auto& master : masterNames) {
-                    const auto found = pluginByName.find(fold(master));
-                    if (found == pluginByName.end()) {
-                        REX::WARN("[bodies] {} master '{}' is not active; records using it will not resolve",
-                            plugin.name, master);
-                        context.masters.push_back({});
-                    } else {
-                        context.masters.push_back(found->second);
-                    }
-                }
-                contexts.push_back(std::move(context));
-            }
-
-            // Resolve the station base set first so references placed by any
-            // active plugin can be validated against master or local GBFMs.
-            for (const auto& context : contexts)
-                ParseStationBases(context.plugin, context.masters, stationBases);
-            for (const auto& context : contexts) {
-                ParsePlugin(context.plugin, context.masters, entries);
-                ParseSystemRoots(context.plugin, context.masters, systemRoots);
-                ParseStationPlacements(context.plugin, context.masters, stationBases,
-                    stationPlacements, mapMarkerPlacements, cellEditorIDs);
-            }
-
-            std::unordered_map<std::uint32_t, std::vector<StationTarget>> stationTargets;
-            for (auto& [referenceID, placement] : stationPlacements) {
-                (void)referenceID;
-                stationTargets[placement.cellFormID].push_back(std::move(placement.target));
-            }
-            std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
-                mapMarkersByCell;
-            for (const auto& [referenceID, placement] : mapMarkerPlacements) {
-                (void)referenceID;
-                mapMarkersByCell[placement.cellFormID].push_back(
-                    placement.referenceFormID);
-            }
-            for (auto& [cellID, markers] : mapMarkersByCell) {
-                (void)cellID;
-                std::ranges::sort(markers);
-                markers.erase(std::unique(markers.begin(), markers.end()),
-                    markers.end());
-            }
-            std::size_t stationReferenceCount = 0;
-            std::size_t stationCourseMarkerCount = 0;
-            for (auto& [cellID, targets] : stationTargets) {
-                std::ranges::sort(targets, {}, &StationTarget::referenceFormID);
-                targets.erase(std::unique(targets.begin(), targets.end(),
-                    [](const StationTarget& a_left, const StationTarget& a_right) {
-                        return a_left.referenceFormID == a_right.referenceFormID;
-                    }), targets.end());
-                if (const auto markers = mapMarkersByCell.find(cellID);
-                    markers != mapMarkersByCell.end() &&
-                    markers->second.size() == 1) {
-                    for (auto& target : targets)
-                        target.courseFormID = markers->second.front();
-                    stationCourseMarkerCount += targets.size();
-                }
-                stationReferenceCount += targets.size();
-            }
-
-            std::unordered_map<std::string, std::vector<IndexedBody>> orbitalsByCellEditorID;
-            for (const auto& [formID, entry] : entries) {
-                if (entry.spaceCellEditorID.empty())
-                    continue;
-                orbitalsByCellEditorID[fold(entry.spaceCellEditorID)].push_back({
-                    formID, entry.galaxy, entry.editorID,
-                });
-            }
-            std::unordered_map<std::uint32_t, std::vector<IndexedBody>> stationOrbitals;
-            std::size_t stationOrbitalCount = 0;
-            for (const auto& [cellID, targets] : stationTargets) {
-                (void)targets;
-                const auto cellEditor = cellEditorIDs.find(cellID);
-                if (cellEditor == cellEditorIDs.end())
-                    continue;
-                const auto found = orbitalsByCellEditorID.find(fold(cellEditor->second));
-                if (found == orbitalsByCellEditorID.end())
-                    continue;
-                auto& orbitals = stationOrbitals[cellID];
-                orbitals = found->second;
-                std::ranges::sort(orbitals, {}, &IndexedBody::formID);
-                orbitals.erase(std::unique(orbitals.begin(), orbitals.end(),
-                    [](const IndexedBody& a_left, const IndexedBody& a_right) {
-                        return a_left.formID == a_right.formID;
-                    }), orbitals.end());
-                stationOrbitalCount += orbitals.size();
+            for (const auto& diagnostic : index.diagnostics) {
+                if (diagnostic.warning)
+                    REX::WARN("[bodies] {}", diagnostic.message);
+                else
+                    REX::INFO("[bodies] {}", diagnostic.message);
             }
 
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - started).count();
-            const auto count = entries.size();
-            const auto systemRootCount = systemRoots.size();
-            const auto stationBaseCount = stationBases.size();
-            const auto stationCellCount = stationTargets.size();
+            const auto count = index.entries.size();
+            const auto systemRootCount = index.systemRoots.size();
+            const auto stationBaseCount = index.stationBases.size();
+            const auto stationCellCount = index.stationTargets.size();
+            const auto stationReferenceCount = index.stationReferenceCount;
+            const auto stationCourseMarkerCount = index.stationCourseMarkerCount;
+            const auto stationOrbitalCount = index.stationOrbitalCount;
             {
                 std::lock_guard lock{ g_mutex };
-                g_entries = std::move(entries);
-                g_systemRoots = std::move(systemRoots);
-                g_stationBases = std::move(stationBases);
-                g_stationTargets = std::move(stationTargets);
-                g_stationOrbitals = std::move(stationOrbitals);
+                g_entries = std::move(index.entries);
+                g_systemRoots = std::move(index.systemRoots);
+                g_stationBases = std::move(index.stationBases);
+                g_stationTargets = std::move(index.stationTargets);
+                g_stationOrbitals = std::move(index.stationOrbitals);
             }
             g_ready.store(true, std::memory_order_release);
             REX::INFO("[bodies] load-order index ready: {} PNDT bodies, {} STDT system roots, "

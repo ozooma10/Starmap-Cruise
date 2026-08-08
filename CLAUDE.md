@@ -28,8 +28,14 @@ Reusable low-level work does not belong in a Bridge fragment. Core navigation
 callable fingerprints and ownership live in `src/Engine/RuntimeBindings.*`,
 safe process-memory reads in `src/Engine/RuntimeMemory.*`, live ControlMap
 discovery in `src/Input/CruiseBindingResolver.*`, and GFx value decoding in
-`src/Scaleform/ValueAccess.*`. Hook-local and event-source guards remain beside
-the hook or subscription that owns them.
+`src/Scaleform/ValueAccess.*`. Pure plugin-record decoding and load-order FormID
+remapping live in `src/BodyIndex/RecordReader.*`; keep engine form validation at
+that boundary through its predicate. Hook-local and event-source guards remain
+beside the hook or subscription that owns them.
+
+The root xmake `set_version` is the release-version authority. Release archive
+names are derived from the built DLL version resource; do not repeat the version
+in package-script defaults or source INI headers.
 
 ## Invariants
 
