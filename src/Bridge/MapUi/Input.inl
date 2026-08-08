@@ -69,9 +69,7 @@
                         .idCode = a_button->idCode,
                         .session = g_mapSession.load(std::memory_order_acquire),
                         .sawCockpitContext = false,
-                        .timeoutLogged = false,
                         .suppressUntilRelease = false,
-                        .started = Clock::now(),
                     };
                 }
                 return false;

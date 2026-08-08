@@ -22,6 +22,23 @@
             ClearDestination(a_reason.c_str());
         }
 
+        // Fails whichever remote continuation currently owns the automation, or
+        // releases a kAwaitingCruise nav state back to the mark when neither
+        // does. Returns true when a continuation consumed the failure.
+        bool FailActiveContinuationsOrRelease(const char* a_reason)
+        {
+            if (RemoteMoonContinuationActive()) {
+                FailRemoteMoonContinuation(a_reason);
+                return true;
+            }
+            if (RemoteStationTargetAssigned()) {
+                FailRemoteStationContinuation(a_reason);
+                return true;
+            }
+            ReleaseNavStateToMark();
+            return false;
+        }
+
         bool StartRemoteMoonContinuation(const BodyDestination& a_destination)
         {
             if (a_destination.kind != BodyKind::kMoon)
@@ -191,7 +208,6 @@
                     .finalFormID = a_destination.formID,
                     .finalCourseFormID = a_destination.courseFormID,
                     .system = a_destination.galaxy.system,
-                    .stationOrbitalFormID = orbital.formID,
                     .parentFormID = waypoint->formID,
                     .parentEditorID = waypoint->editorID,
                     .stationWaypoints = std::move(stationWaypoints),
@@ -228,7 +244,8 @@
                     std::lock_guard lock{ g_remoteMoonMutex };
                     if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kAwaitingParentFeed)
                         return false;
-                    g_remoteMoonContinuation.phase = RemoteMoonPhase::kAwaitingParentLock;
+                    g_remoteMoonContinuation.phase = RemoteMoonPhase::kTraveling;
+                    g_remoteMoonContinuation.dispatchConfirmed = false;
                     g_remoteMoonContinuation.feedRevisionFloor =
                         CurrentProcessedHudSnapshot().revision;
                     g_remoteMoonContinuation.phaseStarted = now;
@@ -274,7 +291,8 @@
             auto& continuation = g_remoteMoonContinuation;
             if (continuation.phase != RemoteMoonPhase::kAwaitingParentCruise)
                 return std::nullopt;
-            continuation.phase = RemoteMoonPhase::kAwaitingParentLock;
+            continuation.phase = RemoteMoonPhase::kTraveling;
+            continuation.dispatchConfirmed = false;
             continuation.feedRevisionFloor =
                 CurrentProcessedHudSnapshot().revision;
             continuation.phaseStarted = Clock::now();
@@ -568,12 +586,7 @@
                     g_hudCruiseInputLatched = false;
                     g_hudCruiseInputStarted = {};
                 }
-                if (RemoteMoonContinuationActive())
-                    FailRemoteMoonContinuation("stock HUD Cruise press invocation failed");
-                else if (RemoteStationContinuationActive())
-                    FailRemoteStationContinuation("stock HUD Cruise press invocation failed");
-                else
-                    ReleaseNavStateToMark();
+                FailActiveContinuationsOrRelease("stock HUD Cruise press invocation failed");
             } else if (release)
                 InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, false);
         }
@@ -595,12 +608,7 @@
             a_root->CreateObject(&params);
             if (!params.IsObject()) {
                 REX::WARN("[course] could not create event payload for {:08X}", request.id);
-                if (RemoteMoonContinuationActive())
-                    FailRemoteMoonContinuation("could not create the internal course event payload");
-                else if (RemoteStationContinuationActive())
-                    FailRemoteStationContinuation("could not create the remote station course event payload");
-                else
-                    ReleaseNavStateToMark();
+                FailActiveContinuationsOrRelease("could not create the course event payload");
                 return;
             }
             params.SetMember("uBodyID", V{ static_cast<double>(request.id) });
@@ -613,11 +621,6 @@
             } else {
                 REX::WARN("[course] HUD rejected {} dispatch for {:08X}; mark preserved",
                     request.clearing ? "clear" : "lock", request.id);
-                if (RemoteMoonContinuationActive())
-                    FailRemoteMoonContinuation("HUD rejected the internal course dispatch");
-                else if (RemoteStationContinuationActive())
-                    FailRemoteStationContinuation("HUD rejected the remote station course dispatch");
-                else
-                    ReleaseNavStateToMark();
+                FailActiveContinuationsOrRelease("HUD rejected the course dispatch");
             }
         }

@@ -26,10 +26,19 @@
         constexpr auto kRemoteMoonCruiseTimeout = std::chrono::seconds(5);
         constexpr auto kRemoteMoonLockExitTimeout = std::chrono::seconds(2);
         constexpr auto kRemoteStationResolveTimeout = std::chrono::seconds(10);
+        // Distinct fail-closed budgets that happen to share values; do not merge.
+        constexpr auto kArrivalEvidenceWindow = std::chrono::seconds(2);
+        constexpr auto kQueuedCourseExpiry = std::chrono::seconds(2);
+        // Keep the "after 1.5 seconds" warning text in sync with this value.
+        constexpr auto kCourseLockReadbackTimeout = std::chrono::milliseconds(1500);
+        // Keep the "four-second"/"within 4 seconds" warning text in sync.
+        constexpr auto kHudCruisePressSafetyLimit = std::chrono::seconds(4);
+        constexpr auto kWorldSettleTime = std::chrono::milliseconds(2500);
+        constexpr auto kMovieSubscribeSettleTime = std::chrono::milliseconds(250);
         // Post-advance passes the native selection call keeps before diagnostics.
         // The unit is completed AS3 advances, not wall clock: each pass means
         // native finished one advance with the selection already applied.
-        constexpr std::uint32_t kGalaxyFocusRungPasses = 10;
+        constexpr std::uint32_t kGalaxyFocusReadbackPasses = 10;
         // Starfield 1.16.244: GalaxyState's non-entering selected-system setter
         // and the stock Quick Select close/consume path. The setter is vtable
         // slot +0x48; SetRouteDestination reads that selected ID when Quick
@@ -73,10 +82,7 @@
             bool haveCapturedSystem{ false };
             std::uint32_t capturedSystem{ 0 };
             std::int32_t view{ -1 };
-            std::uint32_t systemLocationID{ 0 };
-            std::uint32_t bodyLocationID{ 0 };
             std::uint32_t treeBodyID{ 0 };
-            std::uint32_t treeBodyType{ 0 };
             std::size_t highlightedMarkerCount{ 0 };
             std::uint32_t markerBodyID{ 0 };
             std::uint32_t markerBodyType{ 0 };
@@ -84,13 +90,6 @@
             std::uint32_t dossierBodyID{ 0 };
             std::uint32_t dossierBodyType{ 0 };
             std::string dossierName;
-            // Native Quick Select readback. This is the cursor-independent
-            // statement of which galaxy system vanilla currently considers
-            // selected; it is read only and never written back.
-            bool quickSelectPublished{ false };
-            std::uint32_t quickSelectCount{ 0 };
-            std::int32_t quickSelectCursorIndex{ -1 };
-            std::uint32_t quickSelectCursorBodyID{ 0 };
         };
 
         enum class EligibilityCode : std::uint8_t
@@ -107,7 +106,6 @@
             kCruiseActive,
             kRemoteSafetyUnavailable,
             kRemoteCourseUnavailable,
-            kRemoteCourseMismatch,
             kEligible,
         };
 
@@ -140,15 +138,6 @@
             kAwaitExecuteAck,
         };
 
-        // One exact vanilla focus operation establishes the galaxy system
-        // context. It runs only on a post-advance pass that already failed the
-        // proof test, then native gets completed advances to publish readback.
-        enum class GalaxyFocusRung : std::uint8_t
-        {
-            kNativeSystemSelection = 0,
-            kExhausted = 1,
-        };
-
         struct RemoteRouteRequest
         {
             RemoteRoutePhase phase{ RemoteRoutePhase::kNone };
@@ -156,11 +145,14 @@
             std::uint32_t generation{ 0 };
             std::uint32_t targetFormID{ 0 };
             std::uint32_t systemBodyID{ 0 };
-            GalaxyFocusRung nextFocusRung{ GalaxyFocusRung::kNativeSystemSelection };
-            std::uint32_t focusRungCooldown{ 0 };
+            // One exact vanilla focus operation establishes the galaxy system
+            // context. It runs only on a post-advance pass that already failed
+            // the proof test; native then gets focusReadbackPasses completed
+            // advances to publish its readback before diagnostics fire.
+            bool focusAttempted{ false };
+            std::uint32_t focusReadbackPasses{ 0 };
             bool focusDiagnosticsLogged{ false };
             std::string expectedSystemName;
-            std::string targetName;
             Clock::time_point started{};
             Clock::time_point executeReadySince{};
         };
@@ -172,8 +164,12 @@
             kNone,
             kAwaitingParentFeed,
             kAwaitingParentCruise,
-            kAwaitingParentLock,
-            kAwaitingLatentFinalLock,
+            // One retained-target dispatch is in flight. The Ariel/Chawla
+            // traces prove this is engine-owned travel with no handshake
+            // boundary: the state is unbounded while Cruise stays active, and
+            // dispatchConfirmed records whether the asked-course registration
+            // was observed (bounded) before the unbounded wait begins.
+            kTraveling,
             kParentLocked,
             kAwaitingParentArrival,
             kAwaitingFinalLock,
@@ -186,13 +182,13 @@
             std::uint32_t finalFormID{ 0 };
             std::uint32_t finalCourseFormID{ 0 };
             std::uint32_t system{ 0 };
-            std::uint32_t stationOrbitalFormID{ 0 };
             std::uint32_t parentFormID{ 0 };
             std::string parentEditorID;
             std::string parentName;
             std::vector<BodyIndex::IndexedBody> stationWaypoints;
             std::size_t waypointIndex{ 0 };
             std::uint64_t feedRevisionFloor{ 0 };
+            bool dispatchConfirmed{ false };
             Clock::time_point phaseStarted{};
             Clock::time_point inactiveSince{};
         };
@@ -244,9 +240,7 @@
             std::uint32_t session{ 0 };
             bool completed{ false };
             bool sawCockpitContext{ false };
-            bool timeoutLogged{ false };
             bool suppressUntilRelease{ false };
-            Clock::time_point started{};
         };
 
         std::mutex g_holdMutex;
@@ -282,7 +276,6 @@
         struct HudRow
         {
             std::uint32_t id{ 0 };
-            std::uint32_t type{ 0 };
             std::string name;
             bool courseLocked{ false };
         };

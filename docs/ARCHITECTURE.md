@@ -8,7 +8,7 @@ GalaxyStarMapMenu movie
   StarMapMenuSystemBodyInfoData ------ system/star identity (not selected body)
   StarMapMenuMarkersData ------------- unique bIsInHighlightRadius marker row
   StarmapSystemBodyInfoProvider ------ dossier PNDT candidates while browsing
-  StarMapMenuQuickSelectData --------- native galaxy selection readback (read only)
+  StarMapMenuQuickSelectData --------- payload-shape evidence pin (read only)
                     |
                     | planets/moons: marker/dossier id+type agreement
                     |   + live PNDT + parsed GNAM
@@ -60,7 +60,9 @@ them live only after vanilla reaches the target system. Full, medium, and
 light master mappings are respected. For a moon, parent lookup returns every
 live PNDT in the same GNAM system with `parent == 0` and `planet ==
 moon.parent`; automatic staging requires exactly one result and revalidates it
-as a live PNDT. No FormID is inferred or hard-coded. No cache is read or written.
+as a live PNDT. The only hard-coded identity is the vanilla `IsStarstation`
+keyword `0x003402A3` used to classify station bases; no other FormID is
+inferred or hard-coded. No cache is read or written.
 
 ## Source layout
 
@@ -155,8 +157,8 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   the state and the route fails closed. Set Course is dispatched as
   `StarMapMenu_OnHintButtonClicked {buttonAction: "SetRouteDestination"}` only
   once native itself names the captured system: the vanilla Set Course button
-  reporting enabled and visible, the native `StarMapMenuQuickSelectData` cursor
-  resting on the captured root, or exactly one galaxy highlight marker carrying
+  reporting enabled and visible, the native GalaxyState selected-system field
+  naming the captured root, or exactly one galaxy highlight marker carrying
   it. The latter two additionally require the vanilla button to be present and
   visible; none of them writes to it. When the ladder is exhausted with no
   native selection, one bounded read-only diagnostic pass logs the menu-root and
@@ -257,7 +259,7 @@ Idle -> MapSelection -> Marked ---------> AwaitingCruise -> AutopilotLocked
   transition, HUD replacement, settled non-space state, system mismatch,
   ambiguous identity/row, manual Cruise exit, unrelated exact course, or bounded
   handshake timeout clears the automation fail-closed. Opening the map pauses
-  the private driver; `SetDestination` atomically replaces the final mark and
+  the private driver; `StoreDestination` atomically replaces the final mark and
   resets the continuation when another target is accepted. Completing the
   internal parent course alone never clears the final mark.
 
@@ -355,9 +357,10 @@ replacement.
 - `StarMapMenuQuickSelectData` is subscribed read-only. Live 1.16.244 payload
   enumeration proves it contains only `bShowMenu` and `bOpenForPlot`; Quick
   Select entries arrive through native's direct `SetMarkers(Array)` movie call,
-  not this feed. The handler therefore cannot claim an entry/cursor authority
-  from absent fields. Member names remain logged once per session so future
-  payload changes stay evidence-pinned.
+  not this feed. The former entry/cursor parsing and the cursor Set Course
+  authority were removed outright because they could never fire against that
+  payload. The handler keeps only a once-per-session member-name shape log so
+  future payload changes stay evidence-pinned.
 - Feed callbacks copy passed GFx payloads into plain C++ snapshots or queue a
   value action, then return without fetching another root or invoking AS3.
   Forwarded Cruise edges, retained-target distance sampling, course dispatch,

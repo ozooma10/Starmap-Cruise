@@ -16,6 +16,25 @@
             return true;
         }
 
+        // The driver ticks from a lock-free copy of the request; every mutation
+        // re-locks and re-verifies the request identity (phase, target,
+        // generation) before committing, because the focus watcher thread and
+        // the BSService main frame are real concurrent writers. A false return
+        // means the live request moved on and this tick's decision must be
+        // abandoned.
+        template <class Apply>
+        bool TryCommitRemoteRoutePhase(RemoteRoutePhase a_expectedPhase,
+            const RemoteRouteRequest& a_request, Apply&& a_apply)
+        {
+            std::lock_guard lock{ g_remoteRouteMutex };
+            if (g_remoteRouteRequest.phase != a_expectedPhase ||
+                g_remoteRouteRequest.targetFormID != a_request.targetFormID ||
+                g_remoteRouteRequest.generation != a_request.generation)
+                return false;
+            a_apply(g_remoteRouteRequest);
+            return true;
+        }
+
         void DriveRemoteRouteRequest()
         {
             if (!g_applicationForeground.load(std::memory_order_acquire))
@@ -84,16 +103,13 @@
                         // remaining work is native galaxy-marker selection, which
                         // gets its own phase and its own full timeout so a slow
                         // Back transition cannot consume the focus budget.
-                        {
-                            std::lock_guard lock{ g_remoteRouteMutex };
-                            if (g_remoteRouteRequest.phase != RemoteRoutePhase::kAwaitGalaxy ||
-                                g_remoteRouteRequest.targetFormID != request.targetFormID ||
-                                g_remoteRouteRequest.generation != request.generation)
-                                return;
-                            g_remoteRouteRequest.phase = RemoteRoutePhase::kEstablishSelection;
-                            g_remoteRouteRequest.started = Clock::now();
-                            g_remoteRouteRequest.executeReadySince = {};
-                        }
+                        if (!TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitGalaxy,
+                                request, [](RemoteRouteRequest& a_live) {
+                                    a_live.phase = RemoteRoutePhase::kEstablishSelection;
+                                    a_live.started = Clock::now();
+                                    a_live.executeReadySince = {};
+                                }))
+                            return;
                         REX::INFO("[jump] matching galaxy STDT/DNAM root {:08X}/system {} reached after {} ms; establishing cursor-independent marker context for '{}'",
                             snapshot.treeBodyID, *focusedSystemID,
                             std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
@@ -127,16 +143,30 @@
                 const auto proof = EvaluateGalaxySelection(menuRoot, snapshot,
                     request.systemBodyID);
                 if (proof.proven) {
-                    {
-                        std::lock_guard lock{ g_remoteRouteMutex };
-                        if (g_remoteRouteRequest.phase != RemoteRoutePhase::kEstablishSelection ||
-                            g_remoteRouteRequest.targetFormID != request.targetFormID ||
-                            g_remoteRouteRequest.generation != request.generation)
+                    // Campaign capture mode 1: dump the same read-only
+                    // diagnostics in the PROVEN state so the two dumps can be
+                    // diffed against the mode-2 no-selection run. One-shot per
+                    // request; the run then continues normally.
+                    if (Settings::GalaxyDiagnosticsMode() == 1 &&
+                        !request.focusDiagnosticsLogged) {
+                        if (!TryCommitRemoteRoutePhase(
+                                RemoteRoutePhase::kEstablishSelection, request,
+                                [](RemoteRouteRequest& a_live) {
+                                    a_live.focusDiagnosticsLogged = true;
+                                }))
                             return;
-                        g_remoteRouteRequest.phase = RemoteRoutePhase::kAwaitRoute;
-                        g_remoteRouteRequest.started = Clock::now();
-                        g_remoteRouteRequest.executeReadySince = {};
+                        REX::INFO("[jump] diagnostics mode 1: proven-selection dump follows");
+                        LogGalaxyFocusDiagnostics(menuRoot, snapshot, proof,
+                            request.systemBodyID);
                     }
+                    if (!TryCommitRemoteRoutePhase(
+                            RemoteRoutePhase::kEstablishSelection, request,
+                            [](RemoteRouteRequest& a_live) {
+                                a_live.phase = RemoteRoutePhase::kAwaitRoute;
+                                a_live.started = Clock::now();
+                                a_live.executeReadySince = {};
+                            }))
+                        return;
                     REX::INFO("[jump] marker context established by {} after {} ms; {}",
                         proof.authority,
                         std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
@@ -186,36 +216,32 @@
                     return;  // Never consume a route that predates this dispatch.
                 }
 
-                // No proof yet. A rung that has just run keeps the ladder for a
-                // fixed number of completed advances so native can publish its
-                // result before the next rung is allowed to change the same
-                // state.
-                if (request.focusRungCooldown != 0) {
-                    std::lock_guard lock{ g_remoteRouteMutex };
-                    if (g_remoteRouteRequest.phase == RemoteRoutePhase::kEstablishSelection &&
-                        g_remoteRouteRequest.targetFormID == request.targetFormID &&
-                        g_remoteRouteRequest.generation == request.generation &&
-                        g_remoteRouteRequest.focusRungCooldown != 0)
-                        --g_remoteRouteRequest.focusRungCooldown;
+                // No proof yet. After the focus attempt runs, native keeps a
+                // fixed number of completed advances to publish its result
+                // before diagnostics are allowed to fire.
+                if (request.focusReadbackPasses != 0) {
+                    TryCommitRemoteRoutePhase(RemoteRoutePhase::kEstablishSelection,
+                        request, [](RemoteRouteRequest& a_live) {
+                            if (a_live.focusReadbackPasses != 0)
+                                --a_live.focusReadbackPasses;
+                        });
                     return;
                 }
 
                 // Invoke the exact stock non-entering system-selection path once, then
                 // leave completed advances for native to publish readback.
-                if (request.nextFocusRung != GalaxyFocusRung::kExhausted) {
-                    {
-                        std::lock_guard lock{ g_remoteRouteMutex };
-                        if (g_remoteRouteRequest.phase != RemoteRoutePhase::kEstablishSelection ||
-                            g_remoteRouteRequest.targetFormID != request.targetFormID ||
-                            g_remoteRouteRequest.generation != request.generation)
-                            return;
-                        g_remoteRouteRequest.nextFocusRung = GalaxyFocusRung::kExhausted;
-                        g_remoteRouteRequest.focusRungCooldown = kGalaxyFocusRungPasses;
-                    }
+                if (!request.focusAttempted) {
+                    if (!TryCommitRemoteRoutePhase(
+                            RemoteRoutePhase::kEstablishSelection, request,
+                            [](RemoteRouteRequest& a_live) {
+                                a_live.focusAttempted = true;
+                                a_live.focusReadbackPasses = kGalaxyFocusReadbackPasses;
+                            }))
+                        return;
                     std::string detail;
                     if (!InvokeNativeGalaxySystemSelection(snapshot,
                             request.systemBodyID, detail)) {
-                        REX::WARN("[jump] focus rung 1: stock native galaxy system selection unavailable ({})",
+                        REX::WARN("[jump] native focus attempt: stock native galaxy system selection unavailable ({})",
                             detail);
                         LogGalaxyFocusDiagnostics(menuRoot, snapshot, proof,
                             request.systemBodyID);
@@ -225,20 +251,18 @@
                         REX::WARN("[jump] guarded native galaxy system selection failed closed; remote mark cleared and vanilla route state preserved");
                         return;
                     }
-                    REX::INFO("[jump] focus rung 1: invoked stock native galaxy selected-system setter for '{}' ({}) without changing map view",
+                    REX::INFO("[jump] native focus attempt: invoked stock native galaxy selected-system setter for '{}' ({}) without changing map view",
                         request.expectedSystemName, detail);
                     return;  // Re-test native state on the next advance.
                 }
 
                 if (!request.focusDiagnosticsLogged) {
-                    {
-                        std::lock_guard lock{ g_remoteRouteMutex };
-                        if (g_remoteRouteRequest.phase != RemoteRoutePhase::kEstablishSelection ||
-                            g_remoteRouteRequest.targetFormID != request.targetFormID ||
-                            g_remoteRouteRequest.generation != request.generation)
-                            return;
-                        g_remoteRouteRequest.focusDiagnosticsLogged = true;
-                    }
+                    if (!TryCommitRemoteRoutePhase(
+                            RemoteRoutePhase::kEstablishSelection, request,
+                            [](RemoteRouteRequest& a_live) {
+                                a_live.focusDiagnosticsLogged = true;
+                            }))
+                        return;
                     LogGalaxyFocusDiagnostics(menuRoot, snapshot, proof,
                         request.systemBodyID);
                     return;
@@ -271,14 +295,11 @@
                 request.expectedSystemName, &jumpData);
 
             if (!gate.ready) {
-                if (request.executeReadySince != Clock::time_point{}) {
-                    std::lock_guard lock{ g_remoteRouteMutex };
-                    if (g_remoteRouteRequest.phase == RemoteRoutePhase::kAwaitRoute &&
-                        g_remoteRouteRequest.targetFormID == request.targetFormID &&
-                        g_remoteRouteRequest.generation == request.generation) {
-                        g_remoteRouteRequest.executeReadySince = {};
-                    }
-                }
+                if (request.executeReadySince != Clock::time_point{})
+                    TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitRoute,
+                        request, [](RemoteRouteRequest& a_live) {
+                            a_live.executeReadySince = {};
+                        });
                 if (age < kRemoteRouteTimeout)
                     return;
 
@@ -294,14 +315,11 @@
 
             const auto now = Clock::now();
             if (request.executeReadySince == Clock::time_point{}) {
-                {
-                    std::lock_guard lock{ g_remoteRouteMutex };
-                    if (g_remoteRouteRequest.phase != RemoteRoutePhase::kAwaitRoute ||
-                        g_remoteRouteRequest.targetFormID != request.targetFormID ||
-                        g_remoteRouteRequest.generation != request.generation)
-                        return;
-                    g_remoteRouteRequest.executeReadySince = now;
-                }
+                if (!TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitRoute,
+                        request, [now](RemoteRouteRequest& a_live) {
+                            a_live.executeReadySince = now;
+                        }))
+                    return;
                 REX::INFO("[jump] route identity confirmed: vanilla route ends in '{}' body='{}'; requiring {} ms continuous readiness before stock Execute Route",
                     request.expectedSystemName, gate.destinationBodyName,
                     kRemoteRouteExecuteSettleTime.count());
@@ -321,16 +339,13 @@
                 return;
             }
 
-            {
-                std::lock_guard lock{ g_remoteRouteMutex };
-                if (g_remoteRouteRequest.phase != RemoteRoutePhase::kAwaitRoute ||
-                    g_remoteRouteRequest.targetFormID != request.targetFormID ||
-                    g_remoteRouteRequest.generation != request.generation)
-                    return;
-                g_remoteRouteRequest.phase = RemoteRoutePhase::kAwaitExecuteAck;
-                g_remoteRouteRequest.started = now;
-                g_remoteRouteRequest.executeReadySince = {};
-            }
+            if (!TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitRoute,
+                    request, [now](RemoteRouteRequest& a_live) {
+                        a_live.phase = RemoteRoutePhase::kAwaitExecuteAck;
+                        a_live.started = now;
+                        a_live.executeReadySince = {};
+                    }))
+                return;
 
             // SendExecuteEvent is the callback behind the visible vanilla
             // Execute hold. It rechecks ExecuteButtonHint.Visible before

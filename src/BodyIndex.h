@@ -32,7 +32,6 @@ namespace CFS::BodyIndex
 
     void StartLoad();
     [[nodiscard]] bool Ready();
-    [[nodiscard]] std::size_t Size();
     [[nodiscard]] std::optional<Entry> Lookup(std::uint32_t a_formID);
     [[nodiscard]] std::vector<IndexedBody> ParentPlanets(std::uint32_t a_moonFormID);
     [[nodiscard]] std::vector<IndexedBody> ParentBodies(std::uint32_t a_childFormID);

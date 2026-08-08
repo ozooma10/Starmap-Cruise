@@ -75,6 +75,59 @@ MO2 overwrite, or Documents paths. The active default has `bVerboseLog=true`.
 - [x] A late authoritative current-system resolution updates the same open map
   session without requiring close/reopen
 
+## Simplification-campaign validation matrix
+
+One fixed no-mouse matrix, reused at every simplification stage's go/no-go gate.
+Run with `bVerboseLog=true` and preserve the matching `CruiseFromStarmap.log`
+excerpt under `history/captures/` for each row exercised by a stage.
+
+| # | Scenario | Reference trace |
+|---|----------|-----------------|
+| A | Remote planet, direct final-body row | Neptune |
+| B | Remote moon, engine-latent completion (no staging) | Chawla |
+| C | Remote moon, staged parent lock published | Triton |
+| D | Remote station, direct XMRK row | — |
+| E | Remote station, staged orbital ancestry | RE-939 |
+| F | Manual Cruise exit mid-continuation fails closed | — |
+| G | Remote selection while Cruise active shows `EXIT CRUISE FIRST` | — |
+| H | Alt-tab during route build logs "timeout restarted" and completes | — |
+
+A stage that touches the remote route driver must include rows A and H; a stage
+that touches the continuation must include B, C, and F (plus D and E when
+station identity paths change). Compile-only stages require a clean releasedbg
+build and a startup-log diff against a captured baseline instead.
+
+### Campaign stage status (2026-08-07)
+
+- [x] Stage 1 (compile-only): dead write-only fields removed, six inline
+  durations named, `TryInstallGlobalEventSink` factored, fail-pair sites
+  unified through `FailActiveContinuationsOrRelease`,
+  `RemoteStationContinuationActive` renamed `RemoteStationTargetAssigned`,
+  fingerprint failures now log observed vs expected bytes, doc drift fixed.
+  Clean releasedbg build; startup-log diff still required.
+- [x] Stage 2 (code): `iGalaxyDiagnosticsMode` capture modes 1/2 added
+  (custom-INI only). **Captures not yet run** — run scenario A once in each
+  mode, diff the two dumps, then decide Stage 2b per the plan.
+- [x] Stage 3 (code): unreachable Quick Select cursor authority removed
+  (feed-shape proof retained via the one-shot member log); one-rung
+  `GalaxyFocusRung` ladder collapsed to `focusAttempted`/`focusReadbackPasses`.
+  **Smoke required: rows A and G.**
+- [x] Stage 4 (code): eight hand-rolled Driver commit blocks unified through
+  `TryCommitRemoteRoutePhase` with unchanged verify-set semantics. The
+  same-frame LiveGalaxyState pass-through was deliberately NOT taken: the
+  mode-1 diagnostic dump can now enter AS3 between proof and arm, which
+  invalidates its no-AS3-between premise; per-touch re-proof stays.
+  **Smoke required: rows A and H.**
+- [x] Stage 5a (code): `kAwaitingParentLock` and `kAwaitingLatentFinalLock`
+  merged into unbounded `kTraveling` with a bounded `dispatchConfirmed`
+  registration window; identical evidence gates, floors, and fail-closed
+  reasons preserved (log strings reworded). **Smoke required: rows B, C, F
+  before Stage 5b is attempted.**
+- [ ] Stage 5b: fold `kParentLocked` into a `waypointLocked` flag and merge the
+  two post-waypoint windows. Blocked on the Stage 5a smoke.
+- [ ] Stage 6: record smoke results here and in the history file; re-run
+  `tools/package-release.ps1` hash verification on the final build.
+
 ## Required release smoke
 
 - [ ] Restart on the newly built DLL and run one no-mouse remote-moon flow from

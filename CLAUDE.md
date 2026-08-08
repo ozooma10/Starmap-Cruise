@@ -70,10 +70,12 @@ the hook or subscription that owns them.
   restore it if not consumed.
   Set Course may be dispatched
   only after native itself names the captured system through the vanilla Set
-  Course button, the native Quick Select cursor, or a unique galaxy highlight
-  marker; the two weaker authorities additionally require the vanilla Set Course
-  button to be present and visible. Never write, force, or infer that button's
-  enabled state, and never synthesize cursor input.
+  Course button, the native GalaxyState selected-system readback, or a unique
+  galaxy highlight marker; the two weaker authorities additionally require the
+  vanilla Set Course button to be present and visible. The
+  `StarMapMenuQuickSelectData` cursor is not an authority: live enumeration
+  proved the feed publishes no entry or cursor state. Never write, force, or
+  infer that button's enabled state, and never synthesize cursor input.
   An ActionScript invocation is not proof that travel began; only the guarded,
   player-filtered `GravJumpEvent` stream provides jump acknowledgement.
   Do not accept a remote route while Cruise is active: expose disabled
@@ -92,7 +94,7 @@ the hook or subscription that owns them.
   retain that request without publishing an exact parent lock; keep it pending
   without an arbitrary travel timeout while Cruise remains continuously active
   and system/world identity stays valid. Opening the Starmap pauses this driver;
-  an accepted new destination replaces it through `SetDestination`. Never treat dispatch success as
+  an accepted new destination replaces it through `StoreDestination`. Never treat dispatch success as
   course success: require the unique final moon's exact `bIsCruiseTargetLock`.
   If Starfield publishes the exact parent lock, require that lock to end and a
   newer unique final-moon feed before accepting the final exact lock. Fail

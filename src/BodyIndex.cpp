@@ -769,12 +769,6 @@ namespace CFS::BodyIndex
 
     bool Ready() { return g_ready.load(std::memory_order_acquire); }
 
-    std::size_t Size()
-    {
-        std::lock_guard lock{ g_mutex };
-        return g_entries.size();
-    }
-
     std::optional<Entry> Lookup(std::uint32_t a_formID)
     {
         std::lock_guard lock{ g_mutex };

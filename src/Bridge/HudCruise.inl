@@ -11,7 +11,6 @@
                 V entry = a_value;
                 HudRow row;
                 row.id = UIntMember(entry, "uniqueID");
-                row.type = UIntMember(entry, "uTargetType");
                 row.name = StringMember(entry, "name");
                 V lock;
                 row.courseLocked = entry.GetMember("bIsCruiseTargetLock", &lock) &&
@@ -106,7 +105,7 @@
             if (RemoteMoonContinuationActive())
                 return;
 
-            if (RemoteStationContinuationActive() && course != 0 &&
+            if (RemoteStationTargetAssigned() && course != 0 &&
                 course != courseTarget) {
                 FailRemoteStationContinuation(
                     "engine selected an unrelated course before exact station lock");
@@ -114,7 +113,7 @@
             }
 
             if (course == courseTarget) {
-                if (RemoteStationContinuationActive()) {
+                if (RemoteStationTargetAssigned()) {
                     const auto matchingRows = std::ranges::count_if(rows,
                         [&](const HudRow& a_row) {
                             return a_row.id == courseTarget;
@@ -178,7 +177,7 @@
         {
             const auto last = Clock::time_point{ Clock::duration{
                 g_lastUnsettledTicks.load(std::memory_order_acquire) } };
-            return Clock::now() - last > std::chrono::milliseconds(2500);
+            return Clock::now() - last > kWorldSettleTime;
         }
 
         bool HudMovieSettled(std::uint32_t a_generation)

@@ -1,6 +1,7 @@
 #include "MainThreadUiPump.h"
 
 #include "Bridge.h"
+#include "Engine/RuntimeMemory.h"
 
 #include "REL/ASM.h"
 #include "REL/Relocation.h"
@@ -49,10 +50,20 @@ namespace CFS::MainThreadUiPump
 
         REL::Relocation<std::uintptr_t> advance{ kAdvanceActiveMenus };
         const auto address = advance.address();
-        if (!address || std::memcmp(reinterpret_cast<const void*>(address),
-                            kExpectedPrologue.data(), kExpectedPrologue.size()) != 0) {
-            REX::ERROR("MainThreadUiPump: UI_AdvanceActiveMenus prologue mismatch; "
-                       "Scaleform bridge disabled before installing an unsafe hook");
+        std::array<std::uint8_t, kExpectedPrologue.size()> observed{};
+        if (address)
+            std::memcpy(observed.data(), reinterpret_cast<const void*>(address),
+                observed.size());
+        if (!address || observed != kExpectedPrologue) {
+            // Log what was actually there: a moved function on a new build and
+            // another plugin's entry patch need different responses.
+            const auto image = Engine::CurrentExecutable();
+            REX::ERROR("MainThreadUiPump: UI_AdvanceActiveMenus prologue mismatch at "
+                       "{:016X} (RVA=0x{:X}): observed=[{}] expected=[{}]; "
+                       "Scaleform bridge disabled before installing an unsafe hook",
+                address, address && image ? image->Rva(address) : 0,
+                address ? Engine::HexBytes(observed) : std::string{ "unresolved" },
+                Engine::HexBytes(kExpectedPrologue));
             return false;
         }
 

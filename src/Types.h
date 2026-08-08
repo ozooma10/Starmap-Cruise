@@ -32,7 +32,6 @@ namespace CFS
         std::uint32_t mapType{ 0 };
         GalaxyIdentity galaxy;
         std::string localizedName;
-        std::uint32_t menuGeneration{ 0 };
 
         [[nodiscard]] explicit operator bool() const noexcept { return formID != 0; }
     };

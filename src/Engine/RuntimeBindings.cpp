@@ -48,12 +48,29 @@ namespace CFS::RuntimeBindings
         std::atomic<std::uintptr_t> g_starMapMenuVtable{ 0 };
         std::atomic<std::uintptr_t> g_galaxyStateVtable{ 0 };
 
+        // Image containment is proven by the caller before these reads.
+        template <std::size_t N>
+        [[nodiscard]] std::array<std::uint8_t, N> ReadBytes(std::uintptr_t a_address)
+        {
+            std::array<std::uint8_t, N> observed{};
+            std::memcpy(observed.data(), reinterpret_cast<const void*>(a_address), N);
+            return observed;
+        }
+
+        // On mismatch, log what was actually there: it distinguishes a moved
+        // function on a new game build from another plugin's entry patch, and
+        // is the raw material for updating the pattern.
         template <std::size_t N>
         bool Matches(std::uintptr_t a_address,
-            const std::array<std::uint8_t, N>& a_expected)
+            const std::array<std::uint8_t, N>& a_expected, const char* a_tag,
+            std::uint64_t a_rva)
         {
-            return std::memcmp(reinterpret_cast<const void*>(a_address),
-                       a_expected.data(), a_expected.size()) == 0;
+            const auto observed = ReadBytes<N>(a_address);
+            if (observed == a_expected)
+                return true;
+            REX::ERROR("[runtime] {} fingerprint mismatch at RVA=0x{:X}: observed=[{}] expected=[{}]",
+                a_tag, a_rva, Engine::HexBytes(observed), Engine::HexBytes(a_expected));
+            return false;
         }
     }
 
@@ -87,7 +104,8 @@ namespace CFS::RuntimeBindings
         const auto galaxyVtableAddress = galaxyVtable.address();
 
         if (!image->Contains(isInSpaceAddress, kIsInSpace116244Prologue.size()) ||
-            !Matches(isInSpaceAddress, kIsInSpace116244Prologue)) {
+            !Matches(isInSpaceAddress, kIsInSpace116244Prologue, "ID 63482 IsInSpace",
+                image->Rva(isInSpaceAddress))) {
             REX::ERROR("[space] Address Library ID 63482 failed the Starfield 1.16.244 executable/fingerprint guard at {:016X}; bridge disabled",
                 isInSpaceAddress);
             return false;
@@ -99,11 +117,16 @@ namespace CFS::RuntimeBindings
                 shipTargetAddress);
             return false;
         }
-        const auto* shipBytes = reinterpret_cast<const std::uint8_t*>(shipTargetAddress);
-        if (!Matches(shipTargetAddress, kSetShipHudTarget116244Prefix) ||
-            shipBytes[10] != 0x85 || shipBytes[11] != 0xC9) {
-            REX::ERROR("[target] Address Library ID 97892 failed the Starfield 1.16.244 fingerprint at {:016X}; bridge disabled",
-                shipTargetAddress);
+        // Bytes 6-9 are a rel32 displacement that legitimately varies; compare
+        // the 6-byte prefix and the fixed test-instruction bytes around it.
+        const auto shipObserved = ReadBytes<kShipTargetFingerprintSpan>(shipTargetAddress);
+        const bool shipPrefixMatches = std::memcmp(shipObserved.data(),
+            kSetShipHudTarget116244Prefix.data(), kSetShipHudTarget116244Prefix.size()) == 0;
+        if (!shipPrefixMatches || shipObserved[10] != 0x85 || shipObserved[11] != 0xC9) {
+            REX::ERROR("[target] Address Library ID 97892 failed the Starfield 1.16.244 fingerprint at {:016X} (RVA=0x{:X}): observed=[{}] expectedPrefix=[{}] expected [10..11]=85 C9; bridge disabled",
+                shipTargetAddress, image->Rva(shipTargetAddress),
+                Engine::HexBytes(shipObserved),
+                Engine::HexBytes(kSetShipHudTarget116244Prefix));
             return false;
         }
 
@@ -114,12 +137,14 @@ namespace CFS::RuntimeBindings
             REX::ERROR("[jump] galaxy selection Address Library bindings resolve outside Starfield.exe; bridge disabled");
             return false;
         }
-        if (!Matches(selectAddress, kSelectGalaxySystem116244Prologue)) {
+        if (!Matches(selectAddress, kSelectGalaxySystem116244Prologue,
+                "ID 94292 SelectGalaxySystem", image->Rva(selectAddress))) {
             REX::ERROR("[jump] Address Library ID 94292 failed the Starfield 1.16.244 prologue fingerprint at {:016X}; bridge disabled",
                 selectAddress);
             return false;
         }
-        if (!Matches(closeAddress, kCloseGalaxyQuickSelect116244Prologue)) {
+        if (!Matches(closeAddress, kCloseGalaxyQuickSelect116244Prologue,
+                "ID 94308 CloseGalaxyQuickSelect", image->Rva(closeAddress))) {
             REX::ERROR("[jump] Address Library ID 94308 failed the Starfield 1.16.244 prologue fingerprint at {:016X}; bridge disabled",
                 closeAddress);
             return false;

@@ -119,11 +119,8 @@ namespace CFS::Bridge
             g_cruiseEngageAvailable.store(false, std::memory_order_release);
             g_hudUiDirty.store(true, std::memory_order_release);
             g_uiResetMask.fetch_or(kResetHudUi, std::memory_order_acq_rel);
-            if (RemoteMoonContinuationActive())
-                FailRemoteMoonContinuation("Spaceship HUD movie was replaced during automatic continuation");
-            else if (RemoteStationContinuationActive())
-                FailRemoteStationContinuation(
-                    "Spaceship HUD movie was replaced during automatic continuation");
+            FailActiveContinuationsOrRelease(
+                "Spaceship HUD movie was replaced during automatic continuation");
         }
         REX::INFO("[ui] movie created: {} generation={}", name,
             state->generation.load(std::memory_order_acquire));

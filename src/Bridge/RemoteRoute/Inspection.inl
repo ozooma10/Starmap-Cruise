@@ -4,7 +4,6 @@
         struct RemoteRouteGate
         {
             bool ready{ false };
-            EligibilityCode code{ EligibilityCode::kRemoteCourseUnavailable };
             std::string detail{ "vanilla travel data is unavailable" };
             std::string destinationBodyName;
         };
@@ -154,29 +153,28 @@
             bool nativeSelectedMatch{ false };
             std::uint32_t nativeSelectedSystem{ 0 };
             bool nativeQuickSelectOpen{ false };
-            bool quickSelectMatch{ false };
             bool markerMatch{ false };
 
             [[nodiscard]] std::string Describe(const MapSnapshot& a_snapshot,
                 std::uint32_t a_root) const
             {
                 return std::format(
-                    "root={:08X} setCourse(resolved={} enabled={} visible={}) nativeSelection(resolved={} selected={:08X} quickSelectOpen={}) quickSelect(published={} count={} cursor={} bodyID={:08X}) marker(count={} bodyID={:08X})",
+                    "root={:08X} setCourse(resolved={} enabled={} visible={}) nativeSelection(resolved={} selected={:08X} quickSelectOpen={}) marker(count={} bodyID={:08X})",
                     a_root, button.resolved, button.enabled, button.visible,
                     nativeSelectionResolved, nativeSelectedSystem,
                     nativeQuickSelectOpen,
-                    a_snapshot.quickSelectPublished, a_snapshot.quickSelectCount,
-                    a_snapshot.quickSelectCursorIndex,
-                    a_snapshot.quickSelectCursorBodyID,
                     a_snapshot.highlightedMarkerCount, a_snapshot.markerBodyID);
             }
         };
 
         // A galaxy selection counts as established only when native itself says
         // so. The vanilla Set Course button is the strongest statement; the
-        // exact GalaxyState selected-system field, Quick Select cursor, and
-        // unique galaxy highlight marker are the other readbacks that name a
-        // system directly. Nothing here forces, writes, or infers button state.
+        // exact GalaxyState selected-system field and a unique galaxy highlight
+        // marker are the other readbacks that name a system directly. The
+        // StarMapMenuQuickSelectData feed was removed as an authority: live
+        // 1.16.244 enumeration proved it publishes no entry or cursor state at
+        // all, so a cursor match could never fire. Nothing here forces, writes,
+        // or infers button state.
         GalaxySelectionProof EvaluateGalaxySelection(V& a_menuRoot,
             const MapSnapshot& a_snapshot, std::uint32_t a_systemBodyID)
         {
@@ -192,9 +190,6 @@
             proof.nativeSelectedMatch = proof.nativeSelectionResolved &&
                 a_systemBodyID != 0 &&
                 proof.nativeSelectedSystem == a_systemBodyID;
-            proof.quickSelectMatch = a_snapshot.quickSelectPublished &&
-                a_snapshot.quickSelectCursorIndex >= 0 && a_systemBodyID != 0 &&
-                a_snapshot.quickSelectCursorBodyID == a_systemBodyID;
             proof.markerMatch = a_snapshot.highlightedMarkerCount == 1 &&
                 a_systemBodyID != 0 &&
                 a_snapshot.markerBodyID == a_systemBodyID;
@@ -206,13 +201,6 @@
                        proof.nativeSelectedMatch) {
                 proof.proven = true;
                 proof.authority = "native GalaxyState selected system";
-            } else if (proof.button.resolved && proof.button.visible &&
-                       proof.quickSelectMatch) {
-                // QuickSystemSelect.OnItemPress plots from the list cursor
-                // without consulting the hint bar. Mirror that seam only when
-                // native published the cursor on the captured root.
-                proof.proven = true;
-                proof.authority = "native Quick Select cursor";
             } else if (proof.button.resolved && proof.button.visible &&
                        proof.markerMatch) {
                 proof.proven = true;
@@ -227,8 +215,37 @@
         {
             REX::WARN("[jump] galaxy marker context not established: {}",
                 a_proof.Describe(a_snapshot, a_systemBodyID));
-            REX::INFO("[jump] galaxy diagnostics root members: {}",
-                JoinMemberNames(a_menuRoot, 96));
+            MemberNameCollector rootCollector{ 96 };
+            if (a_menuRoot.IsObject())
+                a_menuRoot.VisitMembers(&rootCollector);
+            {
+                std::string joined;
+                for (const auto& entry : rootCollector.names) {
+                    if (!joined.empty())
+                        joined += ", ";
+                    joined += entry;
+                }
+                REX::INFO("[jump] galaxy diagnostics root members: {}",
+                    joined.empty() ? "<none>" : joined);
+            }
+            // One bounded read-only level deeper for the containers most likely
+            // to expose the native selection seam. Names are copied out only.
+            for (const auto& entry : rootCollector.names) {
+                const auto colon = entry.rfind(':');
+                const auto name = entry.substr(0, colon);
+                const auto kind = entry.substr(colon + 1);
+                if (kind != "object" && kind != "displayobject")
+                    continue;
+                if (name.find("Galaxy") == std::string::npos &&
+                    name.find("QuickSystemSelect") == std::string::npos &&
+                    name.find("SystemView") == std::string::npos)
+                    continue;
+                V child;
+                if (!ObjectMember(a_menuRoot, name.c_str(), child))
+                    continue;
+                REX::INFO("[jump] galaxy diagnostics {} members: {}",
+                    name, JoinMemberNames(child, 96));
+            }
 
             V hintBar;
             if (!ObjectMember(a_menuRoot, "ButtonHintBar_mc", hintBar)) {
@@ -298,7 +315,6 @@
             }
             if (a_expectedSystemName.empty() ||
                 routeSystem != a_expectedSystemName) {
-                gate.code = EligibilityCode::kRemoteCourseMismatch;
                 gate.detail = std::format("vanilla route ends in '{}' but marked system is '{}'",
                     routeSystem, a_expectedSystemName);
                 return gate;
@@ -316,7 +332,6 @@
             }
 
             gate.ready = true;
-            gate.code = EligibilityCode::kEligible;
             gate.detail = std::format("vanilla executable route ends in '{}'",
                 routeSystem);
             if (a_jumpDataOut)

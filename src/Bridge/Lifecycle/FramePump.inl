@@ -46,7 +46,7 @@
                     audit.markedDistance, kArrivalDistanceMeters, audit.checkID,
                     audit.checkGeneration);
                 ClearDestination("confirmed arrival (course transition plus close distance)");
-            } else if (age > std::chrono::seconds(2)) {
+            } else if (age > kArrivalEvidenceWindow) {
                 {
                     std::lock_guard lock{ g_arrivalAuditMutex };
                     if (g_arrivalAudit.checkID != audit.checkID ||
@@ -70,25 +70,17 @@
             {
                 std::lock_guard lock{ g_courseMutex };
                 if (g_courseRequest.id &&
-                    Clock::now() - g_courseRequest.queued > std::chrono::seconds(2)) {
+                    Clock::now() - g_courseRequest.queued > kQueuedCourseExpiry) {
                     REX::WARN("[course] queued {} for {:08X} expired before Cruise HUD became ready; mark preserved",
                         g_courseRequest.clearing ? "clear" : "lock", g_courseRequest.id);
                     g_courseRequest = {};
                     queuedExpired = true;
                 }
             }
-            if (queuedExpired) {
-                if (RemoteMoonContinuationActive()) {
-                    FailRemoteMoonContinuation("internal course request expired before the Cruise HUD became ready");
-                    return;
-                }
-                if (RemoteStationContinuationActive()) {
-                    FailRemoteStationContinuation(
-                        "remote station course request expired before the Cruise HUD became ready");
-                    return;
-                }
-                ReleaseNavStateToMark();
-            }
+            if (queuedExpired &&
+                FailActiveContinuationsOrRelease(
+                    "course request expired before the Cruise HUD became ready"))
+                return;
 
             const auto asked = g_courseAskedID.load(std::memory_order_acquire);
             if (asked) {
@@ -96,26 +88,18 @@
                     g_courseAskedTicks.load(std::memory_order_acquire) } };
                 const auto continuation = RemoteMoonState();
                 const bool awaitingStockCourseResolution = continuation &&
-                    (continuation->phase == RemoteMoonPhase::kAwaitingParentLock ||
-                        continuation->phase == RemoteMoonPhase::kAwaitingLatentFinalLock) &&
+                    continuation->phase == RemoteMoonPhase::kTraveling &&
                     continuation->finalCourseFormID == asked &&
                     !g_courseAskedClearing.load(std::memory_order_acquire);
                 if (!awaitingStockCourseResolution &&
-                    Clock::now() - at > std::chrono::milliseconds(1500)) {
+                    Clock::now() - at > kCourseLockReadbackTimeout) {
                     g_courseAskedID.store(0, std::memory_order_release);
                     g_courseAskedClearing.store(false, std::memory_order_release);
                     REX::WARN("[course] no bIsCruiseTargetLock confirmation for {:08X} after 1.5 seconds; mark preserved",
                         asked);
-                    if (RemoteMoonContinuationActive()) {
-                        FailRemoteMoonContinuation("internal course dispatch received no exact bIsCruiseTargetLock readback");
+                    if (FailActiveContinuationsOrRelease(
+                            "course dispatch received no exact bIsCruiseTargetLock readback"))
                         return;
-                    }
-                    if (RemoteStationContinuationActive()) {
-                        FailRemoteStationContinuation(
-                            "remote station course dispatch received no exact bIsCruiseTargetLock readback");
-                        return;
-                    }
-                    ReleaseNavStateToMark();
                 }
             }
 
@@ -124,21 +108,13 @@
                 std::lock_guard lock{ g_hudCruiseInputMutex };
                 hudHoldExpired = g_hudCruiseInputLatched &&
                     g_hudCruiseInputStarted != Clock::time_point{} &&
-                    Clock::now() - g_hudCruiseInputStarted > std::chrono::seconds(4);
+                    Clock::now() - g_hudCruiseInputStarted > kHudCruisePressSafetyLimit;
             }
             if (hudHoldExpired) {
                 CancelOrReleaseHudCruiseInput("four-second activation safety limit");
                 REX::WARN("[input] latched HUD Cruise hold did not make CruiseModeHUDActive within 4 seconds; released automatically and preserved destination");
-                if (RemoteMoonContinuationActive()) {
-                    FailRemoteMoonContinuation("stock Cruise activation timed out during remote orbital continuation");
-                    return;
-                }
-                if (RemoteStationContinuationActive()) {
-                    FailRemoteStationContinuation(
-                        "stock Cruise activation timed out during remote-station continuation");
-                    return;
-                }
-                ReleaseNavStateToMark();
+                FailActiveContinuationsOrRelease(
+                    "stock Cruise activation timed out during remote continuation");
             }
         }
 

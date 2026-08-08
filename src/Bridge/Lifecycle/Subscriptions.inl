@@ -59,7 +59,7 @@
                     continue;
                 const auto born = Clock::time_point{ Clock::duration{
                     sub.movie->bornTicks.load(std::memory_order_acquire) } };
-                if (Clock::now() - born < std::chrono::milliseconds(250))
+                if (Clock::now() - born < kMovieSubscribeSettleTime)
                     continue;
                 const auto menu = ui->GetMenu(menuName);
                 if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot)

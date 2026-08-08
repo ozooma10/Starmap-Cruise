@@ -18,7 +18,7 @@
             }
             if (g_mapOpen.load(std::memory_order_acquire)) {
                 // Browsing does not cancel an engine-owned latent course. Any
-                // accepted selection calls SetDestination(), which replaces the
+                // accepted selection calls StoreDestination(), which replaces the
                 // public mark and resets this private continuation atomically.
                 return;
             }
@@ -153,8 +153,7 @@
             };
 
             const bool stationWaypointPhase =
-                continuation->phase == RemoteMoonPhase::kAwaitingParentLock ||
-                continuation->phase == RemoteMoonPhase::kAwaitingLatentFinalLock ||
+                continuation->phase == RemoteMoonPhase::kTraveling ||
                 continuation->phase == RemoteMoonPhase::kParentLocked ||
                 continuation->phase == RemoteMoonPhase::kAwaitingParentArrival ||
                 continuation->phase == RemoteMoonPhase::kAwaitingFinalLock;
@@ -232,75 +231,33 @@
                 if (phaseAge > kRemoteMoonCruiseTimeout)
                     FailRemoteMoonContinuation("stock Cruise did not activate for the continuous final-target course within 5 seconds");
                 return;
-            case RemoteMoonPhase::kAwaitingParentLock: {
+            case RemoteMoonPhase::kTraveling: {
                 if (!cruiseActive) {
-                    if (continuousCruiseExitExpired(RemoteMoonPhase::kAwaitingParentLock))
-                        FailRemoteMoonContinuation("Cruise exited before stock resolved the retained final-target dispatch");
+                    if (continuousCruiseExitExpired(RemoteMoonPhase::kTraveling))
+                        FailRemoteMoonContinuation("Cruise exited before exact final-target readback for the retained dispatch");
                     return;
                 }
                 const auto asked = g_courseAskedID.load(std::memory_order_acquire);
-                if (asked != 0 && asked != finalCourseTarget) {
-                    FailRemoteMoonContinuation("another course request replaced the retained final-target dispatch");
-                    return;
-                }
-                if (asked != finalCourseTarget)
-                    return;
-                if (feedRevision > continuation->feedRevisionFloor) {
-                    if (course == finalCourseTarget && finalRows.size() == 1 &&
-                        finalRows.front().courseLocked) {
-                        completeFinalLock(false);
+                if (!continuation->dispatchConfirmed) {
+                    if (asked != 0 && asked != finalCourseTarget) {
+                        FailRemoteMoonContinuation("another course request replaced the retained final-target dispatch");
                         return;
                     }
-                    if (course == continuation->parentFormID && parentRows.size() == 1 &&
-                        parentRows.front().courseLocked) {
+                    if (asked == finalCourseTarget) {
                         std::lock_guard lock{ g_remoteMoonMutex };
                         auto& live = g_remoteMoonContinuation;
-                        if (live.phase != RemoteMoonPhase::kAwaitingParentLock ||
-                            live.finalFormID != a_destination.formID ||
-                            live.finalCourseFormID != finalCourseTarget ||
-                            live.parentFormID != course)
-                            return;
-                        live.phase = RemoteMoonPhase::kParentLocked;
-                        live.phaseStarted = now;
-                        live.feedRevisionFloor = feedRevision;
-                        live.inactiveSince = {};
-                        g_courseAskedID.store(0, std::memory_order_release);
-                        g_courseAskedClearing.store(false, std::memory_order_release);
-                        g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
-                        REX::INFO("[orbital] engine resolved retained final {} {:08X} '{}' through exact private-waypoint lock {:08X} '{}' in one continuous Cruise session",
-                            DestinationKindName(a_destination.kind),
-                            finalCourseTarget, a_destination.localizedName,
-                            continuation->parentFormID, continuation->parentName);
+                        if (live.phase == RemoteMoonPhase::kTraveling &&
+                            live.finalCourseFormID == finalCourseTarget)
+                            live.dispatchConfirmed = true;
+                    } else {
+                        // The queued dispatch has not registered yet. This is
+                        // the only bounded part of the phase; travel itself is
+                        // engine-owned and unbounded (Ariel/Chawla traces).
+                        if (phaseAge > kRemoteMoonCruiseTimeout)
+                            FailRemoteMoonContinuation("retained final-target dispatch did not register within 5 seconds");
                         return;
                     }
-                    if (course != 0) {
-                        FailRemoteMoonContinuation("final-target dispatch exact-locked an unrelated cockpit target");
-                        return;
-                    }
-                }
-                if (phaseAge > kRemoteMoonCruiseTimeout) {
-                    {
-                        std::lock_guard lock{ g_remoteMoonMutex };
-                        auto& live = g_remoteMoonContinuation;
-                        if (live.phase != RemoteMoonPhase::kAwaitingParentLock)
-                            return;
-                        live.phase = RemoteMoonPhase::kAwaitingLatentFinalLock;
-                        live.phaseStarted = now;
-                        live.feedRevisionFloor = feedRevision;
-                        live.inactiveSince = {};
-                    }
-                    REX::INFO("[orbital] no immediate exact waypoint/final lock after 5 seconds; stock Cruise remains active and the single retained-target dispatch is entering its unbounded engine-owned travel phase");
-                }
-                return;
-            }
-            case RemoteMoonPhase::kAwaitingLatentFinalLock: {
-                if (!cruiseActive) {
-                    if (continuousCruiseExitExpired(RemoteMoonPhase::kAwaitingLatentFinalLock))
-                        FailRemoteMoonContinuation("Cruise exited before exact final-target readback during latent resolution");
-                    return;
-                }
-                const auto asked = g_courseAskedID.load(std::memory_order_acquire);
-                if (asked != finalCourseTarget) {
+                } else if (asked != finalCourseTarget) {
                     FailRemoteMoonContinuation("retained final-target course request changed during latent resolution");
                     return;
                 }
@@ -315,7 +272,7 @@
                     parentRows.front().courseLocked) {
                     std::lock_guard lock{ g_remoteMoonMutex };
                     auto& live = g_remoteMoonContinuation;
-                    if (live.phase != RemoteMoonPhase::kAwaitingLatentFinalLock ||
+                    if (live.phase != RemoteMoonPhase::kTraveling ||
                         live.finalFormID != a_destination.formID ||
                         live.finalCourseFormID != finalCourseTarget ||
                         live.parentFormID != course)
@@ -326,14 +283,15 @@
                     live.inactiveSince = {};
                     g_courseAskedID.store(0, std::memory_order_release);
                     g_courseAskedClearing.store(false, std::memory_order_release);
-                    REX::INFO("[orbital] latent stock course published exact private-waypoint lock {:08X} '{}' for retained final {} {:08X} '{}'",
+                    g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                    REX::INFO("[orbital] engine published exact private-waypoint lock {:08X} '{}' for retained final {} {:08X} '{}' in one continuous Cruise session",
                         continuation->parentFormID, continuation->parentName,
                         DestinationKindName(a_destination.kind),
                         finalCourseTarget, a_destination.localizedName);
                     return;
                 }
                 if (course != 0)
-                    FailRemoteMoonContinuation("latent stock course exact-locked an unrelated cockpit target");
+                    FailRemoteMoonContinuation("engine exact-locked an unrelated cockpit target while the retained dispatch was active");
                 return;
             }
             case RemoteMoonPhase::kParentLocked: {

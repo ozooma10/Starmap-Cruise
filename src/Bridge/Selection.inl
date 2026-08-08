@@ -110,7 +110,6 @@
                                         std::format("STATION {:08X}", station.referenceFormID) :
                                         station.editorID) :
                                 a_snapshot.markerName,
-                            .menuGeneration = a_snapshot.generation,
                         };
                         return {
                             .code = EligibilityCode::kEligible,
@@ -152,7 +151,6 @@
                         .localizedName = a_snapshot.markerName.empty() ?
                             std::format("STATION {:08X}", station.referenceFormID) :
                             a_snapshot.markerName,
-                        .menuGeneration = a_snapshot.generation,
                     };
                     return {
                         .code = EligibilityCode::kEligible,
@@ -222,7 +220,6 @@
                 .galaxy = body->galaxy,
                 .localizedName = a_snapshot.dossierName.empty() ?
                     a_snapshot.markerName : a_snapshot.dossierName,
-                .menuGeneration = a_snapshot.generation,
             };
             return {
                 .code = EligibilityCode::kEligible,

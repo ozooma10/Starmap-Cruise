@@ -473,14 +473,18 @@
                     DestinationKindName(a_destination.kind));
         }
 
-        bool RemoteStationContinuationActive()
+        // A native station target assignment is pending exact-lock readback.
+        // Orthogonal to RemoteMoonContinuationActive(): the shared continuation
+        // record covers both moons and stations, while this flag is also set on
+        // the direct station path where no continuation record exists.
+        bool RemoteStationTargetAssigned()
         {
             return g_pendingStationAssignedID.load(std::memory_order_acquire) != 0;
         }
 
         void FailRemoteStationContinuation(const char* a_reason)
         {
-            if (!RemoteStationContinuationActive())
+            if (!RemoteStationTargetAssigned())
                 return;
             REX::WARN("[station] automatic remote continuation failed closed: {}",
                 a_reason);

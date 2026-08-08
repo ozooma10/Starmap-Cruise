@@ -21,10 +21,8 @@
                             // STDT root through this transition so Set Course is
                             // not delayed by an optional republish. The later
                             // route-display identity gate still fails closed.
-                            if (view == kGalaxyView && !preserveRemoteRoot) {
+                            if (view == kGalaxyView && !preserveRemoteRoot)
                                 g_map.treeBodyID = 0;
-                                g_map.treeBodyType = 0;
-                            }
                             g_map.highlightedMarkerCount = 0;
                             g_map.markerBodyID = 0;
                             g_map.markerBodyType = 0;
@@ -35,8 +33,6 @@
                         }
                         g_map.view = view;
                     }
-                    g_map.systemLocationID = UIntMember(data, "uSystemLocationID");
-                    g_map.bodyLocationID = UIntMember(data, "uBodyLocationID");
                 }
                 g_mapUiDirty.store(true, std::memory_order_release);
             }
@@ -72,10 +68,8 @@
                     // erase the last live star. A stale star remains fail-closed
                     // because the remote gate compares its indexed DNAM system ID with the
                     // selected PNDT system.
-                    if (acceptedRoot && (g_map.treeBodyID != bodyID ||
-                            g_map.treeBodyType != bodyType)) {
+                    if (acceptedRoot && g_map.treeBodyID != bodyID) {
                         g_map.treeBodyID = bodyID;
-                        g_map.treeBodyType = bodyType;
                         changed = true;
                     }
                 }
@@ -146,29 +140,12 @@
             }
         } g_markersHandler;
 
-        class QuickSelectCollector : public V::ArrayVisitor
-        {
-        public:
-            explicit QuickSelectCollector(std::int32_t a_cursor) : cursor(a_cursor) {}
-
-            void Visit(std::uint32_t a_index, const V& a_value) override
-            {
-                ++count;
-                if (cursor < 0 || static_cast<std::uint32_t>(cursor) != a_index)
-                    return;
-                V entry = a_value;
-                cursorBodyID = UIntMember(entry, "uBodyID");
-            }
-
-            std::int32_t cursor{ -1 };
-            std::uint32_t count{ 0 };
-            std::uint32_t cursorBodyID{ 0 };
-        };
-
-        // Read-only mirror of vanilla's Quick Select state. It is the one native
-        // statement of galaxy system selection that does not depend on the
-        // physical cursor, so the remote driver can prove a selection without
-        // touching it.
+        // Read-only evidence pin. Live 1.16.244 payload enumeration proved this
+        // feed carries only {bShowMenu, bOpenForPlot}: Quick Select entries and
+        // the cursor arrive through native's direct SetMarkers(Array) movie
+        // call, never through this feed, so no selection authority can be
+        // claimed here. The subscription stays so a future payload change is
+        // caught by the one-shot shape log instead of being silently assumed.
         class QuickSelectHandler : public RE::Scaleform::GFx::FunctionHandler
         {
         public:
@@ -177,41 +154,9 @@
                 V data;
                 if (!Payload(a_params, data))
                     return;
-
                 if (!shapeLogged.exchange(true, std::memory_order_acq_rel))
                     REX::INFO("[ui] StarMapMenuQuickSelectData members: {}",
                         JoinMemberNames(data, 48));
-
-                V entries;
-                if (!data.GetMember("entryList", &entries))
-                    data.GetMember("aEntryList", &entries);
-                if (entries.IsObject() && !entries.IsArray()) {
-                    V inner;
-                    if (entries.GetMember("dataA", &inner) && inner.IsArray())
-                        entries = inner;
-                }
-
-                std::int32_t cursor = -1;
-                V cursorValue;
-                if (data.GetMember("uCursorSelectionIndex", &cursorValue) &&
-                    !cursorValue.IsUndefined())
-                    cursor = static_cast<std::int32_t>(AsNumber(cursorValue));
-
-                QuickSelectCollector visitor{ cursor };
-                if (entries.IsArray())
-                    entries.VisitElements(&visitor);
-
-                {
-                    std::lock_guard lock{ g_mapMutex };
-                    g_map.quickSelectPublished = true;
-                    g_map.quickSelectCount = visitor.count;
-                    g_map.quickSelectCursorIndex = cursor;
-                    g_map.quickSelectCursorBodyID = visitor.cursorBodyID;
-                }
-                if (Settings::Verbose())
-                    REX::INFO("[ui] quick select cursor={} of {} entries bodyID={:08X}",
-                        cursor, visitor.count, visitor.cursorBodyID);
-                g_mapUiDirty.store(true, std::memory_order_release);
             }
 
         private:
