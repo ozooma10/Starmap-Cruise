@@ -132,7 +132,6 @@
             std::optional<BodyIndex::IndexedBody> waypoint;
             std::vector<BodyIndex::IndexedBody> stationWaypoints;
             std::vector<std::uint32_t> ancestry{ orbital.formID };
-            constexpr std::size_t kMaxStationAncestryDepth = 8;
             for (std::size_t depth = 0;
                  depth < kMaxStationAncestryDepth && child.galaxy.parent;
                  ++depth) {

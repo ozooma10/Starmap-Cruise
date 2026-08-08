@@ -125,15 +125,6 @@
                         .expectedSystemName = expectedSystemName,
                         .started = Clock::now(),
                     };
-                    // Campaign capture mode 2: skip the native selection rung
-                    // so the existing one-shot diagnostic fires in the
-                    // no-selection state and the request fails closed at the
-                    // normal five-second budget — the deliberate single
-                    // failing run the 2026-08 record designed but never ran.
-                    if (Settings::GalaxyDiagnosticsMode() == 2) {
-                        g_remoteRouteRequest.focusAttempted = true;
-                        REX::WARN("[jump] diagnostics mode 2: native focus attempt skipped for this request; it will dump state and fail closed");
-                    }
                 }
                 if (!DispatchVanillaMapCancel(mapRoot)) {
                     g_selectionAcceptedThisOpen.store(false, std::memory_order_release);

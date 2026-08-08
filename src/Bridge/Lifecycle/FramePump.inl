@@ -95,8 +95,8 @@
                     Clock::now() - at > kCourseLockReadbackTimeout) {
                     g_courseAskedID.store(0, std::memory_order_release);
                     g_courseAskedClearing.store(false, std::memory_order_release);
-                    REX::WARN("[course] no bIsCruiseTargetLock confirmation for {:08X} after 1.5 seconds; mark preserved",
-                        asked);
+                    REX::WARN("[course] no bIsCruiseTargetLock confirmation for {:08X} after {} ms; mark preserved",
+                        asked, kCourseLockReadbackTimeout.count());
                     if (FailActiveContinuationsOrRelease(
                             "course dispatch received no exact bIsCruiseTargetLock readback"))
                         return;
@@ -111,8 +111,12 @@
                     Clock::now() - g_hudCruiseInputStarted > kHudCruisePressSafetyLimit;
             }
             if (hudHoldExpired) {
-                CancelOrReleaseHudCruiseInput("four-second activation safety limit");
-                REX::WARN("[input] latched HUD Cruise hold did not make CruiseModeHUDActive within 4 seconds; released automatically and preserved destination");
+                const auto safetyReason = std::format(
+                    "{}-second activation safety limit",
+                    kHudCruisePressSafetyLimit.count());
+                CancelOrReleaseHudCruiseInput(safetyReason.c_str());
+                REX::WARN("[input] latched HUD Cruise hold did not make CruiseModeHUDActive within {} seconds; released automatically and preserved destination",
+                    kHudCruisePressSafetyLimit.count());
                 FailActiveContinuationsOrRelease(
                     "stock Cruise activation timed out during remote continuation");
             }

@@ -215,75 +215,8 @@
         {
             REX::WARN("[jump] galaxy marker context not established: {}",
                 a_proof.Describe(a_snapshot, a_systemBodyID));
-            MemberNameCollector rootCollector{ 96 };
-            if (a_menuRoot.IsObject())
-                a_menuRoot.VisitMembers(&rootCollector);
-            {
-                std::string joined;
-                for (const auto& entry : rootCollector.names) {
-                    if (!joined.empty())
-                        joined += ", ";
-                    joined += entry;
-                }
-                REX::INFO("[jump] galaxy diagnostics root members: {}",
-                    joined.empty() ? "<none>" : joined);
-            }
-            // One bounded read-only level deeper for the containers most likely
-            // to expose the native selection seam. Names are copied out only.
-            for (const auto& entry : rootCollector.names) {
-                const auto colon = entry.rfind(':');
-                const auto name = entry.substr(0, colon);
-                const auto kind = entry.substr(colon + 1);
-                if (kind != "object" && kind != "displayobject")
-                    continue;
-                if (name.find("Galaxy") == std::string::npos &&
-                    name.find("QuickSystemSelect") == std::string::npos &&
-                    name.find("SystemView") == std::string::npos)
-                    continue;
-                V child;
-                if (!ObjectMember(a_menuRoot, name.c_str(), child))
-                    continue;
-                REX::INFO("[jump] galaxy diagnostics {} members: {}",
-                    name, JoinMemberNames(child, 96));
-            }
-
-            V hintBar;
-            if (!ObjectMember(a_menuRoot, "ButtonHintBar_mc", hintBar)) {
-                REX::INFO("[jump] galaxy diagnostics: ButtonHintBar_mc is unavailable");
-                return;
-            }
-            MemberNameCollector collector{ 96 };
-            hintBar.VisitMembers(&collector);
-            std::string joined;
-            for (const auto& entry : collector.names) {
-                if (!joined.empty())
-                    joined += ", ";
-                joined += entry;
-            }
-            REX::INFO("[jump] galaxy diagnostics hint bar members: {}",
-                joined.empty() ? "<none>" : joined);
-            for (const auto& entry : collector.names) {
-                const auto colon = entry.rfind(':');
-                const auto name = entry.substr(0, colon);
-                if (name.size() < 10 ||
-                    name.compare(name.size() - 10, 10, "ButtonData") != 0)
-                    continue;
-                V data;
-                if (!ObjectMember(hintBar, name.c_str(), data))
-                    continue;
-                bool enabled = false;
-                bool visible = false;
-                (void)BooleanMember(data, "bEnabled", enabled);
-                (void)BooleanMember(data, "bVisible", visible);
-                auto text = StringMember(data, "sText");
-                if (text.empty())
-                    text = StringMember(data, "text");
-                auto action = StringMember(data, "sButtonAction");
-                if (action.empty())
-                    action = StringMember(data, "buttonAction");
-                REX::INFO("[jump] galaxy diagnostics hint '{}' enabled={} visible={} text='{}' action='{}'",
-                    name, enabled, visible, text, action);
-            }
+            REX::INFO("[jump] galaxy diagnostics root members: {}",
+                JoinMemberNames(a_menuRoot, 96));
         }
 
         RemoteRouteGate InspectRemoteRoute(V& a_menuRoot,

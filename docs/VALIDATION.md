@@ -123,9 +123,11 @@ build and a startup-log diff against a captured baseline instead.
   `src/BodyIndex/RecordReader.*` behind a live-form predicate and passed its
   synthetic fixture suite; release scanning/version ownership no longer depends
   on the caller environment.
-- [x] Stage 2 (code): `iGalaxyDiagnosticsMode` capture modes 1/2 added
-  (custom-INI only). **Captures not yet run** — run scenario A once in each
-  mode, diff the two dumps, then decide Stage 2b per the plan.
+- [x] Stage 2: retired (2026-08-08). The `iGalaxyDiagnosticsMode` capture modes
+  were removed without ever being run; the deep galaxy-focus member sweeps went
+  with them. The failure-path diagnostic now logs the selection proof plus the
+  menu-root member list only, and the QuickSelect feed-shape one-shot pin is
+  retained. The old sweeps remain recoverable from git history.
 - [x] Stage 3 (code): unreachable Quick Select cursor authority removed
   (feed-shape proof retained via the one-shot member log); one-rung
   `GalaxyFocusRung` ladder collapsed to `focusAttempted`/`focusReadbackPasses`.
@@ -135,6 +137,9 @@ build and a startup-log diff against a captured baseline instead.
   same-frame LiveGalaxyState pass-through was deliberately NOT taken: the
   mode-1 diagnostic dump can now enter AS3 between proof and arm, which
   invalidates its no-AS3-between premise; per-touch re-proof stays.
+  (2026-08-08: mode 1 has since been removed, but per-touch re-proof is
+  retained anyway — every raw GalaxyState write keeps a fresh vtable proof
+  immediately before it.)
   **Smoke required: rows A and H.**
 - [x] Stage 5a (code): `kAwaitingParentLock` and `kAwaitingLatentFinalLock`
   merged into unbounded `kTraveling` with a bounded `dispatchConfirmed`

@@ -201,7 +201,9 @@
             switch (continuation->phase) {
             case RemoteMoonPhase::kAwaitingParentFeed: {
                 if (phaseAge > kRemoteMoonFeedTimeout) {
-                    FailRemoteMoonContinuation("private orbital waypoint did not remain a unique cockpit HUD row within 10 seconds");
+                    FailRemoteMoonContinuation(std::format(
+                        "private orbital waypoint did not remain a unique cockpit HUD row within {} seconds",
+                        kRemoteMoonFeedTimeout.count()));
                     return;
                 }
                 if (!g_haveCurrentSystem.load(std::memory_order_acquire))
@@ -229,7 +231,9 @@
             }
             case RemoteMoonPhase::kAwaitingParentCruise:
                 if (phaseAge > kRemoteMoonCruiseTimeout)
-                    FailRemoteMoonContinuation("stock Cruise did not activate for the continuous final-target course within 5 seconds");
+                    FailRemoteMoonContinuation(std::format(
+                        "stock Cruise did not activate for the continuous final-target course within {} seconds",
+                        kRemoteMoonCruiseTimeout.count()));
                 return;
             case RemoteMoonPhase::kTraveling: {
                 if (!cruiseActive) {
@@ -254,7 +258,9 @@
                         // the only bounded part of the phase; travel itself is
                         // engine-owned and unbounded (Ariel/Chawla traces).
                         if (phaseAge > kRemoteMoonCruiseTimeout)
-                            FailRemoteMoonContinuation("retained final-target dispatch did not register within 5 seconds");
+                            FailRemoteMoonContinuation(std::format(
+                                "retained final-target dispatch did not register within {} seconds",
+                                kRemoteMoonCruiseTimeout.count()));
                         return;
                     }
                 } else if (asked != finalCourseTarget) {
@@ -359,7 +365,9 @@
             }
             case RemoteMoonPhase::kAwaitingParentArrival: {
                 if (phaseAge > kRemoteMoonFeedTimeout) {
-                    FailRemoteMoonContinuation("waypoint lock ended without a newer unique final-target HUD row within 10 seconds");
+                    FailRemoteMoonContinuation(std::format(
+                        "waypoint lock ended without a newer unique final-target HUD row within {} seconds",
+                        kRemoteMoonFeedTimeout.count()));
                     return;
                 }
                 if (!cruiseActive) {
@@ -412,7 +420,9 @@
             }
             case RemoteMoonPhase::kAwaitingFinalLock: {
                 if (phaseAge > kRemoteMoonFeedTimeout) {
-                    FailRemoteMoonContinuation("continuous Cruise did not produce exact final-target lock within 10 seconds of the waypoint feed transition");
+                    FailRemoteMoonContinuation(std::format(
+                        "continuous Cruise did not produce exact final-target lock within {} seconds of the waypoint feed transition",
+                        kRemoteMoonFeedTimeout.count()));
                     return;
                 }
                 if (!cruiseActive) {
@@ -511,7 +521,9 @@
                 }
                 if (stationTargets.empty()) {
                     if (now - phaseStarted > kRemoteStationResolveTimeout)
-                        ClearDestination("remote station REFR did not become live within 10 seconds of settled system arrival");
+                        ClearDestination(std::format(
+                            "remote station REFR did not become live within {} seconds of settled system arrival",
+                            kRemoteStationResolveTimeout.count()).c_str());
                     return;
                 }
                 if (!a_destination.targetBaseFormID ||

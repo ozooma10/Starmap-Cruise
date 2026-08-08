@@ -143,22 +143,6 @@
                 const auto proof = EvaluateGalaxySelection(menuRoot, snapshot,
                     request.systemBodyID);
                 if (proof.proven) {
-                    // Campaign capture mode 1: dump the same read-only
-                    // diagnostics in the PROVEN state so the two dumps can be
-                    // diffed against the mode-2 no-selection run. One-shot per
-                    // request; the run then continues normally.
-                    if (Settings::GalaxyDiagnosticsMode() == 1 &&
-                        !request.focusDiagnosticsLogged) {
-                        if (!TryCommitRemoteRoutePhase(
-                                RemoteRoutePhase::kEstablishSelection, request,
-                                [](RemoteRouteRequest& a_live) {
-                                    a_live.focusDiagnosticsLogged = true;
-                                }))
-                            return;
-                        REX::INFO("[jump] diagnostics mode 1: proven-selection dump follows");
-                        LogGalaxyFocusDiagnostics(menuRoot, snapshot, proof,
-                            request.systemBodyID);
-                    }
                     if (!TryCommitRemoteRoutePhase(
                             RemoteRoutePhase::kEstablishSelection, request,
                             [](RemoteRouteRequest& a_live) {

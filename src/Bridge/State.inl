@@ -29,12 +29,12 @@
         // Distinct fail-closed budgets that happen to share values; do not merge.
         constexpr auto kArrivalEvidenceWindow = std::chrono::seconds(2);
         constexpr auto kQueuedCourseExpiry = std::chrono::seconds(2);
-        // Keep the "after 1.5 seconds" warning text in sync with this value.
         constexpr auto kCourseLockReadbackTimeout = std::chrono::milliseconds(1500);
-        // Keep the "four-second"/"within 4 seconds" warning text in sync.
         constexpr auto kHudCruisePressSafetyLimit = std::chrono::seconds(4);
         constexpr auto kWorldSettleTime = std::chrono::milliseconds(2500);
         constexpr auto kMovieSubscribeSettleTime = std::chrono::milliseconds(250);
+        constexpr auto kFocusPollTime = std::chrono::milliseconds(50);
+        constexpr std::size_t kMaxStationAncestryDepth = 8;
         // Post-advance passes the native selection call keeps before diagnostics.
         // The unit is completed AS3 advances, not wall clock: each pass means
         // native finished one advance with the selection already applied.
