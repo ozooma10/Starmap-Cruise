@@ -24,6 +24,15 @@
   destination, and safety boundaries; extracted runtime-memory, native-binding,
   ControlMap, and Scaleform helpers into normal modules without changing the
   navigation state machine.
+- Deduplicated the fail-closed and phase-commit mechanisms behind shared
+  helpers (`FailRemoteRoute`, `TryCommitRemoteMoonPhase`), merged the twin
+  Starmap button builders and plugin-record walks, extracted raw
+  StarMapMenu/GalaxyState memory access into `src/Engine/GalaxyState.*`, and
+  split the shared utility floor into `NavShared.inl`/`HudCruiseInput.inl` so
+  each fragment matches its charter; behavior unchanged.
+- Removed the never-run `iGalaxyDiagnosticsMode` capture modes and the deep
+  galaxy-focus diagnostics sweeps; failure paths keep the selection proof and
+  root member list.
 
 ### Removed
 

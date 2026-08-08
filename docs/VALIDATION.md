@@ -151,6 +151,43 @@ build and a startup-log diff against a captured baseline instead.
 - [ ] Stage 6: record smoke results here and in the history file; re-run
   `tools/package-release.ps1` hash verification on the final build.
 
+### Simplification campaign (2026-08-08, code-complete, smoke pending)
+
+Seven commits on `simplify-bridge`; every commit built clean and
+`RecordReaderTests` passed before and after:
+
+- [x] RecordReader/BodyIndex dedup: shared `OpenPluginPastHeader` +
+  `ForEachTopLevelRecord` walk (loop bounds normalized to the strictest
+  semantics), predicate-taking parent-scan helper. Test-covered.
+- [x] Diagnostics trimmed to tripwires: `iGalaxyDiagnosticsMode` and the deep
+  galaxy-focus/hint-bar sweeps removed (Stage 2 retired above); QuickSelect
+  feed-shape pin, failure-path proof logging, and `bVerboseLog` retained; all
+  remaining timeout durations in log strings now format from their State.inl
+  constants.
+- [x] Mechanism dedup: `FailRemoteRoute` (13 driver exits; the identity-lost
+  exit now also sets `g_mapUiDirty` — deliberate drift fix),
+  `TryCommitRemoteMoonPhase` mirroring the Driver template with the strongest
+  re-verification predicate {phase, finalKind, finalFormID, finalCourseFormID,
+  system, parentFormID}, unified action-button builder, shared device-binding
+  switch, `MapSnapshot::cruiseEngageAvailable` mirror removed.
+- [x] `src/Engine/GalaxyState.*` extracted (vtable proofs, layout offsets,
+  selection read, Quick Select arm/close); the Inspection.inl forward
+  declaration is gone and the fragment include order is a pure topological
+  sort. Reads/writes and detail strings verbatim; per-touch re-proof retained.
+- [x] Fragment reorganization: new `NavShared.inl` utility floor and
+  `HudCruiseInput.inl`; Destination.inl reduced to the destination lifecycle;
+  misfiled functions moved home; movie-replacement resets moved beside their
+  owners. Pure function moves.
+
+**ONE consolidated smoke session covers this campaign plus the pending
+Stage 3/4/5a rows** (restart on the new DLL, `bVerboseLog=true`, preserve
+excerpts under `history/captures/`): rows **A, B, C, E, F, G, H** are
+required — E because the unified commit predicate touches station
+continuation phases — and **D** is best-effort; if D is not run, record it
+explicitly as not-run. Expected startup-log delta vs the captured baseline:
+the config line loses `galaxyDiagnosticsMode`; timeout log strings now print
+their formatted durations.
+
 ## Required release smoke
 
 - [ ] Restart on the newly built DLL and run one no-mouse remote-moon flow from
