@@ -73,6 +73,29 @@ namespace CFS::BodyIndex
                 handler->compiledFileCollection.mediumFiles.size(), plugins.size());
             return plugins;
         }
+
+        // Shared same-system parent scan; a_extra supplies the per-lookup
+        // acceptance predicate over each candidate.
+        template <class Extra>
+        std::vector<IndexedBody> CollectParents(std::uint32_t a_childFormID,
+            Extra&& a_extra)
+        {
+            std::vector<IndexedBody> parents;
+            std::lock_guard lock{ g_mutex };
+            const auto child = g_entries.find(a_childFormID);
+            if (child == g_entries.end() || !child->second.galaxy.parent)
+                return parents;
+
+            for (const auto& [formID, entry] : g_entries) {
+                if (entry.galaxy.system == child->second.galaxy.system &&
+                    entry.galaxy.planet == child->second.galaxy.parent &&
+                    a_extra(formID, entry)) {
+                    parents.push_back({ formID, entry.galaxy, entry.editorID });
+                }
+            }
+            std::ranges::sort(parents, {}, &IndexedBody::formID);
+            return parents;
+        }
     }
 
     void StartLoad()
@@ -139,40 +162,18 @@ namespace CFS::BodyIndex
 
     std::vector<IndexedBody> ParentPlanets(std::uint32_t a_moonFormID)
     {
-        std::vector<IndexedBody> parents;
-        std::lock_guard lock{ g_mutex };
-        const auto moon = g_entries.find(a_moonFormID);
-        if (moon == g_entries.end() || !moon->second.galaxy.parent)
-            return parents;
-
-        for (const auto& [formID, entry] : g_entries) {
-            if (entry.galaxy.system == moon->second.galaxy.system &&
-                entry.galaxy.parent == 0 &&
-                entry.galaxy.planet == moon->second.galaxy.parent) {
-                parents.push_back({ formID, entry.galaxy, entry.editorID });
-            }
-        }
-        std::ranges::sort(parents, {}, &IndexedBody::formID);
-        return parents;
+        return CollectParents(a_moonFormID,
+            [](std::uint32_t, const Entry& a_entry) {
+                return a_entry.galaxy.parent == 0;
+            });
     }
 
     std::vector<IndexedBody> ParentBodies(std::uint32_t a_childFormID)
     {
-        std::vector<IndexedBody> parents;
-        std::lock_guard lock{ g_mutex };
-        const auto child = g_entries.find(a_childFormID);
-        if (child == g_entries.end() || !child->second.galaxy.parent)
-            return parents;
-
-        for (const auto& [formID, entry] : g_entries) {
-            if (formID != a_childFormID &&
-                entry.galaxy.system == child->second.galaxy.system &&
-                entry.galaxy.planet == child->second.galaxy.parent) {
-                parents.push_back({ formID, entry.galaxy, entry.editorID });
-            }
-        }
-        std::ranges::sort(parents, {}, &IndexedBody::formID);
-        return parents;
+        return CollectParents(a_childFormID,
+            [a_childFormID](std::uint32_t a_formID, const Entry&) {
+                return a_formID != a_childFormID;
+            });
     }
 
     std::vector<IndexedBody> StationOrbitals(std::uint32_t a_cellFormID)

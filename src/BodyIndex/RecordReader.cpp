@@ -195,17 +195,31 @@ namespace CFS::BodyIndex::RecordReader
             return 0;
         }
 
-        void ParseStationBases(const std::filesystem::path& a_dataRoot,
-            const PluginInfo& a_plugin, const std::vector<PluginInfo>& a_masters,
-            std::unordered_set<std::uint32_t>& a_out)
+        std::ifstream OpenPluginPastHeader(const std::filesystem::path& a_path)
         {
-            std::ifstream file{ a_dataRoot / a_plugin.name, std::ios::binary };
+            std::ifstream file{ a_path, std::ios::binary };
             RecordHeader header{};
             if (!ReadExact(file, &header, sizeof(header)) ||
-                std::memcmp(header.signature, "TES4", 4) != 0)
-                return;
+                std::memcmp(header.signature, "TES4", 4) != 0) {
+                file.setstate(std::ios::failbit);
+                return file;
+            }
             file.seekg(header.dataSize, std::ios::cur);
-            const auto end = SeekGroup(file, "GBFM");
+            return file;
+        }
+
+        // Walks every a_recordSignature record inside the plugin's top-level
+        // a_groupLabel group, skipping nested groups, and hands each record's
+        // header plus decoded body to a_perRecord.
+        template <class PerRecord>
+        void ForEachTopLevelRecord(const std::filesystem::path& a_dataRoot,
+            const PluginInfo& a_plugin, const char (&a_groupLabel)[5],
+            const char (&a_recordSignature)[5], PerRecord&& a_perRecord)
+        {
+            auto file = OpenPluginPastHeader(a_dataRoot / a_plugin.name);
+            if (!file)
+                return;
+            const auto end = SeekGroup(file, a_groupLabel);
             if (!end)
                 return;
 
@@ -233,12 +247,20 @@ namespace CFS::BodyIndex::RecordReader
                 raw.resize(record.dataSize);
                 if (record.dataSize && !ReadExact(file, raw.data(), raw.size()))
                     break;
-                if (std::memcmp(record.signature, "GBFM", 4) != 0)
+                if (std::memcmp(record.signature, a_recordSignature, 4) != 0)
                     continue;
+                a_perRecord(record, RecordBody(record.flagsOrLabel, raw, scratch));
+            }
+        }
 
+        void ParseStationBases(const std::filesystem::path& a_dataRoot,
+            const PluginInfo& a_plugin, const std::vector<PluginInfo>& a_masters,
+            std::unordered_set<std::uint32_t>& a_out)
+        {
+            ForEachTopLevelRecord(a_dataRoot, a_plugin, "GBFM", "GBFM",
+                [&](const RecordHeader& a_record, std::span<const std::byte> a_body) {
                 bool isStation = false;
-                const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
-                ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
+                ForEachSubrecord(a_body.data(), a_body.size(), [&](std::string_view a_sig,
                     const std::byte* a_payload, std::size_t a_length) {
                     if (a_sig != "KWDA")
                         return true;
@@ -257,12 +279,12 @@ namespace CFS::BodyIndex::RecordReader
                     return true;
                 });
 
-                const auto runtimeID = ResolveFormID(record.formID, a_masters, a_plugin);
-                if ((record.flagsOrLabel & kDeleted) != 0 || !isStation)
+                const auto runtimeID = ResolveFormID(a_record.formID, a_masters, a_plugin);
+                if ((a_record.flagsOrLabel & kDeleted) != 0 || !isStation)
                     a_out.erase(runtimeID);
                 else
                     a_out.insert(runtimeID);
-            }
+            });
         }
 
         void ParseStationReferenceGroup(std::ifstream& a_file, std::uint64_t a_end,
@@ -408,12 +430,9 @@ namespace CFS::BodyIndex::RecordReader
             std::unordered_map<std::uint32_t, std::string>& a_cellEditorIDs,
             std::vector<Diagnostic>& a_diagnostics)
         {
-            std::ifstream file{ a_dataRoot / a_plugin.name, std::ios::binary };
-            RecordHeader header{};
-            if (!ReadExact(file, &header, sizeof(header)) ||
-                std::memcmp(header.signature, "TES4", 4) != 0)
+            auto file = OpenPluginPastHeader(a_dataRoot / a_plugin.name);
+            if (!file)
                 return;
-            file.seekg(header.dataSize, std::ios::cur);
 
             const auto before = a_out.size();
             while (file) {
@@ -449,49 +468,18 @@ namespace CFS::BodyIndex::RecordReader
             std::unordered_map<std::uint32_t, std::uint32_t>& a_out,
             std::vector<Diagnostic>& a_diagnostics)
         {
-            std::ifstream file{ a_dataRoot / a_plugin.name, std::ios::binary };
-            RecordHeader header{};
-            if (!ReadExact(file, &header, sizeof(header)) ||
-                std::memcmp(header.signature, "TES4", 4) != 0)
-                return;
-            file.seekg(header.dataSize, std::ios::cur);
-            const auto end = SeekGroup(file, "STDT");
-            if (!end)
-                return;
-
-            std::vector<std::byte> raw;
-            std::vector<std::byte> scratch;
             std::size_t count = 0;
-            while (file) {
-                const auto position = file.tellg();
-                if (position < 0 ||
-                    static_cast<std::uint64_t>(position) + sizeof(RecordHeader) >= end)
-                    break;
-                const auto start = static_cast<std::uint64_t>(position);
-                RecordHeader record{};
-                if (!ReadExact(file, &record, sizeof(record)))
-                    break;
-                if (std::memcmp(record.signature, "GRUP", 4) == 0) {
-                    file.seekg(static_cast<std::streamoff>(start + record.dataSize),
-                        std::ios::beg);
-                    continue;
-                }
-                raw.resize(record.dataSize);
-                if (record.dataSize && !ReadExact(file, raw.data(), raw.size()))
-                    break;
-                if (std::memcmp(record.signature, "STDT", 4) != 0)
-                    continue;
-
-                const auto runtimeID = ResolveFormID(record.formID, a_masters, a_plugin);
-                if ((record.flagsOrLabel & kDeleted) != 0) {
+            ForEachTopLevelRecord(a_dataRoot, a_plugin, "STDT", "STDT",
+                [&](const RecordHeader& a_record, std::span<const std::byte> a_body) {
+                const auto runtimeID = ResolveFormID(a_record.formID, a_masters, a_plugin);
+                if ((a_record.flagsOrLabel & kDeleted) != 0) {
                     a_out.erase(runtimeID);
-                    continue;
+                    return;
                 }
 
                 std::uint32_t systemID = 0;
                 bool haveSystemID = false;
-                const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
-                ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
+                ForEachSubrecord(a_body.data(), a_body.size(), [&](std::string_view a_sig,
                     const std::byte* a_payload, std::size_t a_length) {
                     if (a_sig == "DNAM" && a_length >= sizeof(systemID)) {
                         std::memcpy(&systemID, a_payload, sizeof(systemID));
@@ -502,10 +490,10 @@ namespace CFS::BodyIndex::RecordReader
                 });
                 if (!haveSystemID || !a_isLiveForm ||
                     !a_isLiveForm(runtimeID, LiveFormKind::kStarData))
-                    continue;
+                    return;
                 a_out.insert_or_assign(runtimeID, systemID);
                 ++count;
-            }
+            });
             if (count) {
                 a_diagnostics.push_back({ false,
                     std::format("{} STDT system roots from {}", count, a_plugin.name) });
@@ -518,43 +506,12 @@ namespace CFS::BodyIndex::RecordReader
             std::unordered_map<std::uint32_t, Entry>& a_out,
             std::vector<Diagnostic>& a_diagnostics)
         {
-            std::ifstream file{ a_dataRoot / a_plugin.name, std::ios::binary };
-            RecordHeader header{};
-            if (!ReadExact(file, &header, sizeof(header)) ||
-                std::memcmp(header.signature, "TES4", 4) != 0)
-                return;
-            file.seekg(header.dataSize, std::ios::cur);
-            const auto end = SeekGroup(file, "PNDT");
-            if (!end)
-                return;
-
-            std::vector<std::byte> raw;
-            std::vector<std::byte> scratch;
             std::size_t count = 0;
-            while (file) {
-                const auto position = file.tellg();
-                if (position < 0 ||
-                    static_cast<std::uint64_t>(position) + sizeof(RecordHeader) >= end)
-                    break;
-                const auto start = static_cast<std::uint64_t>(position);
-                RecordHeader record{};
-                if (!ReadExact(file, &record, sizeof(record)))
-                    break;
-                if (std::memcmp(record.signature, "GRUP", 4) == 0) {
-                    file.seekg(static_cast<std::streamoff>(start + record.dataSize),
-                        std::ios::beg);
-                    continue;
-                }
-                raw.resize(record.dataSize);
-                if (record.dataSize && !ReadExact(file, raw.data(), raw.size()))
-                    break;
-                if (std::memcmp(record.signature, "PNDT", 4) != 0)
-                    continue;
-
+            ForEachTopLevelRecord(a_dataRoot, a_plugin, "PNDT", "PNDT",
+                [&](const RecordHeader& a_record, std::span<const std::byte> a_body) {
                 Entry entry;
                 bool haveGalaxy = false;
-                const auto body = RecordBody(record.flagsOrLabel, raw, scratch);
-                ForEachSubrecord(body.data(), body.size(), [&](std::string_view a_sig,
+                ForEachSubrecord(a_body.data(), a_body.size(), [&](std::string_view a_sig,
                     const std::byte* a_payload, std::size_t a_length) {
                     if (a_sig == "EDID" && a_length > 1) {
                         const auto* chars = reinterpret_cast<const char*>(a_payload);
@@ -579,14 +536,14 @@ namespace CFS::BodyIndex::RecordReader
                     return true;
                 });
                 if (!haveGalaxy)
-                    continue;
-                const auto runtimeID = ResolveFormID(record.formID, a_masters, a_plugin);
+                    return;
+                const auto runtimeID = ResolveFormID(a_record.formID, a_masters, a_plugin);
                 if (!a_isLiveForm ||
                     !a_isLiveForm(runtimeID, LiveFormKind::kPlanetData))
-                    continue;
+                    return;
                 a_out.insert_or_assign(runtimeID, std::move(entry));
                 ++count;
-            }
+            });
             if (count) {
                 a_diagnostics.push_back({ false,
                     std::format("{} PNDT records from {}", count, a_plugin.name) });
