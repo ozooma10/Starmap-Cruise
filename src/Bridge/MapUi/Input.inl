@@ -272,23 +272,74 @@
             REX::INFO("[input] UI::PerformInputProcessing hook installed (physical device/id tracking)");
         }
 
-        std::uint64_t EligibilitySignature(const MapSnapshot& a_snapshot,
-            const MapEligibility& a_eligibility, bool a_engageAvailable)
+        void ResolveCruiseMapBinding()
         {
-            std::uint64_t signature = 1469598103934665603ull;
-            const auto mix = [&signature](std::uint64_t a_value) {
-                signature ^= a_value;
-                signature *= 1099511628211ull;
-            };
-            mix(a_snapshot.generation);
-            mix(a_snapshot.session);
-            mix(a_snapshot.wasCruising);
-            mix(a_engageAvailable);
-            mix(g_lastInputWasGamepad.load(std::memory_order_acquire));
-            mix(static_cast<std::uint64_t>(a_eligibility.code));
-            mix(a_snapshot.markerBodyID);
-            mix(a_snapshot.markerBodyType);
-            mix(a_snapshot.dossierBodyID);
-            mix(a_snapshot.dossierBodyType);
-            return signature;
+            const auto resolved = Input::ResolveCruiseBindings();
+            if (!resolved) {
+                g_cruiseMapKey.store(-1, std::memory_order_release);
+                g_cruiseMapModifier.store(-1, std::memory_order_release);
+                g_cruiseMapMouseButton.store(-1, std::memory_order_release);
+                g_cruiseMapGamepadButton.store(-1, std::memory_order_release);
+                REX::WARN("[input] live Cruise bindings unavailable: ControlMap validation failed");
+                return;
+            }
+
+            auto key = resolved->keyboard.code;
+            auto modifier = resolved->keyboard.modifier;
+            auto mouseButton = resolved->mouse.code;
+            const auto mouseModifier = resolved->mouse.modifier;
+            auto gamepadButton = resolved->gamepad.code;
+            const auto gamepadModifier = resolved->gamepad.modifier;
+
+            // The UI hook can identify one physical ButtonEvent at a time. Do
+            // not claim a mouse/gamepad chord unless its second edge can also
+            // be proven; the shipped SHMonocle binding is a single button.
+            if (mouseButton >= 0 && mouseModifier >= 0) {
+                REX::WARN("[input] mouse Cruise chord is unsupported; mouse routing disabled");
+                mouseButton = -1;
+            }
+            if (gamepadButton >= 0 && gamepadModifier >= 0) {
+                REX::WARN("[input] controller '{}' chord is unsupported; controller routing disabled",
+                    kCruiseMapGamepadUserEvent);
+                gamepadButton = -1;
+            }
+
+            const auto oldKey = g_cruiseMapKey.exchange(key, std::memory_order_acq_rel);
+            const auto oldModifier = g_cruiseMapModifier.exchange(modifier, std::memory_order_acq_rel);
+            const auto oldMouse = g_cruiseMapMouseButton.exchange(mouseButton,
+                std::memory_order_acq_rel);
+            const auto oldGamepad = g_cruiseMapGamepadButton.exchange(gamepadButton,
+                std::memory_order_acq_rel);
+            if (key >= 0 && (oldKey != key || oldModifier != modifier)) {
+                REX::INFO("[input] Starmap Cruise action follows live Cruise binding: VK=0x{:02X} modifier={}",
+                    key, modifier < 0 ? "none" : std::format("0x{:02X}", modifier));
+            }
+            if (mouseButton >= 0 && oldMouse != mouseButton)
+                REX::INFO("[input] Starmap Cruise action follows live mouse Cruise binding: id={}",
+                    mouseButton);
+            if (gamepadButton >= 0 && oldGamepad != gamepadButton)
+                REX::INFO("[input] Starmap Cruise action follows live controller '{}' binding: id={} modifier={}",
+                    kCruiseMapGamepadUserEvent, gamepadButton,
+                    gamepadModifier < 0 ? "none" : std::format("{}", gamepadModifier));
+            if (key < 0 && mouseButton < 0 && gamepadButton < 0)
+                REX::WARN("[input] Cruise has no keyboard, mouse, or controller binding; Starmap Cruise action disabled");
+        }
+
+        void ResetHold(const char* a_reason)
+        {
+            bool changed = false;
+            {
+                std::lock_guard lock{ g_holdMutex };
+                changed = g_hold.active || g_claimMapKey;
+                g_hold = {};
+                g_claimMapKey = false;
+            }
+            CancelOrReleaseHudCruiseInput(a_reason);
+            if (!ReleaseNavStateToMark() &&
+                g_state.load(std::memory_order_acquire) == NavState::kMapSelection &&
+                Settings::Verbose())
+                REX::INFO("[input] active Starmap selection preserved across hold reset: {}",
+                    a_reason);
+            if (changed && Settings::Verbose())
+                REX::INFO("[input] pending physical hold reset: {}", a_reason);
         }

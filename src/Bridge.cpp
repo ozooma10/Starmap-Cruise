@@ -47,6 +47,8 @@ namespace CFS::Bridge
         using ScaleformValue::UIntMember;
 
 #include "Bridge/State.inl"
+#include "Bridge/NavShared.inl"
+#include "Bridge/HudCruiseInput.inl"
 #include "Bridge/Destination.inl"
 #include "Bridge/SafetyEvents.inl"
 #include "Bridge/Selection.inl"
@@ -146,7 +148,8 @@ namespace CFS::Bridge
             return;
 
         try {
-            ReleaseStaleUiState();
+            ReleaseStaleMapUiState();
+            ReleaseStaleHudUiState();
             TrySubscribe();
             ProcessLowSnapshot();
 

@@ -44,35 +44,6 @@
             a_live.inactiveSince = {};
         }
 
-        void FailRemoteMoonContinuation(const std::string& a_reason)
-        {
-            if (!RemoteMoonContinuationActive())
-                return;
-            const auto continuation = RemoteMoonState();
-            REX::WARN("[orbital] automatic {} continuation failed closed: {}",
-                continuation ? DestinationKindName(continuation->finalKind) : "target",
-                a_reason);
-            CancelOrReleaseHudCruiseInput(a_reason.c_str());
-            ClearDestination(a_reason.c_str());
-        }
-
-        // Fails whichever remote continuation currently owns the automation, or
-        // releases a kAwaitingCruise nav state back to the mark when neither
-        // does. Returns true when a continuation consumed the failure.
-        bool FailActiveContinuationsOrRelease(const char* a_reason)
-        {
-            if (RemoteMoonContinuationActive()) {
-                FailRemoteMoonContinuation(a_reason);
-                return true;
-            }
-            if (RemoteStationTargetAssigned()) {
-                FailRemoteStationContinuation(a_reason);
-                return true;
-            }
-            ReleaseNavStateToMark();
-            return false;
-        }
-
         bool StartRemoteMoonContinuation(const BodyDestination& a_destination)
         {
             if (a_destination.kind != BodyKind::kMoon)
@@ -381,63 +352,6 @@
             if (!quickEntrySet)
                 REX::WARN("[map] stock DataMenu quick-entry dispatch failed before close-all");
             return closeAll;
-        }
-
-        bool InvokeHudCruiseUserEvent(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            const char* a_rootPath, const char* a_userEvent, bool a_down)
-        {
-            V menu;
-            const char* path = a_rootPath && *a_rootPath ? a_rootPath : "root";
-            if (!a_root->GetVariable(&menu, path) ||
-                !(menu.IsObject() || menu.IsDisplayObject())) {
-                REX::WARN("[input] HUD root '{}' unavailable for Cruise {}",
-                    path, a_down ? "press" : "release");
-                return false;
-            }
-
-            V eventName;
-            a_root->CreateString(&eventName, a_userEvent);
-            V args[2]{ eventName, V{ a_down } };
-            V handled;
-            const bool invoked = menu.Invoke("ProcessUserEvent", &handled, args, 2);
-            REX::INFO("[input] forwarded stock HUD '{}' {} invoked={} handled={}",
-                a_userEvent, a_down ? "press" : "release", invoked,
-                handled.IsBoolean() ? handled.GetBoolean() : false);
-            return invoked;
-        }
-
-        void DriveHudCruiseInput(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            const char* a_rootPath)
-        {
-            bool press = false;
-            bool release = false;
-            const char* userEvent = "Cruise";
-            {
-                std::lock_guard lock{ g_hudCruiseInputMutex };
-                userEvent = g_hudCruiseUserEvent;
-                if (g_hudCruiseInputPhase == HudCruiseInputPhase::kPressPending) {
-                    // Publish the new phase before calling ActionScript. This
-                    // prevents a synchronous callback from repeating the edge.
-                    g_hudCruiseInputPhase = HudCruiseInputPhase::kPressed;
-                    press = true;
-                } else if (g_hudCruiseInputPhase == HudCruiseInputPhase::kReleasePending) {
-                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
-                    g_hudCruiseUserEvent = "Cruise";
-                    release = true;
-                }
-            }
-
-            if (press && !InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, true)) {
-                {
-                    std::lock_guard lock{ g_hudCruiseInputMutex };
-                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
-                    g_hudCruiseUserEvent = "Cruise";
-                    g_hudCruiseInputLatched = false;
-                    g_hudCruiseInputStarted = {};
-                }
-                FailActiveContinuationsOrRelease("stock HUD Cruise press invocation failed");
-            } else if (release)
-                InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, false);
         }
 
         void RunCourseRequest(RE::Scaleform::GFx::ASMovieRootBase* a_root)

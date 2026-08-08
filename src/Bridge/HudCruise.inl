@@ -173,23 +173,6 @@
             }
         };
 
-        bool WorldSettled()
-        {
-            const auto last = Clock::time_point{ Clock::duration{
-                g_lastUnsettledTicks.load(std::memory_order_acquire) } };
-            return Clock::now() - last > kWorldSettleTime;
-        }
-
-        bool HudMovieSettled(std::uint32_t a_generation)
-        {
-            if (a_generation == 0 ||
-                g_hudMovie.generation.load(std::memory_order_acquire) != a_generation)
-                return false;
-            const auto born = Clock::time_point{ Clock::duration{
-                g_hudMovie.bornTicks.load(std::memory_order_acquire) } };
-            return Clock::now() - born >= kHudMovieSettleTime;
-        }
-
         void UpdateMarkedDistance(const std::vector<DistanceSample>& a_distances,
             std::uint32_t a_hudGeneration)
         {
@@ -252,22 +235,72 @@
             }
         } g_highHandler;
 
-        void ReleaseStaleUiState()
+        void ReleaseStaleHudUiState()
         {
-            const auto reset = g_uiResetMask.exchange(0, std::memory_order_acq_rel);
-            if ((reset & kResetMapUi) != 0) {
-                g_mapActionHint = {};
-                g_mapActionInteractive.store(false, std::memory_order_release);
-                g_mapActionTapOnly.store(false, std::memory_order_release);
-                g_pendingMapAction.store(MapAction::kNone, std::memory_order_release);
-            }
+            const auto reset = g_uiResetMask.fetch_and(
+                ~kResetHudUi, std::memory_order_acq_rel);
             if ((reset & kResetHudUi) != 0) {
-                {
-                    std::lock_guard lock{ g_hudDistancesMutex };
-                    g_hudDistances.clear();
-                    g_hudDistancesGeneration = 0;
+                std::lock_guard lock{ g_hudDistancesMutex };
+                g_hudDistances.clear();
+                g_hudDistancesGeneration = 0;
+            }
+        }
+
+        bool InvokeHudCruiseUserEvent(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+            const char* a_rootPath, const char* a_userEvent, bool a_down)
+        {
+            V menu;
+            const char* path = a_rootPath && *a_rootPath ? a_rootPath : "root";
+            if (!a_root->GetVariable(&menu, path) ||
+                !(menu.IsObject() || menu.IsDisplayObject())) {
+                REX::WARN("[input] HUD root '{}' unavailable for Cruise {}",
+                    path, a_down ? "press" : "release");
+                return false;
+            }
+
+            V eventName;
+            a_root->CreateString(&eventName, a_userEvent);
+            V args[2]{ eventName, V{ a_down } };
+            V handled;
+            const bool invoked = menu.Invoke("ProcessUserEvent", &handled, args, 2);
+            REX::INFO("[input] forwarded stock HUD '{}' {} invoked={} handled={}",
+                a_userEvent, a_down ? "press" : "release", invoked,
+                handled.IsBoolean() ? handled.GetBoolean() : false);
+            return invoked;
+        }
+
+        void DriveHudCruiseInput(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+            const char* a_rootPath)
+        {
+            bool press = false;
+            bool release = false;
+            const char* userEvent = "Cruise";
+            {
+                std::lock_guard lock{ g_hudCruiseInputMutex };
+                userEvent = g_hudCruiseUserEvent;
+                if (g_hudCruiseInputPhase == HudCruiseInputPhase::kPressPending) {
+                    // Publish the new phase before calling ActionScript. This
+                    // prevents a synchronous callback from repeating the edge.
+                    g_hudCruiseInputPhase = HudCruiseInputPhase::kPressed;
+                    press = true;
+                } else if (g_hudCruiseInputPhase == HudCruiseInputPhase::kReleasePending) {
+                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
+                    g_hudCruiseUserEvent = "Cruise";
+                    release = true;
                 }
             }
+
+            if (press && !InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, true)) {
+                {
+                    std::lock_guard lock{ g_hudCruiseInputMutex };
+                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
+                    g_hudCruiseUserEvent = "Cruise";
+                    g_hudCruiseInputLatched = false;
+                    g_hudCruiseInputStarted = {};
+                }
+                FailActiveContinuationsOrRelease("stock HUD Cruise press invocation failed");
+            } else if (release)
+                InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, false);
         }
 
         void ReconcileHudUi()

@@ -1,42 +1,7 @@
 // Included by Bridge.cpp inside CFS::Bridge's anonymous namespace.
-// Owns current-system resolution and destination state.
-
-        const char* DestinationKindName(BodyKind a_kind)
-        {
-            switch (a_kind) {
-            case BodyKind::kPlanet:
-                return "planet";
-            case BodyKind::kMoon:
-                return "moon";
-            case BodyKind::kStation:
-                return "station";
-            default:
-                return "non-planet target";
-            }
-        }
-
-        bool IsPlanetary(const BodyDestination& a_destination)
-        {
-            return a_destination.kind == BodyKind::kPlanet ||
-                   a_destination.kind == BodyKind::kMoon;
-        }
-
-        std::uint32_t CourseTargetID(const BodyDestination& a_destination)
-        {
-            return a_destination.courseFormID ? a_destination.courseFormID :
-                                                a_destination.formID;
-        }
-
-        bool UsesRemoteSystemRoute(const BodyDestination& a_destination)
-        {
-            return IsPlanetary(a_destination) ||
-                   a_destination.kind == BodyKind::kStation;
-        }
-
-        std::optional<std::uint32_t> MapTreeSystemID(std::uint32_t a_formID)
-        {
-            return BodyIndex::LookupSystemRoot(a_formID);
-        }
+// Owns the destination lifecycle: current-system resolution, native station
+// target assignment, arrival-audit arming, and the store/clear/fail-closed
+// plumbing every driver funnels through.
 
         void ResolveCurrentSystem(const std::vector<HudRow>& a_rows)
         {
@@ -94,131 +59,6 @@
             }
         }
 
-        void ResolveCruiseMapBinding()
-        {
-            const auto resolved = Input::ResolveCruiseBindings();
-            if (!resolved) {
-                g_cruiseMapKey.store(-1, std::memory_order_release);
-                g_cruiseMapModifier.store(-1, std::memory_order_release);
-                g_cruiseMapMouseButton.store(-1, std::memory_order_release);
-                g_cruiseMapGamepadButton.store(-1, std::memory_order_release);
-                REX::WARN("[input] live Cruise bindings unavailable: ControlMap validation failed");
-                return;
-            }
-
-            auto key = resolved->keyboard.code;
-            auto modifier = resolved->keyboard.modifier;
-            auto mouseButton = resolved->mouse.code;
-            const auto mouseModifier = resolved->mouse.modifier;
-            auto gamepadButton = resolved->gamepad.code;
-            const auto gamepadModifier = resolved->gamepad.modifier;
-
-            // The UI hook can identify one physical ButtonEvent at a time. Do
-            // not claim a mouse/gamepad chord unless its second edge can also
-            // be proven; the shipped SHMonocle binding is a single button.
-            if (mouseButton >= 0 && mouseModifier >= 0) {
-                REX::WARN("[input] mouse Cruise chord is unsupported; mouse routing disabled");
-                mouseButton = -1;
-            }
-            if (gamepadButton >= 0 && gamepadModifier >= 0) {
-                REX::WARN("[input] controller '{}' chord is unsupported; controller routing disabled",
-                    kCruiseMapGamepadUserEvent);
-                gamepadButton = -1;
-            }
-
-            const auto oldKey = g_cruiseMapKey.exchange(key, std::memory_order_acq_rel);
-            const auto oldModifier = g_cruiseMapModifier.exchange(modifier, std::memory_order_acq_rel);
-            const auto oldMouse = g_cruiseMapMouseButton.exchange(mouseButton,
-                std::memory_order_acq_rel);
-            const auto oldGamepad = g_cruiseMapGamepadButton.exchange(gamepadButton,
-                std::memory_order_acq_rel);
-            if (key >= 0 && (oldKey != key || oldModifier != modifier)) {
-                REX::INFO("[input] Starmap Cruise action follows live Cruise binding: VK=0x{:02X} modifier={}",
-                    key, modifier < 0 ? "none" : std::format("0x{:02X}", modifier));
-            }
-            if (mouseButton >= 0 && oldMouse != mouseButton)
-                REX::INFO("[input] Starmap Cruise action follows live mouse Cruise binding: id={}",
-                    mouseButton);
-            if (gamepadButton >= 0 && oldGamepad != gamepadButton)
-                REX::INFO("[input] Starmap Cruise action follows live controller '{}' binding: id={} modifier={}",
-                    kCruiseMapGamepadUserEvent, gamepadButton,
-                    gamepadModifier < 0 ? "none" : std::format("{}", gamepadModifier));
-            if (key < 0 && mouseButton < 0 && gamepadButton < 0)
-                REX::WARN("[input] Cruise has no keyboard, mouse, or controller binding; Starmap Cruise action disabled");
-        }
-
-        bool IsShipInSpace(RE::TESObjectREFR* a_ship)
-        {
-            return RuntimeBindings::IsShipInSpace(a_ship);
-        }
-
-        bool IsFlying()
-        {
-            const auto player = RE::PlayerCharacter::GetSingleton();
-            const auto ship = player ? player->GetSpaceship() : nullptr;
-            return IsShipInSpace(ship);
-        }
-
-        struct LiveReferenceTarget
-        {
-            std::uint32_t referenceFormID{ 0 };
-            std::uint32_t baseFormID{ 0 };
-        };
-
-        std::vector<LiveReferenceTarget> ResolveStationTargets(std::uint32_t a_mapFormID)
-        {
-            std::vector<LiveReferenceTarget> resolved;
-            const auto appendLive = [&resolved](LiveReferenceTarget a_candidate) {
-                const auto form = RE::TESForm::LookupByID(a_candidate.referenceFormID);
-                const auto reference = form ? form->As<RE::TESObjectREFR>() : nullptr;
-                const auto base = reference ? reference->GetBaseObject() : nullptr;
-                if (!base || !BodyIndex::IsStationBase(base->GetFormID()))
-                    return;
-                a_candidate.baseFormID = base->GetFormID();
-                resolved.push_back(std::move(a_candidate));
-            };
-
-            // Dynamic map markers may already be the live station reference.
-            if (const auto form = RE::TESForm::LookupByID(a_mapFormID)) {
-                if (const auto reference = form->As<RE::TESObjectREFR>()) {
-                    const auto base = reference->GetBaseObject();
-                    if (base && BodyIndex::IsStationBase(base->GetFormID())) {
-                        appendLive({
-                            .referenceFormID = a_mapFormID,
-                            .baseFormID = base->GetFormID(),
-                        });
-                    }
-                }
-            }
-            for (const auto& candidate : BodyIndex::StationTargets(a_mapFormID))
-                appendLive({ candidate.referenceFormID, candidate.baseFormID });
-
-            std::ranges::sort(resolved, {}, &LiveReferenceTarget::referenceFormID);
-            resolved.erase(std::unique(resolved.begin(), resolved.end(),
-                [](const LiveReferenceTarget& a_left,
-                    const LiveReferenceTarget& a_right) {
-                    return a_left.referenceFormID == a_right.referenceFormID;
-                }), resolved.end());
-            return resolved;
-        }
-
-        std::vector<HudRow> CurrentHudTargets(std::uint32_t a_formID)
-        {
-            std::vector<HudRow> matches;
-            std::lock_guard lock{ g_hudRowsMutex };
-            for (const auto& row : g_hudRows) {
-                if (row.id == a_formID)
-                    matches.push_back(row);
-            }
-            return matches;
-        }
-
-        ProcessedHudSnapshot CurrentProcessedHudSnapshot()
-        {
-            std::lock_guard lock{ g_processedHudMutex };
-            return g_processedHudSnapshot;
-        }
-
         bool AssignNativeShipTarget(const BodyDestination& a_destination)
         {
             if (a_destination.kind != BodyKind::kStation)
@@ -255,32 +95,6 @@
                 a_destination.mapFormID, a_destination.mapType, a_destination.formID,
                 base->GetFormID());
             return true;
-        }
-
-        std::optional<BodyDestination> Destination()
-        {
-            std::lock_guard lock{ g_destinationMutex };
-            return g_destination;
-        }
-
-        std::optional<RemoteMoonContinuation> RemoteMoonState()
-        {
-            std::lock_guard lock{ g_remoteMoonMutex };
-            if (g_remoteMoonContinuation.phase == RemoteMoonPhase::kNone)
-                return std::nullopt;
-            return g_remoteMoonContinuation;
-        }
-
-        bool RemoteMoonContinuationActive()
-        {
-            std::lock_guard lock{ g_remoteMoonMutex };
-            return g_remoteMoonContinuation.phase != RemoteMoonPhase::kNone;
-        }
-
-        void ResetRemoteMoonContinuation()
-        {
-            std::lock_guard lock{ g_remoteMoonMutex };
-            g_remoteMoonContinuation = {};
         }
 
         void RecordCourseLock(std::uint32_t a_hudGeneration)
@@ -337,72 +151,6 @@
             const auto released = Destination() ? NavState::kMarked : NavState::kIdle;
             return g_state.compare_exchange_strong(expected, released,
                 std::memory_order_acq_rel, std::memory_order_acquire);
-        }
-
-        void CancelOrReleaseHudCruiseInput(const char* a_reason)
-        {
-            const char* action = nullptr;
-            {
-                std::lock_guard lock{ g_hudCruiseInputMutex };
-                g_hudCruiseInputLatched = false;
-                g_hudCruiseInputStarted = {};
-                if (g_hudCruiseInputPhase == HudCruiseInputPhase::kPressPending) {
-                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
-                    g_hudCruiseUserEvent = "Cruise";
-                    action = "cancelled pending press";
-                } else if (g_hudCruiseInputPhase == HudCruiseInputPhase::kPressed) {
-                    g_hudCruiseInputPhase = HudCruiseInputPhase::kReleasePending;
-                    action = "queued release";
-                }
-            }
-            g_hudUiDirty.store(true, std::memory_order_release);
-            if (action && Settings::Verbose())
-                REX::INFO("[input] HUD Cruise {}: {}", action, a_reason);
-        }
-
-        bool QueueHudCruisePress(RE::InputEvent::DeviceType a_device)
-        {
-            std::lock_guard lock{ g_hudCruiseInputMutex };
-            if (g_hudCruiseInputPhase != HudCruiseInputPhase::kIdle)
-                return false;
-            // ShipReticle installs a different quick/hold combo for controller
-            // mode. Both combos reach the same stock Cruise hold callback.
-            g_hudCruiseUserEvent = a_device == RE::InputEvent::DeviceType::kGamepad ?
-                                       kCruiseMapGamepadUserEvent :
-                                       "Cruise";
-            g_hudCruiseInputPhase = HudCruiseInputPhase::kPressPending;
-            // The Starmap's completed fill is the user's confirmation. Keep
-            // the separate cockpit hold pressed even if the physical key is
-            // released, then release on Cruise activation or the safety limit.
-            g_hudCruiseInputLatched = true;
-            g_hudCruiseInputStarted = Clock::now();
-            g_hudUiDirty.store(true, std::memory_order_release);
-            return true;
-        }
-
-        bool HudCruiseInputLatched()
-        {
-            std::lock_guard lock{ g_hudCruiseInputMutex };
-            return g_hudCruiseInputLatched;
-        }
-
-        void ResetHold(const char* a_reason)
-        {
-            bool changed = false;
-            {
-                std::lock_guard lock{ g_holdMutex };
-                changed = g_hold.active || g_claimMapKey;
-                g_hold = {};
-                g_claimMapKey = false;
-            }
-            CancelOrReleaseHudCruiseInput(a_reason);
-            if (!ReleaseNavStateToMark() &&
-                g_state.load(std::memory_order_acquire) == NavState::kMapSelection &&
-                Settings::Verbose())
-                REX::INFO("[input] active Starmap selection preserved across hold reset: {}",
-                    a_reason);
-            if (changed && Settings::Verbose())
-                REX::INFO("[input] pending physical hold reset: {}", a_reason);
         }
 
         void ResetDestinationDependentState(NavState a_state)
@@ -473,15 +221,6 @@
                     DestinationKindName(a_destination.kind));
         }
 
-        // A native station target assignment is pending exact-lock readback.
-        // Orthogonal to RemoteMoonContinuationActive(): the shared continuation
-        // record covers both moons and stations, while this flag is also set on
-        // the direct station path where no continuation record exists.
-        bool RemoteStationTargetAssigned()
-        {
-            return g_pendingStationAssignedID.load(std::memory_order_acquire) != 0;
-        }
-
         void FailRemoteStationContinuation(const char* a_reason)
         {
             if (!RemoteStationTargetAssigned())
@@ -490,4 +229,33 @@
                 a_reason);
             CancelOrReleaseHudCruiseInput(a_reason);
             ClearDestination(a_reason);
+        }
+
+        void FailRemoteMoonContinuation(const std::string& a_reason)
+        {
+            if (!RemoteMoonContinuationActive())
+                return;
+            const auto continuation = RemoteMoonState();
+            REX::WARN("[orbital] automatic {} continuation failed closed: {}",
+                continuation ? DestinationKindName(continuation->finalKind) : "target",
+                a_reason);
+            CancelOrReleaseHudCruiseInput(a_reason.c_str());
+            ClearDestination(a_reason.c_str());
+        }
+
+        // Fails whichever remote continuation currently owns the automation, or
+        // releases a kAwaitingCruise nav state back to the mark when neither
+        // does. Returns true when a continuation consumed the failure.
+        bool FailActiveContinuationsOrRelease(const char* a_reason)
+        {
+            if (RemoteMoonContinuationActive()) {
+                FailRemoteMoonContinuation(a_reason);
+                return true;
+            }
+            if (RemoteStationTargetAssigned()) {
+                FailRemoteStationContinuation(a_reason);
+                return true;
+            }
+            ReleaseNavStateToMark();
+            return false;
         }

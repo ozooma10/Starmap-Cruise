@@ -18,11 +18,12 @@ environment while producing verified main and symbols archives.
 
 `src/Bridge.cpp` is the public facade and single translation-unit owner for
 navigation orchestration. Its ordered `src/Bridge/**/*.inl` fragments keep the
-anonymous shared state and hook ownership in one unit while subdividing
-destination state, safety events, eligibility, remote-route inspection/course/
-action/driver stages, map input/action/provider work, HUD Cruise, and lifecycle
-work. Keep the include order documented in `src/Bridge/README.md` unless shared
-state ownership and initialization order are redesigned and revalidated.
+anonymous shared state and hook ownership in one unit while subdividing the
+shared utility floor, HUD Cruise input latch producers, destination lifecycle,
+safety events, eligibility, remote-route inspection/course/action/driver
+stages, map input/action/provider work, HUD Cruise, and lifecycle work. Keep
+the include order documented in `src/Bridge/README.md` unless shared state
+ownership and initialization order are redesigned and revalidated.
 
 Reusable low-level work does not belong in a Bridge fragment. Core navigation
 callable fingerprints and ownership live in `src/Engine/RuntimeBindings.*`,

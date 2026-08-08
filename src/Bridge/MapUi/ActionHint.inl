@@ -7,6 +7,41 @@
                    (a_buttonBar.IsObject() || a_buttonBar.IsDisplayObject());
         }
 
+        void ReleaseStaleMapUiState()
+        {
+            const auto reset = g_uiResetMask.fetch_and(
+                ~kResetMapUi, std::memory_order_acq_rel);
+            if ((reset & kResetMapUi) != 0) {
+                g_mapActionHint = {};
+                g_mapActionInteractive.store(false, std::memory_order_release);
+                g_mapActionTapOnly.store(false, std::memory_order_release);
+                g_pendingMapAction.store(MapAction::kNone, std::memory_order_release);
+            }
+        }
+
+        // The change-detector that keeps the hint pass from touching the
+        // vanilla button state when nothing it depends on has changed.
+        std::uint64_t EligibilitySignature(const MapSnapshot& a_snapshot,
+            const MapEligibility& a_eligibility, bool a_engageAvailable)
+        {
+            std::uint64_t signature = 1469598103934665603ull;
+            const auto mix = [&signature](std::uint64_t a_value) {
+                signature ^= a_value;
+                signature *= 1099511628211ull;
+            };
+            mix(a_snapshot.generation);
+            mix(a_snapshot.session);
+            mix(a_snapshot.wasCruising);
+            mix(a_engageAvailable);
+            mix(g_lastInputWasGamepad.load(std::memory_order_acquire));
+            mix(static_cast<std::uint64_t>(a_eligibility.code));
+            mix(a_snapshot.markerBodyID);
+            mix(a_snapshot.markerBodyType);
+            mix(a_snapshot.dossierBodyID);
+            mix(a_snapshot.dossierBodyType);
+            return signature;
+        }
+
         // Builds either the stacked tap+hold combo button or the tap-only
         // button; the two differ only in the hold leg, the ButtonData class,
         // and the factory type.
