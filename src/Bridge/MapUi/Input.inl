@@ -88,11 +88,11 @@
             if (g_hold.suppressUntilRelease) {
                 if (!down) {
                     g_hold.active = false;
-                    if (HudCruiseInputLatched()) {
+                    if (g_hudCruiseInput.Latched()) {
                         if (Settings::Verbose())
                             REX::INFO("[input] physical control released after completed Starmap hold; HUD Cruise remains pressed until activation");
                     } else {
-                        CancelOrReleaseHudCruiseInput("physical control released");
+                        g_hudCruiseInput.CancelOrRelease("physical control released");
                     }
                     if (g_state.load(std::memory_order_acquire) == NavState::kAwaitingCruise &&
                         !g_cruiseActive.load(std::memory_order_acquire))
@@ -334,7 +334,7 @@
                 g_hold = {};
                 g_claimMapKey = false;
             }
-            CancelOrReleaseHudCruiseInput(a_reason);
+            g_hudCruiseInput.CancelOrRelease(a_reason);
             if (!ReleaseNavStateToMark() &&
                 g_state.load(std::memory_order_acquire) == NavState::kMapSelection &&
                 Settings::Verbose())

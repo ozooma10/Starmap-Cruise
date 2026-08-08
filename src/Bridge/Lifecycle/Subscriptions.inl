@@ -143,7 +143,7 @@
                     if (executeAcknowledged) {
                         REX::INFO("[jump] stock Execute Route acknowledged by Starmap close");
                     } else if (accepted && RemoteRouteRequestActive()) {
-                        CancelOrReleaseHudCruiseInput(
+                        g_hudCruiseInput.CancelOrRelease(
                             "Starmap closed during remote route handoff");
                         ClearDestination("Starmap closed before vanilla route became executable");
                         accepted = false;
@@ -196,7 +196,7 @@
                             g_state.store(Destination() ? NavState::kMarked : NavState::kIdle,
                                 std::memory_order_release);
                             if (holdCompleted && Destination()) {
-                                if (QueueHudCruisePress(heldDevice)) {
+                                if (g_hudCruiseInput.QueuePress(heldDevice)) {
                                     g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                                     REX::INFO("[input] completed Starmap hold queued latched stock HUD Cruise press");
                                 } else {

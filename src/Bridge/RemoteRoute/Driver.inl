@@ -45,6 +45,264 @@
             g_mapUiDirty.store(true, std::memory_order_release);
         }
 
+        // Phase kAwaitGalaxy: vanilla Back must reach galaxy view with the
+        // exact captured STDT root before the marker-context phase begins.
+        void DriveRemoteRouteAwaitGalaxy(const RemoteRouteRequest& a_request,
+            const MapSnapshot& a_snapshot, const BodyDestination& a_destination,
+            Clock::duration a_age)
+        {
+            std::string gateDetail;
+            if (a_snapshot.view != kGalaxyView) {
+                gateDetail = std::format("Starmap view is {} rather than galaxy view",
+                    a_snapshot.view);
+            } else {
+                const auto focusedSystemID = MapTreeSystemID(a_snapshot.treeBodyID);
+                if (!focusedSystemID) {
+                    gateDetail = "focused galaxy STDT/DNAM identity is unavailable";
+                } else if (a_snapshot.treeBodyID != a_request.systemBodyID ||
+                           *focusedSystemID != a_destination.galaxy.system) {
+                    gateDetail = std::format("galaxy root {:08X}/system {} differs from marked root {:08X}/system {}",
+                        a_snapshot.treeBodyID, *focusedSystemID,
+                        a_request.systemBodyID, a_destination.galaxy.system);
+                } else {
+                    // Galaxy view now carries the exact captured root. The
+                    // remaining work is native galaxy-marker selection, which
+                    // gets its own phase and its own full timeout so a slow
+                    // Back transition cannot consume the focus budget.
+                    if (!TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitGalaxy,
+                            a_request, [](RemoteRouteRequest& a_live) {
+                                a_live.phase = RemoteRoutePhase::kEstablishSelection;
+                                a_live.started = Clock::now();
+                                a_live.executeReadySince = {};
+                            }))
+                        return;
+                    REX::INFO("[jump] matching galaxy STDT/DNAM root {:08X}/system {} reached after {} ms; establishing cursor-independent marker context for '{}'",
+                        a_snapshot.treeBodyID, *focusedSystemID,
+                        std::chrono::duration_cast<std::chrono::milliseconds>(a_age).count(),
+                        a_request.expectedSystemName);
+                    return;
+                }
+            }
+
+            if (a_age < kRemoteRouteTimeout)
+                return;
+            const auto reason = std::format("vanilla Back did not produce a matching galaxy focus: {}",
+                gateDetail);
+            FailRemoteRoute(reason.c_str());
+            REX::WARN("[jump] {}; remote mark cleared", reason);
+        }
+
+        // Phase kEstablishSelection: establish the cursor-independent galaxy
+        // marker context, then arm Quick Select route ownership and dispatch
+        // stock Set Course once native itself names the captured system.
+        void DriveRemoteRouteEstablishSelection(const RemoteRouteRequest& a_request,
+            const MapSnapshot& a_snapshot,
+            RE::Scaleform::GFx::ASMovieRootBase* a_root, V& a_menuRoot,
+            Clock::duration a_age)
+        {
+            if (a_snapshot.view != kGalaxyView) {
+                if (a_age < kRemoteRouteTimeout)
+                    return;
+                FailRemoteRoute("galaxy marker context left galaxy view before Set Course");
+                REX::WARN("[jump] marker-context gate timed out outside galaxy view; remote mark cleared");
+                return;
+            }
+
+            const auto proof = EvaluateGalaxySelection(a_menuRoot, a_snapshot,
+                a_request.systemBodyID);
+            if (proof.proven) {
+                if (!TryCommitRemoteRoutePhase(
+                        RemoteRoutePhase::kEstablishSelection, a_request,
+                        [](RemoteRouteRequest& a_live) {
+                            a_live.phase = RemoteRoutePhase::kAwaitRoute;
+                            a_live.started = Clock::now();
+                            a_live.executeReadySince = {};
+                        }))
+                    return;
+                REX::INFO("[jump] marker context established by {} after {} ms; {}",
+                    proof.authority,
+                    std::chrono::duration_cast<std::chrono::milliseconds>(a_age).count(),
+                    proof.Describe(a_snapshot, a_request.systemBodyID));
+                if (proof.button.Ready())
+                    REX::INFO("[jump] Set Course enabled for '{}' root={:08X}",
+                        a_request.expectedSystemName, a_request.systemBodyID);
+                else
+                    REX::INFO("[jump] Set Course still reports enabled={} visible={} while native selection is proven by {}; the vanilla button is never written to",
+                        proof.button.enabled, proof.button.visible,
+                        proof.authority);
+                std::string routeSelectionDetail;
+                if (!ArmNativeQuickSelectRouteSelection(a_snapshot,
+                        a_request.systemBodyID, routeSelectionDetail)) {
+                    FailRemoteRoute("native Quick Select route selection could not be armed");
+                    REX::WARN("[jump] native Quick Select route selection unavailable ({}); remote mark cleared",
+                        routeSelectionDetail);
+                    return;
+                }
+                REX::INFO("[jump] Quick Select route selection armed: {}",
+                    routeSelectionDetail);
+                if (!DispatchVanillaSetCourse(a_root)) {
+                    std::string cleanupDetail;
+                    ConfirmNativeQuickSelectConsumed(a_snapshot, cleanupDetail);
+                    FailRemoteRoute("vanilla system-level Set Course handoff failed");
+                    REX::WARN("[jump] stock system-level SetRouteDestination dispatch failed; remote mark cleared ({})",
+                        cleanupDetail);
+                    return;
+                }
+                std::string consumedDetail;
+                if (!ConfirmNativeQuickSelectConsumed(a_snapshot,
+                        consumedDetail)) {
+                    FailRemoteRoute("vanilla Set Course did not consume Quick Select route selection");
+                    REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
+                        consumedDetail);
+                    return;
+                }
+                REX::INFO("[jump] Set Course dispatched at system scope for '{}' root={:08X} (authority={})",
+                    a_request.expectedSystemName, a_request.systemBodyID,
+                    proof.authority);
+                return;  // Never consume a route that predates this dispatch.
+            }
+
+            // No proof yet. After the focus attempt runs, native keeps a
+            // fixed number of completed advances to publish its result
+            // before diagnostics are allowed to fire.
+            if (a_request.focusReadbackPasses != 0) {
+                TryCommitRemoteRoutePhase(RemoteRoutePhase::kEstablishSelection,
+                    a_request, [](RemoteRouteRequest& a_live) {
+                        if (a_live.focusReadbackPasses != 0)
+                            --a_live.focusReadbackPasses;
+                    });
+                return;
+            }
+
+            // Invoke the exact stock non-entering system-selection path once, then
+            // leave completed advances for native to publish readback.
+            if (!a_request.focusAttempted) {
+                if (!TryCommitRemoteRoutePhase(
+                        RemoteRoutePhase::kEstablishSelection, a_request,
+                        [](RemoteRouteRequest& a_live) {
+                            a_live.focusAttempted = true;
+                            a_live.focusReadbackPasses = kGalaxyFocusReadbackPasses;
+                        }))
+                    return;
+                std::string detail;
+                if (!InvokeNativeGalaxySystemSelection(a_snapshot,
+                        a_request.systemBodyID, detail)) {
+                    REX::WARN("[jump] native focus attempt: stock native galaxy system selection unavailable ({})",
+                        detail);
+                    LogGalaxyFocusDiagnostics(a_menuRoot, a_snapshot, proof,
+                        a_request.systemBodyID);
+                    FailRemoteRoute("guarded native galaxy system selection was unavailable");
+                    REX::WARN("[jump] guarded native galaxy system selection failed closed; remote mark cleared and vanilla route state preserved");
+                    return;
+                }
+                REX::INFO("[jump] native focus attempt: invoked stock native galaxy selected-system setter for '{}' ({}) without changing map view",
+                    a_request.expectedSystemName, detail);
+                return;  // Re-test native state on the next advance.
+            }
+
+            if (!a_request.focusDiagnosticsLogged) {
+                if (!TryCommitRemoteRoutePhase(
+                        RemoteRoutePhase::kEstablishSelection, a_request,
+                        [](RemoteRouteRequest& a_live) {
+                            a_live.focusDiagnosticsLogged = true;
+                        }))
+                    return;
+                LogGalaxyFocusDiagnostics(a_menuRoot, a_snapshot, proof,
+                    a_request.systemBodyID);
+                return;
+            }
+
+            if (a_age < kRemoteRouteTimeout)
+                return;
+            const auto reason = std::format("no cursor-independent galaxy marker context was established: {}",
+                proof.Describe(a_snapshot, a_request.systemBodyID));
+            FailRemoteRoute(reason.c_str());
+            REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
+                reason);
+        }
+
+        // Phase kAwaitRoute: require a continuously executable route ending in
+        // the captured system, dwell 500 ms, then dispatch stock Execute and
+        // hand off to the close-acknowledgement phase.
+        void DriveRemoteRouteAwaitRoute(const RemoteRouteRequest& a_request,
+            const MapSnapshot& a_snapshot, V& a_menuRoot, Clock::duration a_age)
+        {
+            if (a_snapshot.view != kGalaxyView) {
+                if (a_age < kRemoteRouteTimeout)
+                    return;
+                FailRemoteRoute("system-level Set Course left galaxy view before producing a route");
+                REX::WARN("[jump] system-level route gate timed out outside galaxy view; remote mark cleared");
+                return;
+            }
+
+            V jumpData;
+            auto gate = InspectRemoteRoute(a_menuRoot,
+                a_request.expectedSystemName, &jumpData);
+
+            if (!gate.ready) {
+                if (a_request.executeReadySince != Clock::time_point{})
+                    TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitRoute,
+                        a_request, [](RemoteRouteRequest& a_live) {
+                            a_live.executeReadySince = {};
+                        });
+                if (a_age < kRemoteRouteTimeout)
+                    return;
+
+                const auto reason = std::format("vanilla Set Course did not produce an executable matching route: {}",
+                    gate.detail);
+                FailRemoteRoute(reason.c_str());
+                REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
+                    reason);
+                return;
+            }
+
+            const auto now = Clock::now();
+            if (a_request.executeReadySince == Clock::time_point{}) {
+                if (!TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitRoute,
+                        a_request, [now](RemoteRouteRequest& a_live) {
+                            a_live.executeReadySince = now;
+                        }))
+                    return;
+                REX::INFO("[jump] route identity confirmed: vanilla route ends in '{}' body='{}'; requiring {} ms continuous readiness before stock Execute Route",
+                    a_request.expectedSystemName, gate.destinationBodyName,
+                    kRemoteRouteExecuteSettleTime.count());
+                return;
+            }
+            const auto readyAge = now - a_request.executeReadySince;
+            if (readyAge < kRemoteRouteExecuteSettleTime)
+                return;
+
+            if (g_cruiseActive.load(std::memory_order_acquire)) {
+                FailRemoteRoute("Cruise became active before remote Execute");
+                REX::WARN("[jump] Cruise became active after remote selection; route cleared before Execute");
+                return;
+            }
+
+            if (!TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitRoute,
+                    a_request, [now](RemoteRouteRequest& a_live) {
+                        a_live.phase = RemoteRoutePhase::kAwaitExecuteAck;
+                        a_live.started = now;
+                        a_live.executeReadySince = {};
+                    }))
+                return;
+
+            // SendExecuteEvent is the callback behind the visible vanilla
+            // Execute hold. It rechecks ExecuteButtonHint.Visible before
+            // dispatching StarMapMenu_ExecuteRoute.
+            g_state.store(NavState::kPendingJump, std::memory_order_release);
+            if (!jumpData.Invoke("SendExecuteEvent")) {
+                FailRemoteRoute("vanilla Execute Route handoff failed");
+                REX::WARN("[jump] JumpDataPanel.SendExecuteEvent invocation failed; remote mark cleared");
+                return;
+            }
+            REX::INFO("[jump] Execute dispatched: vanilla matching-system route remained executable for {} ms for '{}' body='{}' (route age {} ms); stock StarMapMenu_ExecuteRoute sent while retaining Cruise target {:08X}",
+                std::chrono::duration_cast<std::chrono::milliseconds>(readyAge).count(),
+                a_request.expectedSystemName,
+                gate.destinationBodyName,
+                std::chrono::duration_cast<std::chrono::milliseconds>(a_age).count(),
+                a_request.targetFormID);
+        }
+
         void DriveRemoteRouteRequest()
         {
             if (!g_applicationForeground.load(std::memory_order_acquire))
@@ -91,244 +349,18 @@
             if (!GetLiveMapMenuRoot(snapshot, root, menuRoot))
                 return;
 
-            if (request.phase == RemoteRoutePhase::kAwaitGalaxy) {
-                std::string gateDetail;
-                if (snapshot.view != kGalaxyView) {
-                    gateDetail = std::format("Starmap view is {} rather than galaxy view",
-                        snapshot.view);
-                } else {
-                    const auto focusedSystemID = MapTreeSystemID(snapshot.treeBodyID);
-                    if (!focusedSystemID) {
-                        gateDetail = "focused galaxy STDT/DNAM identity is unavailable";
-                    } else if (snapshot.treeBodyID != request.systemBodyID ||
-                               *focusedSystemID != destination->galaxy.system) {
-                        gateDetail = std::format("galaxy root {:08X}/system {} differs from marked root {:08X}/system {}",
-                            snapshot.treeBodyID, *focusedSystemID,
-                            request.systemBodyID, destination->galaxy.system);
-                    } else {
-                        // Galaxy view now carries the exact captured root. The
-                        // remaining work is native galaxy-marker selection, which
-                        // gets its own phase and its own full timeout so a slow
-                        // Back transition cannot consume the focus budget.
-                        if (!TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitGalaxy,
-                                request, [](RemoteRouteRequest& a_live) {
-                                    a_live.phase = RemoteRoutePhase::kEstablishSelection;
-                                    a_live.started = Clock::now();
-                                    a_live.executeReadySince = {};
-                                }))
-                            return;
-                        REX::INFO("[jump] matching galaxy STDT/DNAM root {:08X}/system {} reached after {} ms; establishing cursor-independent marker context for '{}'",
-                            snapshot.treeBodyID, *focusedSystemID,
-                            std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
-                            request.expectedSystemName);
-                        return;
-                    }
-                }
-
-                if (age < kRemoteRouteTimeout)
-                    return;
-                const auto reason = std::format("vanilla Back did not produce a matching galaxy focus: {}",
-                    gateDetail);
-                FailRemoteRoute(reason.c_str());
-                REX::WARN("[jump] {}; remote mark cleared", reason);
+            switch (request.phase) {
+            case RemoteRoutePhase::kAwaitGalaxy:
+                DriveRemoteRouteAwaitGalaxy(request, snapshot, *destination, age);
+                return;
+            case RemoteRoutePhase::kEstablishSelection:
+                DriveRemoteRouteEstablishSelection(request, snapshot, root,
+                    menuRoot, age);
+                return;
+            case RemoteRoutePhase::kAwaitRoute:
+                DriveRemoteRouteAwaitRoute(request, snapshot, menuRoot, age);
+                return;
+            default:
                 return;
             }
-
-            if (request.phase == RemoteRoutePhase::kEstablishSelection) {
-                if (snapshot.view != kGalaxyView) {
-                    if (age < kRemoteRouteTimeout)
-                        return;
-                    FailRemoteRoute("galaxy marker context left galaxy view before Set Course");
-                    REX::WARN("[jump] marker-context gate timed out outside galaxy view; remote mark cleared");
-                    return;
-                }
-
-                const auto proof = EvaluateGalaxySelection(menuRoot, snapshot,
-                    request.systemBodyID);
-                if (proof.proven) {
-                    if (!TryCommitRemoteRoutePhase(
-                            RemoteRoutePhase::kEstablishSelection, request,
-                            [](RemoteRouteRequest& a_live) {
-                                a_live.phase = RemoteRoutePhase::kAwaitRoute;
-                                a_live.started = Clock::now();
-                                a_live.executeReadySince = {};
-                            }))
-                        return;
-                    REX::INFO("[jump] marker context established by {} after {} ms; {}",
-                        proof.authority,
-                        std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
-                        proof.Describe(snapshot, request.systemBodyID));
-                    if (proof.button.Ready())
-                        REX::INFO("[jump] Set Course enabled for '{}' root={:08X}",
-                            request.expectedSystemName, request.systemBodyID);
-                    else
-                        REX::INFO("[jump] Set Course still reports enabled={} visible={} while native selection is proven by {}; the vanilla button is never written to",
-                            proof.button.enabled, proof.button.visible,
-                            proof.authority);
-                    std::string routeSelectionDetail;
-                    if (!ArmNativeQuickSelectRouteSelection(snapshot,
-                            request.systemBodyID, routeSelectionDetail)) {
-                        FailRemoteRoute("native Quick Select route selection could not be armed");
-                        REX::WARN("[jump] native Quick Select route selection unavailable ({}); remote mark cleared",
-                            routeSelectionDetail);
-                        return;
-                    }
-                    REX::INFO("[jump] Quick Select route selection armed: {}",
-                        routeSelectionDetail);
-                    if (!DispatchVanillaSetCourse(root)) {
-                        std::string cleanupDetail;
-                        ConfirmNativeQuickSelectConsumed(snapshot, cleanupDetail);
-                        FailRemoteRoute("vanilla system-level Set Course handoff failed");
-                        REX::WARN("[jump] stock system-level SetRouteDestination dispatch failed; remote mark cleared ({})",
-                            cleanupDetail);
-                        return;
-                    }
-                    std::string consumedDetail;
-                    if (!ConfirmNativeQuickSelectConsumed(snapshot,
-                            consumedDetail)) {
-                        FailRemoteRoute("vanilla Set Course did not consume Quick Select route selection");
-                        REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
-                            consumedDetail);
-                        return;
-                    }
-                    REX::INFO("[jump] Set Course dispatched at system scope for '{}' root={:08X} (authority={})",
-                        request.expectedSystemName, request.systemBodyID,
-                        proof.authority);
-                    return;  // Never consume a route that predates this dispatch.
-                }
-
-                // No proof yet. After the focus attempt runs, native keeps a
-                // fixed number of completed advances to publish its result
-                // before diagnostics are allowed to fire.
-                if (request.focusReadbackPasses != 0) {
-                    TryCommitRemoteRoutePhase(RemoteRoutePhase::kEstablishSelection,
-                        request, [](RemoteRouteRequest& a_live) {
-                            if (a_live.focusReadbackPasses != 0)
-                                --a_live.focusReadbackPasses;
-                        });
-                    return;
-                }
-
-                // Invoke the exact stock non-entering system-selection path once, then
-                // leave completed advances for native to publish readback.
-                if (!request.focusAttempted) {
-                    if (!TryCommitRemoteRoutePhase(
-                            RemoteRoutePhase::kEstablishSelection, request,
-                            [](RemoteRouteRequest& a_live) {
-                                a_live.focusAttempted = true;
-                                a_live.focusReadbackPasses = kGalaxyFocusReadbackPasses;
-                            }))
-                        return;
-                    std::string detail;
-                    if (!InvokeNativeGalaxySystemSelection(snapshot,
-                            request.systemBodyID, detail)) {
-                        REX::WARN("[jump] native focus attempt: stock native galaxy system selection unavailable ({})",
-                            detail);
-                        LogGalaxyFocusDiagnostics(menuRoot, snapshot, proof,
-                            request.systemBodyID);
-                        FailRemoteRoute("guarded native galaxy system selection was unavailable");
-                        REX::WARN("[jump] guarded native galaxy system selection failed closed; remote mark cleared and vanilla route state preserved");
-                        return;
-                    }
-                    REX::INFO("[jump] native focus attempt: invoked stock native galaxy selected-system setter for '{}' ({}) without changing map view",
-                        request.expectedSystemName, detail);
-                    return;  // Re-test native state on the next advance.
-                }
-
-                if (!request.focusDiagnosticsLogged) {
-                    if (!TryCommitRemoteRoutePhase(
-                            RemoteRoutePhase::kEstablishSelection, request,
-                            [](RemoteRouteRequest& a_live) {
-                                a_live.focusDiagnosticsLogged = true;
-                            }))
-                        return;
-                    LogGalaxyFocusDiagnostics(menuRoot, snapshot, proof,
-                        request.systemBodyID);
-                    return;
-                }
-
-                if (age < kRemoteRouteTimeout)
-                    return;
-                const auto reason = std::format("no cursor-independent galaxy marker context was established: {}",
-                    proof.Describe(snapshot, request.systemBodyID));
-                FailRemoteRoute(reason.c_str());
-                REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
-                    reason);
-                return;
-            }
-
-            if (snapshot.view != kGalaxyView) {
-                if (age < kRemoteRouteTimeout)
-                    return;
-                FailRemoteRoute("system-level Set Course left galaxy view before producing a route");
-                REX::WARN("[jump] system-level route gate timed out outside galaxy view; remote mark cleared");
-                return;
-            }
-
-            V jumpData;
-            auto gate = InspectRemoteRoute(menuRoot,
-                request.expectedSystemName, &jumpData);
-
-            if (!gate.ready) {
-                if (request.executeReadySince != Clock::time_point{})
-                    TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitRoute,
-                        request, [](RemoteRouteRequest& a_live) {
-                            a_live.executeReadySince = {};
-                        });
-                if (age < kRemoteRouteTimeout)
-                    return;
-
-                const auto reason = std::format("vanilla Set Course did not produce an executable matching route: {}",
-                    gate.detail);
-                FailRemoteRoute(reason.c_str());
-                REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
-                    reason);
-                return;
-            }
-
-            const auto now = Clock::now();
-            if (request.executeReadySince == Clock::time_point{}) {
-                if (!TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitRoute,
-                        request, [now](RemoteRouteRequest& a_live) {
-                            a_live.executeReadySince = now;
-                        }))
-                    return;
-                REX::INFO("[jump] route identity confirmed: vanilla route ends in '{}' body='{}'; requiring {} ms continuous readiness before stock Execute Route",
-                    request.expectedSystemName, gate.destinationBodyName,
-                    kRemoteRouteExecuteSettleTime.count());
-                return;
-            }
-            const auto readyAge = now - request.executeReadySince;
-            if (readyAge < kRemoteRouteExecuteSettleTime)
-                return;
-
-            if (g_cruiseActive.load(std::memory_order_acquire)) {
-                FailRemoteRoute("Cruise became active before remote Execute");
-                REX::WARN("[jump] Cruise became active after remote selection; route cleared before Execute");
-                return;
-            }
-
-            if (!TryCommitRemoteRoutePhase(RemoteRoutePhase::kAwaitRoute,
-                    request, [now](RemoteRouteRequest& a_live) {
-                        a_live.phase = RemoteRoutePhase::kAwaitExecuteAck;
-                        a_live.started = now;
-                        a_live.executeReadySince = {};
-                    }))
-                return;
-
-            // SendExecuteEvent is the callback behind the visible vanilla
-            // Execute hold. It rechecks ExecuteButtonHint.Visible before
-            // dispatching StarMapMenu_ExecuteRoute.
-            g_state.store(NavState::kPendingJump, std::memory_order_release);
-            if (!jumpData.Invoke("SendExecuteEvent")) {
-                FailRemoteRoute("vanilla Execute Route handoff failed");
-                REX::WARN("[jump] JumpDataPanel.SendExecuteEvent invocation failed; remote mark cleared");
-                return;
-            }
-            REX::INFO("[jump] Execute dispatched: vanilla matching-system route remained executable for {} ms for '{}' body='{}' (route age {} ms); stock StarMapMenu_ExecuteRoute sent while retaining Cruise target {:08X}",
-                std::chrono::duration_cast<std::chrono::milliseconds>(readyAge).count(),
-                request.expectedSystemName,
-                gate.destinationBodyName,
-                std::chrono::duration_cast<std::chrono::milliseconds>(age).count(),
-                request.targetFormID);
         }

@@ -3,23 +3,13 @@
 
         void CheckArrival()
         {
-            ArrivalAuditState audit;
-            {
-                std::lock_guard lock{ g_arrivalAuditMutex };
-                audit = g_arrivalAudit;
-            }
+            const auto audit = g_arrivalAudit.Snapshot();
             if (!audit.checkID)
                 return;
 
             const auto destination = Destination();
             if (!destination || destination->formID != audit.checkID) {
-                std::lock_guard lock{ g_arrivalAuditMutex };
-                if (g_arrivalAudit.checkID == audit.checkID &&
-                    g_arrivalAudit.checkGeneration == audit.checkGeneration) {
-                    g_arrivalAudit.checkID = 0;
-                    g_arrivalAudit.checkGeneration = 0;
-                    g_arrivalAudit.checkTicks = 0;
-                }
+                g_arrivalAudit.TryClearCheck(audit.checkID, audit.checkGeneration);
                 return;
             }
 
@@ -33,29 +23,17 @@
             const bool evidence = sameGeneration && audit.markedDistance >= 0.0 &&
                 audit.markedDistance <= kArrivalDistanceMeters;
             if (evidence) {
-                {
-                    std::lock_guard lock{ g_arrivalAuditMutex };
-                    if (g_arrivalAudit.checkID != audit.checkID ||
-                        g_arrivalAudit.checkGeneration != audit.checkGeneration)
-                        return;
-                    g_arrivalAudit.checkID = 0;
-                    g_arrivalAudit.checkGeneration = 0;
-                    g_arrivalAudit.checkTicks = 0;
-                }
+                if (!g_arrivalAudit.TryClearCheck(audit.checkID,
+                        audit.checkGeneration))
+                    return;
                 REX::INFO("[arrival] exact prior lock plus same-generation close distance {:.3f} m <= {:.3f} m confirmed arrival for {:08X} on HUD generation {}",
                     audit.markedDistance, kArrivalDistanceMeters, audit.checkID,
                     audit.checkGeneration);
                 ClearDestination("confirmed arrival (course transition plus close distance)");
             } else if (age > kArrivalEvidenceWindow) {
-                {
-                    std::lock_guard lock{ g_arrivalAuditMutex };
-                    if (g_arrivalAudit.checkID != audit.checkID ||
-                        g_arrivalAudit.checkGeneration != audit.checkGeneration)
-                        return;
-                    g_arrivalAudit.checkID = 0;
-                    g_arrivalAudit.checkGeneration = 0;
-                    g_arrivalAudit.checkTicks = 0;
-                }
+                if (!g_arrivalAudit.TryClearCheck(audit.checkID,
+                        audit.checkGeneration))
+                    return;
                 if (Settings::Verbose())
                     REX::INFO("[arrival] no same-generation arrival evidence after lock transition: distance={:.3f} m threshold={:.3f} m sampleGeneration={} auditGeneration={} currentGeneration={}; preserving mark {:08X}",
                         audit.markedDistance, kArrivalDistanceMeters,
@@ -66,55 +44,37 @@
 
         void CheckCourseTimeout()
         {
-            bool queuedExpired = false;
-            {
-                std::lock_guard lock{ g_courseMutex };
-                if (g_courseRequest.id &&
-                    Clock::now() - g_courseRequest.queued > kQueuedCourseExpiry) {
-                    REX::WARN("[course] queued {} for {:08X} expired before Cruise HUD became ready; mark preserved",
-                        g_courseRequest.clearing ? "clear" : "lock", g_courseRequest.id);
-                    g_courseRequest = {};
-                    queuedExpired = true;
-                }
+            if (const auto expired = g_coursePipeline.ExpireQueued(kQueuedCourseExpiry)) {
+                REX::WARN("[course] queued {} for {:08X} expired before Cruise HUD became ready; mark preserved",
+                    expired->clearing ? "clear" : "lock", expired->id);
+                if (FailActiveContinuationsOrRelease(
+                        "course request expired before the Cruise HUD became ready"))
+                    return;
             }
-            if (queuedExpired &&
-                FailActiveContinuationsOrRelease(
-                    "course request expired before the Cruise HUD became ready"))
-                return;
 
-            const auto asked = g_courseAskedID.load(std::memory_order_acquire);
-            if (asked) {
-                const auto at = Clock::time_point{ Clock::duration{
-                    g_courseAskedTicks.load(std::memory_order_acquire) } };
-                const auto continuation = RemoteMoonState();
+            const auto asked = g_coursePipeline.Asked();
+            if (asked.id) {
+                const auto continuation = OrbitalState();
                 const bool awaitingStockCourseResolution = continuation &&
-                    continuation->phase == RemoteMoonPhase::kTraveling &&
-                    continuation->finalCourseFormID == asked &&
-                    !g_courseAskedClearing.load(std::memory_order_acquire);
+                    continuation->phase == OrbitalPhase::kTraveling &&
+                    continuation->finalCourseFormID == asked.id &&
+                    !asked.clearing;
                 if (!awaitingStockCourseResolution &&
-                    Clock::now() - at > kCourseLockReadbackTimeout) {
-                    g_courseAskedID.store(0, std::memory_order_release);
-                    g_courseAskedClearing.store(false, std::memory_order_release);
+                    Clock::now() - asked.at > kCourseLockReadbackTimeout) {
+                    g_coursePipeline.ClearAsked();
                     REX::WARN("[course] no bIsCruiseTargetLock confirmation for {:08X} after {} ms; mark preserved",
-                        asked, kCourseLockReadbackTimeout.count());
+                        asked.id, kCourseLockReadbackTimeout.count());
                     if (FailActiveContinuationsOrRelease(
                             "course dispatch received no exact bIsCruiseTargetLock readback"))
                         return;
                 }
             }
 
-            bool hudHoldExpired = false;
-            {
-                std::lock_guard lock{ g_hudCruiseInputMutex };
-                hudHoldExpired = g_hudCruiseInputLatched &&
-                    g_hudCruiseInputStarted != Clock::time_point{} &&
-                    Clock::now() - g_hudCruiseInputStarted > kHudCruisePressSafetyLimit;
-            }
-            if (hudHoldExpired) {
+            if (g_hudCruiseInput.PressExpired(kHudCruisePressSafetyLimit)) {
                 const auto safetyReason = std::format(
                     "{}-second activation safety limit",
                     kHudCruisePressSafetyLimit.count());
-                CancelOrReleaseHudCruiseInput(safetyReason.c_str());
+                g_hudCruiseInput.CancelOrRelease(safetyReason.c_str());
                 REX::WARN("[input] latched HUD Cruise hold did not make CruiseModeHUDActive within {} seconds; released automatically and preserved destination",
                     kHudCruisePressSafetyLimit.count());
                 FailActiveContinuationsOrRelease(
@@ -137,19 +97,7 @@
             } catch (...) {
             }
 
-            bool unresolvedPressedEdge = false;
-            try {
-                std::lock_guard lock{ g_hudCruiseInputMutex };
-                unresolvedPressedEdge =
-                    g_hudCruiseInputPhase == HudCruiseInputPhase::kPressed ||
-                    g_hudCruiseInputPhase == HudCruiseInputPhase::kReleasePending;
-                g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
-                g_hudCruiseUserEvent = "Cruise";
-                g_hudCruiseInputLatched = false;
-                g_hudCruiseInputStarted = {};
-            } catch (...) {
-                unresolvedPressedEdge = true;
-            }
+            const bool unresolvedPressedEdge = g_hudCruiseInput.FailClosed();
 
             try {
                 ClearDestination(a_reason);
@@ -163,8 +111,7 @@
                 } catch (...) {
                 }
                 try {
-                    std::lock_guard lock{ g_courseMutex };
-                    g_courseRequest = {};
+                    g_coursePipeline.Reset();
                 } catch (...) {
                 }
                 try {
@@ -176,8 +123,6 @@
                     ResetDestinationDependentState(NavState::kIdle);
                 } catch (...) {
                 }
-                g_courseAskedID.store(0, std::memory_order_release);
-                g_courseAskedClearing.store(false, std::memory_order_release);
                 g_pendingStationResolveTicks.store(0, std::memory_order_release);
                 g_pendingStationAssignedID.store(0, std::memory_order_release);
                 g_state.store(NavState::kIdle, std::memory_order_release);
@@ -209,8 +154,8 @@
             }
 
             auto destination = Destination();
-            if (destination && RemoteMoonContinuationActive()) {
-                DriveRemoteMoonContinuation(*destination);
+            if (destination && OrbitalContinuationActive()) {
+                DriveOrbitalContinuation(*destination);
                 destination = Destination();
             }
             if (destination) {
@@ -221,7 +166,7 @@
                     g_haveCurrentSystem.load(std::memory_order_acquire) &&
                     g_currentSystem.load(std::memory_order_acquire) !=
                         destination->galaxy.system;
-                if (RemoteMoonContinuationActive()) {
+                if (OrbitalContinuationActive()) {
                     // The private orbital-waypoint driver owns all mutation and
                     // safety boundaries until exact final-target lock readback.
                 } else if (state == NavState::kPendingJump) {

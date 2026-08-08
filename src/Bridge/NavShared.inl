@@ -136,28 +136,28 @@
             return g_destination;
         }
 
-        std::optional<RemoteMoonContinuation> RemoteMoonState()
+        std::optional<OrbitalContinuation> OrbitalState()
         {
-            std::lock_guard lock{ g_remoteMoonMutex };
-            if (g_remoteMoonContinuation.phase == RemoteMoonPhase::kNone)
+            std::lock_guard lock{ g_orbitalMutex };
+            if (g_orbitalContinuation.phase == OrbitalPhase::kNone)
                 return std::nullopt;
-            return g_remoteMoonContinuation;
+            return g_orbitalContinuation;
         }
 
-        bool RemoteMoonContinuationActive()
+        bool OrbitalContinuationActive()
         {
-            std::lock_guard lock{ g_remoteMoonMutex };
-            return g_remoteMoonContinuation.phase != RemoteMoonPhase::kNone;
+            std::lock_guard lock{ g_orbitalMutex };
+            return g_orbitalContinuation.phase != OrbitalPhase::kNone;
         }
 
-        void ResetRemoteMoonContinuation()
+        void ResetOrbitalContinuation()
         {
-            std::lock_guard lock{ g_remoteMoonMutex };
-            g_remoteMoonContinuation = {};
+            std::lock_guard lock{ g_orbitalMutex };
+            g_orbitalContinuation = {};
         }
 
         // A native station target assignment is pending exact-lock readback.
-        // Orthogonal to RemoteMoonContinuationActive(): the shared continuation
+        // Orthogonal to OrbitalContinuationActive(): the shared continuation
         // record covers both moons and stations, while this flag is also set on
         // the direct station path where no continuation record exists.
         bool RemoteStationTargetAssigned()

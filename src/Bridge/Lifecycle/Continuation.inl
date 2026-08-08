@@ -1,9 +1,362 @@
 // Included by Bridge.cpp inside CFS::Bridge's anonymous namespace.
-// Drives remote moon/station continuations and post-jump reconciliation.
+// Drives remote moon/station (orbital) continuations and post-jump
+// reconciliation.
 
-        void DriveRemoteMoonContinuation(const BodyDestination& a_destination)
+        // Shared per-tick context for the orbital phase handlers: the verified
+        // retained identities, one processed HUD snapshot, and the helpers the
+        // phases share. Built once per DriveOrbitalContinuation pass after the
+        // identity, world, and ambiguity prologue has passed.
+        struct OrbitalTick
         {
-            const auto continuation = RemoteMoonState();
+            const BodyDestination& destination;
+            const OrbitalContinuation& continuation;
+            std::uint32_t finalCourseTarget{ 0 };
+            Clock::time_point now{};
+            Clock::duration phaseAge{};
+            ProcessedHudSnapshot hud;
+            bool cruiseActive{ false };
+            std::vector<HudRow> parentRows;
+            std::vector<HudRow> finalRows;
+
+            [[nodiscard]] std::vector<HudRow> RowsFor(std::uint32_t a_formID) const
+            {
+                std::vector<HudRow> matches;
+                for (const auto& row : hud.rows) {
+                    if (row.id == a_formID)
+                        matches.push_back(row);
+                }
+                return matches;
+            }
+
+            [[nodiscard]] bool ContinuousCruiseExitExpired(OrbitalPhase a_phase) const
+            {
+                std::lock_guard lock{ g_orbitalMutex };
+                auto& live = g_orbitalContinuation;
+                if (live.phase != a_phase)
+                    return false;
+                if (cruiseActive) {
+                    live.inactiveSince = {};
+                    return false;
+                }
+                if (live.inactiveSince == Clock::time_point{})
+                    live.inactiveSince = now;
+                return now - live.inactiveSince > kOrbitalLockExitTimeout;
+            }
+
+            void CompleteFinalLock(bool a_stagedThroughParent) const
+            {
+                g_arrivalAudit.RecordCourseLock(hud.generation);
+                g_coursePipeline.ClearAsked();
+                g_state.store(NavState::kAutopilotLocked, std::memory_order_release);
+                if (a_stagedThroughParent) {
+                    REX::INFO("[orbital] engine confirmed exact final {} lock on {:08X} '{}' after exact waypoint {:08X} '{}' staging in one continuous Cruise session",
+                        DestinationKindName(destination.kind),
+                        finalCourseTarget, destination.localizedName,
+                        continuation.parentFormID, continuation.parentName);
+                } else {
+                    REX::INFO("[orbital] engine confirmed exact final {} lock on {:08X} '{}' after one retained-target dispatch and latent stock course resolution",
+                        DestinationKindName(destination.kind),
+                        finalCourseTarget, destination.localizedName);
+                }
+                REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
+                    finalCourseTarget, destination.localizedName);
+                if (destination.kind == BodyKind::kStation) {
+                    g_pendingStationResolveTicks.store(0,
+                        std::memory_order_release);
+                    g_pendingStationAssignedID.store(0,
+                        std::memory_order_release);
+                }
+                ResetOrbitalContinuation();
+            }
+        };
+
+        void TickOrbitalAwaitingParentFeed(const OrbitalTick& a_tick)
+        {
+            if (a_tick.phaseAge > kOrbitalFeedTimeout) {
+                FailOrbitalContinuation(std::format(
+                    "private orbital waypoint did not remain a unique cockpit HUD row within {} seconds",
+                    kOrbitalFeedTimeout.count()));
+                return;
+            }
+            if (!g_haveCurrentSystem.load(std::memory_order_acquire))
+                return;
+            if (a_tick.parentRows.empty())
+                return;
+            bool firstResolved = false;
+            if (!TryCommitOrbitalPhase(OrbitalPhase::kAwaitingParentFeed,
+                    a_tick.continuation, [&](OrbitalContinuation& a_live) {
+                        firstResolved = a_live.parentName.empty();
+                        a_live.parentName = a_tick.parentRows.front().name.empty() ?
+                            a_live.parentEditorID : a_tick.parentRows.front().name;
+                    }))
+                return;
+            if (firstResolved) {
+                REX::INFO("[orbital] exact private waypoint {:08X} '{}' confirmed as one HUD row; retained public {} destination remains {:08X} '{}'",
+                    a_tick.continuation.parentFormID,
+                    a_tick.parentRows.front().name.empty() ?
+                        a_tick.continuation.parentEditorID :
+                        a_tick.parentRows.front().name,
+                    DestinationKindName(a_tick.destination.kind),
+                    a_tick.destination.formID, a_tick.destination.localizedName);
+            }
+            BeginOrbitalCourse();
+        }
+
+        void TickOrbitalAwaitingParentCruise(const OrbitalTick& a_tick)
+        {
+            if (a_tick.phaseAge > kOrbitalCruiseTimeout)
+                FailOrbitalContinuation(std::format(
+                    "stock Cruise did not activate for the continuous final-target course within {} seconds",
+                    kOrbitalCruiseTimeout.count()));
+        }
+
+        void TickOrbitalTraveling(const OrbitalTick& a_tick)
+        {
+            if (!a_tick.cruiseActive) {
+                if (a_tick.ContinuousCruiseExitExpired(OrbitalPhase::kTraveling))
+                    FailOrbitalContinuation("Cruise exited before exact final-target readback for the retained dispatch");
+                return;
+            }
+            const auto asked = g_coursePipeline.Asked().id;
+            if (!a_tick.continuation.dispatchConfirmed) {
+                if (asked != 0 && asked != a_tick.finalCourseTarget) {
+                    FailOrbitalContinuation("another course request replaced the retained final-target dispatch");
+                    return;
+                }
+                if (asked == a_tick.finalCourseTarget) {
+                    TryCommitOrbitalPhase(OrbitalPhase::kTraveling,
+                        a_tick.continuation, [](OrbitalContinuation& a_live) {
+                            a_live.dispatchConfirmed = true;
+                        });
+                } else {
+                    // The queued dispatch has not registered yet. This is
+                    // the only bounded part of the phase; travel itself is
+                    // engine-owned and unbounded (Ariel/Chawla traces).
+                    if (a_tick.phaseAge > kOrbitalCruiseTimeout)
+                        FailOrbitalContinuation(std::format(
+                            "retained final-target dispatch did not register within {} seconds",
+                            kOrbitalCruiseTimeout.count()));
+                    return;
+                }
+            } else if (asked != a_tick.finalCourseTarget) {
+                FailOrbitalContinuation("retained final-target course request changed during latent resolution");
+                return;
+            }
+            if (a_tick.hud.revision <= a_tick.continuation.feedRevisionFloor)
+                return;
+            if (a_tick.hud.course == a_tick.finalCourseTarget &&
+                a_tick.finalRows.size() == 1 &&
+                a_tick.finalRows.front().courseLocked) {
+                a_tick.CompleteFinalLock(false);
+                return;
+            }
+            if (a_tick.hud.course == a_tick.continuation.parentFormID &&
+                a_tick.parentRows.size() == 1 &&
+                a_tick.parentRows.front().courseLocked) {
+                if (!TryCommitOrbitalPhase(OrbitalPhase::kTraveling,
+                        a_tick.continuation, [&](OrbitalContinuation& a_live) {
+                            AdvanceOrbitalPhase(a_live,
+                                OrbitalPhase::kParentLocked, a_tick.now,
+                                a_tick.hud.revision);
+                        }))
+                    return;
+                g_coursePipeline.ClearAsked();
+                g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+                REX::INFO("[orbital] engine published exact private-waypoint lock {:08X} '{}' for retained final {} {:08X} '{}' in one continuous Cruise session",
+                    a_tick.continuation.parentFormID, a_tick.continuation.parentName,
+                    DestinationKindName(a_tick.destination.kind),
+                    a_tick.finalCourseTarget, a_tick.destination.localizedName);
+                return;
+            }
+            if (a_tick.hud.course != 0)
+                FailOrbitalContinuation("engine exact-locked an unrelated cockpit target while the retained dispatch was active");
+        }
+
+        void TickOrbitalParentLocked(const OrbitalTick& a_tick)
+        {
+            if (a_tick.hud.course == a_tick.continuation.parentFormID) {
+                if (a_tick.parentRows.size() != 1 ||
+                    !a_tick.parentRows.front().courseLocked) {
+                    FailOrbitalContinuation("private waypoint readback no longer has one exact locked HUD row");
+                    return;
+                }
+                TryCommitOrbitalPhase(OrbitalPhase::kParentLocked,
+                    a_tick.continuation, [&](OrbitalContinuation& a_live) {
+                        a_live.feedRevisionFloor = std::max(
+                            a_live.feedRevisionFloor, a_tick.hud.revision);
+                        if (a_tick.cruiseActive)
+                            a_live.inactiveSince = {};
+                    });
+                if (!a_tick.cruiseActive) {
+                    if (a_tick.ContinuousCruiseExitExpired(OrbitalPhase::kParentLocked))
+                        FailOrbitalContinuation("Cruise exited while the exact private waypoint course was still active");
+                }
+                return;
+            }
+            if (a_tick.hud.revision <= a_tick.continuation.feedRevisionFloor)
+                return;
+            if (a_tick.hud.course != 0 &&
+                a_tick.hud.course != a_tick.finalCourseTarget) {
+                FailOrbitalContinuation("engine course left the exact private waypoint for an unrelated target");
+                return;
+            }
+            if (!a_tick.cruiseActive) {
+                if (a_tick.ContinuousCruiseExitExpired(OrbitalPhase::kParentLocked))
+                    FailOrbitalContinuation("Cruise exited before the final target became exact-lockable");
+                return;
+            }
+
+            const bool finalExposed = a_tick.finalRows.size() == 1;
+            if (!TryCommitOrbitalPhase(OrbitalPhase::kParentLocked,
+                    a_tick.continuation, [&](OrbitalContinuation& a_live) {
+                        AdvanceOrbitalPhase(a_live,
+                            finalExposed ? OrbitalPhase::kAwaitingFinalLock :
+                                           OrbitalPhase::kAwaitingParentArrival,
+                            a_tick.now, a_tick.hud.revision);
+                    }))
+                return;
+            g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+            if (finalExposed) {
+                REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: its exact lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
+                    a_tick.continuation.parentFormID, a_tick.continuation.parentName,
+                    a_tick.hud.revision, DestinationKindName(a_tick.destination.kind),
+                    a_tick.finalCourseTarget,
+                    a_tick.destination.localizedName);
+                if (a_tick.hud.course == a_tick.finalCourseTarget &&
+                    a_tick.finalRows.front().courseLocked)
+                    a_tick.CompleteFinalLock(true);
+            } else {
+                REX::INFO("[orbital] exact waypoint lock left {:08X} '{}'; continuous Cruise remains active while awaiting a newer feed that uniquely exposes retained final {} {:08X} '{}'",
+                    a_tick.continuation.parentFormID, a_tick.continuation.parentName,
+                    DestinationKindName(a_tick.destination.kind),
+                    a_tick.finalCourseTarget, a_tick.destination.localizedName);
+            }
+        }
+
+        void TickOrbitalAwaitingParentArrival(const OrbitalTick& a_tick)
+        {
+            if (a_tick.phaseAge > kOrbitalFeedTimeout) {
+                FailOrbitalContinuation(std::format(
+                    "waypoint lock ended without a newer unique final-target HUD row within {} seconds",
+                    kOrbitalFeedTimeout.count()));
+                return;
+            }
+            if (!a_tick.cruiseActive) {
+                if (a_tick.ContinuousCruiseExitExpired(OrbitalPhase::kAwaitingParentArrival))
+                    FailOrbitalContinuation("continuous Cruise exited before the final-target feed refresh");
+                return;
+            }
+            if (!g_haveCurrentSystem.load(std::memory_order_acquire))
+                return;
+            if (a_tick.hud.revision <= a_tick.continuation.feedRevisionFloor)
+                return;
+            if (a_tick.hud.course == a_tick.continuation.parentFormID &&
+                a_tick.parentRows.size() == 1 &&
+                a_tick.parentRows.front().courseLocked) {
+                if (TryCommitOrbitalPhase(OrbitalPhase::kAwaitingParentArrival,
+                        a_tick.continuation, [&](OrbitalContinuation& a_live) {
+                            AdvanceOrbitalPhase(a_live,
+                                OrbitalPhase::kParentLocked, a_tick.now,
+                                a_tick.hud.revision);
+                        }))
+                    REX::INFO("[orbital] exact waypoint lock {:08X} '{}' republished before the final-target feed transition",
+                        a_tick.continuation.parentFormID,
+                        a_tick.continuation.parentName);
+                return;
+            }
+            if (a_tick.hud.course != 0 &&
+                a_tick.hud.course != a_tick.finalCourseTarget) {
+                FailOrbitalContinuation("engine selected an unrelated course while awaiting the final-target feed");
+                return;
+            }
+            if (a_tick.finalRows.empty())
+                return;
+            if (!TryCommitOrbitalPhase(OrbitalPhase::kAwaitingParentArrival,
+                    a_tick.continuation, [&](OrbitalContinuation& a_live) {
+                        AdvanceOrbitalPhase(a_live,
+                            OrbitalPhase::kAwaitingFinalLock, a_tick.now,
+                            a_tick.hud.revision);
+                    }))
+                return;
+            g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
+            REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: exact prior lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
+                a_tick.continuation.parentFormID, a_tick.continuation.parentName,
+                a_tick.hud.revision,
+                DestinationKindName(a_tick.destination.kind), a_tick.finalCourseTarget,
+                a_tick.destination.localizedName);
+            if (a_tick.hud.course == a_tick.finalCourseTarget &&
+                a_tick.finalRows.front().courseLocked)
+                a_tick.CompleteFinalLock(true);
+        }
+
+        void TickOrbitalAwaitingFinalLock(const OrbitalTick& a_tick)
+        {
+            if (a_tick.phaseAge > kOrbitalFeedTimeout) {
+                FailOrbitalContinuation(std::format(
+                    "continuous Cruise did not produce exact final-target lock within {} seconds of the waypoint feed transition",
+                    kOrbitalFeedTimeout.count()));
+                return;
+            }
+            if (!a_tick.cruiseActive) {
+                if (a_tick.ContinuousCruiseExitExpired(OrbitalPhase::kAwaitingFinalLock))
+                    FailOrbitalContinuation("continuous Cruise exited before exact final-target lock readback");
+                return;
+            }
+            if (a_tick.hud.course == a_tick.finalCourseTarget &&
+                a_tick.finalRows.size() == 1 &&
+                a_tick.finalRows.front().courseLocked) {
+                a_tick.CompleteFinalLock(true);
+                return;
+            }
+            if (a_tick.hud.course != 0 &&
+                a_tick.hud.course != a_tick.continuation.parentFormID) {
+                FailOrbitalContinuation("continuous Cruise selected an unrelated target before exact final-target lock");
+            }
+        }
+
+        // Ordered exact ancestry-waypoint advance shared by every traveling
+        // station phase; the caller has already matched the fast-path guard.
+        void AdvanceStationWaypointLock(const OrbitalTick& a_tick,
+            std::size_t a_exactStationWaypoint)
+        {
+            const auto nextWaypoint =
+                a_tick.continuation.stationWaypoints[a_exactStationWaypoint];
+            const auto nextRows = a_tick.RowsFor(nextWaypoint.formID);
+            {
+                std::lock_guard lock{ g_orbitalMutex };
+                auto& live = g_orbitalContinuation;
+                if (live.finalKind != BodyKind::kStation ||
+                    live.finalFormID != a_tick.destination.formID ||
+                    live.finalCourseFormID != a_tick.finalCourseTarget ||
+                    a_exactStationWaypoint < live.waypointIndex ||
+                    a_exactStationWaypoint >= live.stationWaypoints.size() ||
+                    live.stationWaypoints[a_exactStationWaypoint].formID !=
+                        nextWaypoint.formID)
+                    return;
+                live.waypointIndex = a_exactStationWaypoint;
+                live.parentFormID = nextWaypoint.formID;
+                live.parentEditorID = nextWaypoint.editorID;
+                live.parentName = nextRows.front().name.empty() ?
+                    nextWaypoint.editorID : nextRows.front().name;
+                live.phase = OrbitalPhase::kParentLocked;
+                live.phaseStarted = a_tick.now;
+                live.feedRevisionFloor = a_tick.hud.revision;
+                live.inactiveSince = {};
+            }
+            g_coursePipeline.ClearAsked();
+            g_state.store(NavState::kAwaitingCruise,
+                std::memory_order_release);
+            REX::INFO("[station] engine confirmed ordered exact ancestry-waypoint lock {}/{} on {:08X} '{}'; retained public destination remains {:08X} '{}'",
+                a_exactStationWaypoint + 1,
+                a_tick.continuation.stationWaypoints.size(), nextWaypoint.formID,
+                nextRows.front().name.empty() ? nextWaypoint.editorID :
+                                               nextRows.front().name,
+                a_tick.destination.formID, a_tick.destination.localizedName);
+        }
+
+        void DriveOrbitalContinuation(const BodyDestination& a_destination)
+        {
+            const auto continuation = OrbitalState();
             if (!continuation)
                 return;
             const auto finalCourseTarget = CourseTargetID(a_destination);
@@ -13,7 +366,7 @@
                 continuation->finalFormID != a_destination.formID ||
                 continuation->finalCourseFormID != finalCourseTarget ||
                 continuation->system != a_destination.galaxy.system) {
-                FailRemoteMoonContinuation("retained final orbital-target identity changed");
+                FailOrbitalContinuation("retained final orbital-target identity changed");
                 return;
             }
             if (g_mapOpen.load(std::memory_order_acquire)) {
@@ -27,14 +380,14 @@
             const auto ship = player ? player->GetSpaceship() : nullptr;
             if (!IsShipInSpace(ship)) {
                 if (WorldSettled())
-                    FailRemoteMoonContinuation("landing, docking, or leaving the pilot seat during remote orbital continuation");
+                    FailOrbitalContinuation("landing, docking, or leaving the pilot seat during remote orbital continuation");
                 return;
             }
             if (!WorldSettled())
                 return;
             if (g_haveCurrentSystem.load(std::memory_order_acquire) &&
                 g_currentSystem.load(std::memory_order_acquire) != continuation->system) {
-                FailRemoteMoonContinuation("cockpit system no longer matches the retained final orbital target");
+                FailOrbitalContinuation("cockpit system no longer matches the retained final orbital target");
                 return;
             }
             if (a_destination.kind == BodyKind::kStation) {
@@ -42,7 +395,7 @@
                 if (stations.size() != 1 ||
                     stations.front().referenceFormID != a_destination.formID ||
                     stations.front().baseFormID != a_destination.targetBaseFormID) {
-                    FailRemoteMoonContinuation("retained station CELL no longer resolves to its exact live REFR/base identity");
+                    FailOrbitalContinuation("retained station CELL no longer resolves to its exact live REFR/base identity");
                     return;
                 }
                 const auto indexed = BodyIndex::StationTargets(
@@ -56,34 +409,29 @@
                 const auto courseForm = RE::TESForm::LookupByID(finalCourseTarget);
                 if (exactIndexed != 1 || !courseForm ||
                     !courseForm->As<RE::TESObjectREFR>()) {
-                    FailRemoteMoonContinuation("retained station CELL/XMRK course identity no longer has one exact indexed live REFR");
+                    FailOrbitalContinuation("retained station CELL/XMRK course identity no longer has one exact indexed live REFR");
                     return;
                 }
             }
 
             const auto now = Clock::now();
-            const auto phaseAge = now - continuation->phaseStarted;
-            const auto hud = CurrentProcessedHudSnapshot();
-            const auto feedRevision = hud.revision;
-            const auto course = hud.course;
-            const auto cruiseActive =
-                g_cruiseActive.load(std::memory_order_acquire);
-            const auto snapshotTargets = [&](std::uint32_t a_formID) {
-                std::vector<HudRow> matches;
-                for (const auto& row : hud.rows) {
-                    if (row.id == a_formID)
-                        matches.push_back(row);
-                }
-                return matches;
+            OrbitalTick tick{
+                .destination = a_destination,
+                .continuation = *continuation,
+                .finalCourseTarget = finalCourseTarget,
+                .now = now,
+                .phaseAge = now - continuation->phaseStarted,
+                .hud = CurrentProcessedHudSnapshot(),
+                .cruiseActive = g_cruiseActive.load(std::memory_order_acquire),
             };
-            const auto parentRows = snapshotTargets(continuation->parentFormID);
-            const auto finalRows = snapshotTargets(finalCourseTarget);
-            if (parentRows.size() > 1) {
-                FailRemoteMoonContinuation("private waypoint became ambiguous in the cockpit target feed");
+            tick.parentRows = tick.RowsFor(continuation->parentFormID);
+            tick.finalRows = tick.RowsFor(finalCourseTarget);
+            if (tick.parentRows.size() > 1) {
+                FailOrbitalContinuation("private waypoint became ambiguous in the cockpit target feed");
                 return;
             }
-            if (finalRows.size() > 1) {
-                FailRemoteMoonContinuation("retained final target became ambiguous in the cockpit target feed");
+            if (tick.finalRows.size() > 1) {
+                FailOrbitalContinuation("retained final target became ambiguous in the cockpit target feed");
                 return;
             }
             std::optional<std::size_t> exactStationWaypoint;
@@ -93,336 +441,56 @@
                         continuation->stationWaypoints.size() ||
                     continuation->stationWaypoints[continuation->waypointIndex].formID !=
                         continuation->parentFormID) {
-                    FailRemoteMoonContinuation("private station waypoint chain state is invalid");
+                    FailOrbitalContinuation("private station waypoint chain state is invalid");
                     return;
                 }
                 for (std::size_t index = continuation->waypointIndex;
                      index < continuation->stationWaypoints.size(); ++index) {
-                    const auto rows = snapshotTargets(
+                    const auto rows = tick.RowsFor(
                         continuation->stationWaypoints[index].formID);
                     if (rows.size() > 1) {
-                        FailRemoteMoonContinuation("station ancestry waypoint became ambiguous in the cockpit target feed");
+                        FailOrbitalContinuation("station ancestry waypoint became ambiguous in the cockpit target feed");
                         return;
                     }
-                    if (course == continuation->stationWaypoints[index].formID &&
+                    if (tick.hud.course == continuation->stationWaypoints[index].formID &&
                         rows.size() == 1 && rows.front().courseLocked) {
                         exactStationWaypoint = index;
                     }
                 }
             }
 
-            const auto continuousCruiseExitExpired =
-                [&](RemoteMoonPhase a_phase) {
-                    std::lock_guard lock{ g_remoteMoonMutex };
-                    auto& live = g_remoteMoonContinuation;
-                    if (live.phase != a_phase)
-                        return false;
-                    if (cruiseActive) {
-                        live.inactiveSince = {};
-                        return false;
-                    }
-                    if (live.inactiveSince == Clock::time_point{})
-                        live.inactiveSince = now;
-                    return now - live.inactiveSince > kRemoteMoonLockExitTimeout;
-                };
-
-            const auto completeFinalLock = [&](bool a_stagedThroughParent) {
-                RecordCourseLock(hud.generation);
-                g_courseAskedID.store(0, std::memory_order_release);
-                g_courseAskedClearing.store(false, std::memory_order_release);
-                g_state.store(NavState::kAutopilotLocked, std::memory_order_release);
-                if (a_stagedThroughParent) {
-                    REX::INFO("[orbital] engine confirmed exact final {} lock on {:08X} '{}' after exact waypoint {:08X} '{}' staging in one continuous Cruise session",
-                        DestinationKindName(a_destination.kind),
-                        finalCourseTarget, a_destination.localizedName,
-                        continuation->parentFormID, continuation->parentName);
-                } else {
-                    REX::INFO("[orbital] engine confirmed exact final {} lock on {:08X} '{}' after one retained-target dispatch and latent stock course resolution",
-                        DestinationKindName(a_destination.kind),
-                        finalCourseTarget, a_destination.localizedName);
-                }
-                REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
-                    finalCourseTarget, a_destination.localizedName);
-                if (a_destination.kind == BodyKind::kStation) {
-                    g_pendingStationResolveTicks.store(0,
-                        std::memory_order_release);
-                    g_pendingStationAssignedID.store(0,
-                        std::memory_order_release);
-                }
-                ResetRemoteMoonContinuation();
-            };
-
             const bool stationWaypointPhase =
-                continuation->phase == RemoteMoonPhase::kTraveling ||
-                continuation->phase == RemoteMoonPhase::kParentLocked ||
-                continuation->phase == RemoteMoonPhase::kAwaitingParentArrival ||
-                continuation->phase == RemoteMoonPhase::kAwaitingFinalLock;
+                continuation->phase == OrbitalPhase::kTraveling ||
+                continuation->phase == OrbitalPhase::kParentLocked ||
+                continuation->phase == OrbitalPhase::kAwaitingParentArrival ||
+                continuation->phase == OrbitalPhase::kAwaitingFinalLock;
             if (exactStationWaypoint && stationWaypointPhase &&
-                feedRevision > continuation->feedRevisionFloor &&
-                (continuation->phase != RemoteMoonPhase::kParentLocked ||
+                tick.hud.revision > continuation->feedRevisionFloor &&
+                (continuation->phase != OrbitalPhase::kParentLocked ||
                     *exactStationWaypoint != continuation->waypointIndex)) {
-                const auto nextWaypoint =
-                    continuation->stationWaypoints[*exactStationWaypoint];
-                const auto nextRows = snapshotTargets(nextWaypoint.formID);
-                {
-                    std::lock_guard lock{ g_remoteMoonMutex };
-                    auto& live = g_remoteMoonContinuation;
-                    if (live.finalKind != BodyKind::kStation ||
-                        live.finalFormID != a_destination.formID ||
-                        live.finalCourseFormID != finalCourseTarget ||
-                        *exactStationWaypoint < live.waypointIndex ||
-                        *exactStationWaypoint >= live.stationWaypoints.size() ||
-                        live.stationWaypoints[*exactStationWaypoint].formID !=
-                            nextWaypoint.formID)
-                        return;
-                    live.waypointIndex = *exactStationWaypoint;
-                    live.parentFormID = nextWaypoint.formID;
-                    live.parentEditorID = nextWaypoint.editorID;
-                    live.parentName = nextRows.front().name.empty() ?
-                        nextWaypoint.editorID : nextRows.front().name;
-                    live.phase = RemoteMoonPhase::kParentLocked;
-                    live.phaseStarted = now;
-                    live.feedRevisionFloor = feedRevision;
-                    live.inactiveSince = {};
-                }
-                g_courseAskedID.store(0, std::memory_order_release);
-                g_courseAskedClearing.store(false, std::memory_order_release);
-                g_state.store(NavState::kAwaitingCruise,
-                    std::memory_order_release);
-                REX::INFO("[station] engine confirmed ordered exact ancestry-waypoint lock {}/{} on {:08X} '{}'; retained public destination remains {:08X} '{}'",
-                    *exactStationWaypoint + 1,
-                    continuation->stationWaypoints.size(), nextWaypoint.formID,
-                    nextRows.front().name.empty() ? nextWaypoint.editorID :
-                                                   nextRows.front().name,
-                    a_destination.formID, a_destination.localizedName);
+                AdvanceStationWaypointLock(tick, *exactStationWaypoint);
                 return;
             }
 
             switch (continuation->phase) {
-            case RemoteMoonPhase::kAwaitingParentFeed: {
-                if (phaseAge > kRemoteMoonFeedTimeout) {
-                    FailRemoteMoonContinuation(std::format(
-                        "private orbital waypoint did not remain a unique cockpit HUD row within {} seconds",
-                        kRemoteMoonFeedTimeout.count()));
-                    return;
-                }
-                if (!g_haveCurrentSystem.load(std::memory_order_acquire))
-                    return;
-                if (parentRows.empty())
-                    return;
-                bool firstResolved = false;
-                if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentFeed,
-                        *continuation, [&](RemoteMoonContinuation& a_live) {
-                            firstResolved = a_live.parentName.empty();
-                            a_live.parentName = parentRows.front().name.empty() ?
-                                a_live.parentEditorID : parentRows.front().name;
-                        }))
-                    return;
-                if (firstResolved) {
-                    REX::INFO("[orbital] exact private waypoint {:08X} '{}' confirmed as one HUD row; retained public {} destination remains {:08X} '{}'",
-                        continuation->parentFormID,
-                        parentRows.front().name.empty() ? continuation->parentEditorID : parentRows.front().name,
-                        DestinationKindName(a_destination.kind),
-                        a_destination.formID, a_destination.localizedName);
-                }
-                BeginRemoteMoonCourse();
+            case OrbitalPhase::kAwaitingParentFeed:
+                TickOrbitalAwaitingParentFeed(tick);
                 return;
-            }
-            case RemoteMoonPhase::kAwaitingParentCruise:
-                if (phaseAge > kRemoteMoonCruiseTimeout)
-                    FailRemoteMoonContinuation(std::format(
-                        "stock Cruise did not activate for the continuous final-target course within {} seconds",
-                        kRemoteMoonCruiseTimeout.count()));
+            case OrbitalPhase::kAwaitingParentCruise:
+                TickOrbitalAwaitingParentCruise(tick);
                 return;
-            case RemoteMoonPhase::kTraveling: {
-                if (!cruiseActive) {
-                    if (continuousCruiseExitExpired(RemoteMoonPhase::kTraveling))
-                        FailRemoteMoonContinuation("Cruise exited before exact final-target readback for the retained dispatch");
-                    return;
-                }
-                const auto asked = g_courseAskedID.load(std::memory_order_acquire);
-                if (!continuation->dispatchConfirmed) {
-                    if (asked != 0 && asked != finalCourseTarget) {
-                        FailRemoteMoonContinuation("another course request replaced the retained final-target dispatch");
-                        return;
-                    }
-                    if (asked == finalCourseTarget) {
-                        TryCommitRemoteMoonPhase(RemoteMoonPhase::kTraveling,
-                            *continuation, [](RemoteMoonContinuation& a_live) {
-                                a_live.dispatchConfirmed = true;
-                            });
-                    } else {
-                        // The queued dispatch has not registered yet. This is
-                        // the only bounded part of the phase; travel itself is
-                        // engine-owned and unbounded (Ariel/Chawla traces).
-                        if (phaseAge > kRemoteMoonCruiseTimeout)
-                            FailRemoteMoonContinuation(std::format(
-                                "retained final-target dispatch did not register within {} seconds",
-                                kRemoteMoonCruiseTimeout.count()));
-                        return;
-                    }
-                } else if (asked != finalCourseTarget) {
-                    FailRemoteMoonContinuation("retained final-target course request changed during latent resolution");
-                    return;
-                }
-                if (feedRevision <= continuation->feedRevisionFloor)
-                    return;
-                if (course == finalCourseTarget && finalRows.size() == 1 &&
-                    finalRows.front().courseLocked) {
-                    completeFinalLock(false);
-                    return;
-                }
-                if (course == continuation->parentFormID && parentRows.size() == 1 &&
-                    parentRows.front().courseLocked) {
-                    if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kTraveling,
-                            *continuation, [&](RemoteMoonContinuation& a_live) {
-                                AdvanceRemoteMoonPhase(a_live,
-                                    RemoteMoonPhase::kParentLocked, now,
-                                    feedRevision);
-                            }))
-                        return;
-                    g_courseAskedID.store(0, std::memory_order_release);
-                    g_courseAskedClearing.store(false, std::memory_order_release);
-                    g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
-                    REX::INFO("[orbital] engine published exact private-waypoint lock {:08X} '{}' for retained final {} {:08X} '{}' in one continuous Cruise session",
-                        continuation->parentFormID, continuation->parentName,
-                        DestinationKindName(a_destination.kind),
-                        finalCourseTarget, a_destination.localizedName);
-                    return;
-                }
-                if (course != 0)
-                    FailRemoteMoonContinuation("engine exact-locked an unrelated cockpit target while the retained dispatch was active");
+            case OrbitalPhase::kTraveling:
+                TickOrbitalTraveling(tick);
                 return;
-            }
-            case RemoteMoonPhase::kParentLocked: {
-                if (course == continuation->parentFormID) {
-                    if (parentRows.size() != 1 || !parentRows.front().courseLocked) {
-                        FailRemoteMoonContinuation("private waypoint readback no longer has one exact locked HUD row");
-                        return;
-                    }
-                    TryCommitRemoteMoonPhase(RemoteMoonPhase::kParentLocked,
-                        *continuation, [&](RemoteMoonContinuation& a_live) {
-                            a_live.feedRevisionFloor = std::max(
-                                a_live.feedRevisionFloor, feedRevision);
-                            if (cruiseActive)
-                                a_live.inactiveSince = {};
-                        });
-                    if (!cruiseActive) {
-                        if (continuousCruiseExitExpired(RemoteMoonPhase::kParentLocked))
-                            FailRemoteMoonContinuation("Cruise exited while the exact private waypoint course was still active");
-                    }
-                    return;
-                }
-                if (feedRevision <= continuation->feedRevisionFloor)
-                    return;
-                if (course != 0 && course != finalCourseTarget) {
-                    FailRemoteMoonContinuation("engine course left the exact private waypoint for an unrelated target");
-                    return;
-                }
-                if (!cruiseActive) {
-                    if (continuousCruiseExitExpired(RemoteMoonPhase::kParentLocked))
-                        FailRemoteMoonContinuation("Cruise exited before the final target became exact-lockable");
-                    return;
-                }
-
-                const bool finalExposed = finalRows.size() == 1;
-                if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kParentLocked,
-                        *continuation, [&](RemoteMoonContinuation& a_live) {
-                            AdvanceRemoteMoonPhase(a_live,
-                                finalExposed ? RemoteMoonPhase::kAwaitingFinalLock :
-                                               RemoteMoonPhase::kAwaitingParentArrival,
-                                now, feedRevision);
-                        }))
-                    return;
-                g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
-                if (finalExposed) {
-                    REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: its exact lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
-                        continuation->parentFormID, continuation->parentName,
-                        feedRevision, DestinationKindName(a_destination.kind),
-                        finalCourseTarget,
-                        a_destination.localizedName);
-                    if (course == finalCourseTarget && finalRows.front().courseLocked)
-                        completeFinalLock(true);
-                } else {
-                    REX::INFO("[orbital] exact waypoint lock left {:08X} '{}'; continuous Cruise remains active while awaiting a newer feed that uniquely exposes retained final {} {:08X} '{}'",
-                        continuation->parentFormID, continuation->parentName,
-                        DestinationKindName(a_destination.kind),
-                        finalCourseTarget, a_destination.localizedName);
-                }
+            case OrbitalPhase::kParentLocked:
+                TickOrbitalParentLocked(tick);
                 return;
-            }
-            case RemoteMoonPhase::kAwaitingParentArrival: {
-                if (phaseAge > kRemoteMoonFeedTimeout) {
-                    FailRemoteMoonContinuation(std::format(
-                        "waypoint lock ended without a newer unique final-target HUD row within {} seconds",
-                        kRemoteMoonFeedTimeout.count()));
-                    return;
-                }
-                if (!cruiseActive) {
-                    if (continuousCruiseExitExpired(RemoteMoonPhase::kAwaitingParentArrival))
-                        FailRemoteMoonContinuation("continuous Cruise exited before the final-target feed refresh");
-                    return;
-                }
-                if (!g_haveCurrentSystem.load(std::memory_order_acquire))
-                    return;
-                if (feedRevision <= continuation->feedRevisionFloor)
-                    return;
-                if (course == continuation->parentFormID && parentRows.size() == 1 &&
-                    parentRows.front().courseLocked) {
-                    if (TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentArrival,
-                            *continuation, [&](RemoteMoonContinuation& a_live) {
-                                AdvanceRemoteMoonPhase(a_live,
-                                    RemoteMoonPhase::kParentLocked, now,
-                                    feedRevision);
-                            }))
-                        REX::INFO("[orbital] exact waypoint lock {:08X} '{}' republished before the final-target feed transition",
-                            continuation->parentFormID, continuation->parentName);
-                    return;
-                }
-                if (course != 0 && course != finalCourseTarget) {
-                    FailRemoteMoonContinuation("engine selected an unrelated course while awaiting the final-target feed");
-                    return;
-                }
-                if (finalRows.empty())
-                    return;
-                if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentArrival,
-                        *continuation, [&](RemoteMoonContinuation& a_live) {
-                            AdvanceRemoteMoonPhase(a_live,
-                                RemoteMoonPhase::kAwaitingFinalLock, now,
-                                feedRevision);
-                        }))
-                    return;
-                g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
-                REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: exact prior lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
-                    continuation->parentFormID, continuation->parentName, feedRevision,
-                    DestinationKindName(a_destination.kind), finalCourseTarget,
-                    a_destination.localizedName);
-                if (course == finalCourseTarget && finalRows.front().courseLocked)
-                    completeFinalLock(true);
+            case OrbitalPhase::kAwaitingParentArrival:
+                TickOrbitalAwaitingParentArrival(tick);
                 return;
-            }
-            case RemoteMoonPhase::kAwaitingFinalLock: {
-                if (phaseAge > kRemoteMoonFeedTimeout) {
-                    FailRemoteMoonContinuation(std::format(
-                        "continuous Cruise did not produce exact final-target lock within {} seconds of the waypoint feed transition",
-                        kRemoteMoonFeedTimeout.count()));
-                    return;
-                }
-                if (!cruiseActive) {
-                    if (continuousCruiseExitExpired(RemoteMoonPhase::kAwaitingFinalLock))
-                        FailRemoteMoonContinuation("continuous Cruise exited before exact final-target lock readback");
-                    return;
-                }
-                if (course == finalCourseTarget && finalRows.size() == 1 &&
-                    finalRows.front().courseLocked) {
-                    completeFinalLock(true);
-                    return;
-                }
-                if (course != 0 && course != continuation->parentFormID) {
-                    FailRemoteMoonContinuation("continuous Cruise selected an unrelated target before exact final-target lock");
-                }
+            case OrbitalPhase::kAwaitingFinalLock:
+                TickOrbitalAwaitingFinalLock(tick);
                 return;
-            }
             default:
                 return;
             }
@@ -586,7 +654,7 @@
             auto device = g_pendingJumpDevice.load(std::memory_order_acquire);
             if (device == RE::InputEvent::DeviceType::kNone)
                 device = RE::InputEvent::DeviceType::kKeyboard;
-            if (!QueueHudCruisePress(device)) {
+            if (!g_hudCruiseInput.QueuePress(device)) {
                 g_state.store(NavState::kPendingJump, std::memory_order_release);
                 return;
             }

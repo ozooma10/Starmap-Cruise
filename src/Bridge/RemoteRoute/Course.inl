@@ -3,8 +3,7 @@
 
         void QueueCourse(std::uint32_t a_id, bool a_clearing)
         {
-            std::lock_guard lock{ g_courseMutex };
-            g_courseRequest = { a_id, a_clearing, Clock::now() };
+            g_coursePipeline.Queue(a_id, a_clearing);
             g_hudUiDirty.store(true, std::memory_order_release);
             if (Settings::Verbose())
                 REX::INFO("[course] queued {} for {:08X}", a_clearing ? "clear" : "lock", a_id);
@@ -17,11 +16,11 @@
         // A false return means the live continuation moved on and this tick's
         // decision must be abandoned.
         template <class Apply>
-        bool TryCommitRemoteMoonPhase(RemoteMoonPhase a_expectedPhase,
-            const RemoteMoonContinuation& a_continuation, Apply&& a_apply)
+        bool TryCommitOrbitalPhase(OrbitalPhase a_expectedPhase,
+            const OrbitalContinuation& a_continuation, Apply&& a_apply)
         {
-            std::lock_guard lock{ g_remoteMoonMutex };
-            auto& live = g_remoteMoonContinuation;
+            std::lock_guard lock{ g_orbitalMutex };
+            auto& live = g_orbitalContinuation;
             if (live.phase != a_expectedPhase ||
                 live.finalKind != a_continuation.finalKind ||
                 live.finalFormID != a_continuation.finalFormID ||
@@ -34,8 +33,8 @@
         }
 
         // The common phase-transition tail every commit shares.
-        void AdvanceRemoteMoonPhase(RemoteMoonContinuation& a_live,
-            RemoteMoonPhase a_phase, Clock::time_point a_now,
+        void AdvanceOrbitalPhase(OrbitalContinuation& a_live,
+            OrbitalPhase a_phase, Clock::time_point a_now,
             std::uint64_t a_feedRevisionFloor)
         {
             a_live.phase = a_phase;
@@ -71,12 +70,12 @@
             }
 
             {
-                std::lock_guard lock{ g_remoteMoonMutex };
-                if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kNone)
-                    return g_remoteMoonContinuation.finalKind == a_destination.kind &&
-                           g_remoteMoonContinuation.finalFormID == a_destination.formID;
-                g_remoteMoonContinuation = {
-                    .phase = RemoteMoonPhase::kAwaitingParentFeed,
+                std::lock_guard lock{ g_orbitalMutex };
+                if (g_orbitalContinuation.phase != OrbitalPhase::kNone)
+                    return g_orbitalContinuation.finalKind == a_destination.kind &&
+                           g_orbitalContinuation.finalFormID == a_destination.formID;
+                g_orbitalContinuation = {
+                    .phase = OrbitalPhase::kAwaitingParentFeed,
                     .finalKind = BodyKind::kMoon,
                     .finalFormID = a_destination.formID,
                     .finalCourseFormID = CourseTargetID(a_destination),
@@ -202,12 +201,12 @@
                 std::distance(stationWaypoints.begin(), waypointAt));
 
             {
-                std::lock_guard lock{ g_remoteMoonMutex };
-                if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kNone)
-                    return g_remoteMoonContinuation.finalKind == a_destination.kind &&
-                           g_remoteMoonContinuation.finalFormID == a_destination.formID;
-                g_remoteMoonContinuation = {
-                    .phase = RemoteMoonPhase::kAwaitingParentFeed,
+                std::lock_guard lock{ g_orbitalMutex };
+                if (g_orbitalContinuation.phase != OrbitalPhase::kNone)
+                    return g_orbitalContinuation.finalKind == a_destination.kind &&
+                           g_orbitalContinuation.finalFormID == a_destination.formID;
+                g_orbitalContinuation = {
+                    .phase = OrbitalPhase::kAwaitingParentFeed,
                     .finalKind = BodyKind::kStation,
                     .finalFormID = a_destination.formID,
                     .finalCourseFormID = a_destination.courseFormID,
@@ -231,23 +230,23 @@
             return true;
         }
 
-        bool BeginRemoteMoonCourse()
+        bool BeginOrbitalCourse()
         {
             const auto destination = Destination();
-            const auto continuation = RemoteMoonState();
+            const auto continuation = OrbitalState();
             if (!continuation || !destination ||
                 destination->kind != continuation->finalKind ||
                 destination->formID != continuation->finalFormID ||
                 CourseTargetID(*destination) != continuation->finalCourseFormID ||
-                continuation->phase != RemoteMoonPhase::kAwaitingParentFeed)
+                continuation->phase != OrbitalPhase::kAwaitingParentFeed)
                 return false;
 
             const auto now = Clock::now();
             if (g_cruiseActive.load(std::memory_order_acquire)) {
-                if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentFeed,
-                        *continuation, [now](RemoteMoonContinuation& a_live) {
-                            AdvanceRemoteMoonPhase(a_live,
-                                RemoteMoonPhase::kTraveling, now,
+                if (!TryCommitOrbitalPhase(OrbitalPhase::kAwaitingParentFeed,
+                        *continuation, [now](OrbitalContinuation& a_live) {
+                            AdvanceOrbitalPhase(a_live,
+                                OrbitalPhase::kTraveling, now,
                                 CurrentProcessedHudSnapshot().revision);
                             a_live.dispatchConfirmed = false;
                         }))
@@ -265,12 +264,12 @@
             auto device = g_pendingJumpDevice.load(std::memory_order_acquire);
             if (device == RE::InputEvent::DeviceType::kNone)
                 device = RE::InputEvent::DeviceType::kKeyboard;
-            if (!QueueHudCruisePress(device))
+            if (!g_hudCruiseInput.QueuePress(device))
                 return false;
-            if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentFeed,
-                    *continuation, [now](RemoteMoonContinuation& a_live) {
-                        AdvanceRemoteMoonPhase(a_live,
-                            RemoteMoonPhase::kAwaitingParentCruise, now,
+            if (!TryCommitOrbitalPhase(OrbitalPhase::kAwaitingParentFeed,
+                    *continuation, [now](OrbitalContinuation& a_live) {
+                        AdvanceOrbitalPhase(a_live,
+                            OrbitalPhase::kAwaitingParentCruise, now,
                             CurrentProcessedHudSnapshot().revision);
                     }))
                 return false;
@@ -283,42 +282,19 @@
             return true;
         }
 
-        std::optional<RemoteMoonContinuation> TakeRemoteMoonCruiseActivation()
+        std::optional<OrbitalContinuation> TakeOrbitalCruiseActivation()
         {
-            std::lock_guard lock{ g_remoteMoonMutex };
-            auto& continuation = g_remoteMoonContinuation;
-            if (continuation.phase != RemoteMoonPhase::kAwaitingParentCruise)
+            std::lock_guard lock{ g_orbitalMutex };
+            auto& continuation = g_orbitalContinuation;
+            if (continuation.phase != OrbitalPhase::kAwaitingParentCruise)
                 return std::nullopt;
-            continuation.phase = RemoteMoonPhase::kTraveling;
+            continuation.phase = OrbitalPhase::kTraveling;
             continuation.dispatchConfirmed = false;
             continuation.feedRevisionFloor =
                 CurrentProcessedHudSnapshot().revision;
             continuation.phaseStarted = Clock::now();
             continuation.inactiveSince = {};
             return continuation;
-        }
-
-        bool DispatchHudEvent(RE::Scaleform::GFx::ASMovieRootBase* a_root, const char* a_type,
-            const V* a_params)
-        {
-            V manager;
-            if (!a_root->GetVariable(&manager, "Shared.AS3.Data.BSUIDataManager") ||
-                !(manager.IsObject() || manager.IsDisplayObject())) {
-                REX::WARN("[course] BSUIDataManager unavailable; '{}' not dispatched", a_type);
-                return false;
-            }
-
-            V type;
-            a_root->CreateString(&type, a_type);
-            V args[2]{ type, a_params ? *a_params : V{} };
-            V event;
-            if (a_params)
-                a_root->CreateObject(&event, "Shared.AS3.Events.CustomEvent", args, 2);
-            else
-                a_root->CreateObject(&event, "flash.events.Event", args, 1);
-            if (event.IsObject() && manager.Invoke("dispatchEvent", nullptr, &event, 1))
-                return true;
-            return manager.Invoke("dispatchCustomEvent", nullptr, args, a_params ? 2 : 1);
         }
 
         bool DispatchVanillaSetCourse(RE::Scaleform::GFx::ASMovieRootBase* a_root)
@@ -328,7 +304,7 @@
             if (!params.IsObject() ||
                 !params.SetMember("buttonAction", V{ "SetRouteDestination" }))
                 return false;
-            return DispatchHudEvent(a_root,
+            return DispatchUiEvent(a_root,
                 "StarMapMenu_OnHintButtonClicked", &params);
         }
 
@@ -337,7 +313,7 @@
             // This is the exact Event emitted by GalaxyStarMapMenu's visible
             // Back button. From system view, native returns to galaxy view with
             // that system focused; it does not close the Starmap.
-            return DispatchHudEvent(a_root, "StarMapMenu_OnCancel", nullptr);
+            return DispatchUiEvent(a_root, "StarMapMenu_OnCancel", nullptr);
         }
 
         bool DispatchVanillaCloseAllMenus(RE::Scaleform::GFx::ASMovieRootBase* a_root)
@@ -345,9 +321,9 @@
             // StarMapButtonHintBar.onCloseSubMenuToGame emits these events in
             // this order. The first keeps DataMenu quick-entry state coherent;
             // the second closes the entire menu stack and returns to gameplay.
-            const bool quickEntrySet = DispatchHudEvent(
+            const bool quickEntrySet = DispatchUiEvent(
                 a_root, "DataMenu_SetMenuForQuickEntry", nullptr);
-            const bool closeAll = DispatchHudEvent(
+            const bool closeAll = DispatchUiEvent(
                 a_root, "GlobalFunc_CloseAllMenus", nullptr);
             if (!quickEntrySet)
                 REX::WARN("[map] stock DataMenu quick-entry dispatch failed before close-all");
@@ -356,34 +332,26 @@
 
         void RunCourseRequest(RE::Scaleform::GFx::ASMovieRootBase* a_root)
         {
-            CourseRequest request;
-            {
-                std::lock_guard lock{ g_courseMutex };
-                request = g_courseRequest;
-                if (!request.id)
-                    return;
-                if (!g_cruiseActive.load(std::memory_order_acquire))
-                    return;
-                g_courseRequest = {};
-            }
+            const auto request = g_coursePipeline.TakeQueuedForDispatch(
+                g_cruiseActive.load(std::memory_order_acquire));
+            if (!request)
+                return;
 
             V params;
             a_root->CreateObject(&params);
             if (!params.IsObject()) {
-                REX::WARN("[course] could not create event payload for {:08X}", request.id);
+                REX::WARN("[course] could not create event payload for {:08X}", request->id);
                 FailActiveContinuationsOrRelease("could not create the course event payload");
                 return;
             }
-            params.SetMember("uBodyID", V{ static_cast<double>(request.id) });
-            if (DispatchHudEvent(a_root, "Reticle_OnCruiseLockCourse", &params)) {
-                g_courseAskedID.store(request.id, std::memory_order_release);
-                g_courseAskedClearing.store(request.clearing, std::memory_order_release);
-                g_courseAskedTicks.store(Clock::now().time_since_epoch().count(), std::memory_order_release);
+            params.SetMember("uBodyID", V{ static_cast<double>(request->id) });
+            if (DispatchUiEvent(a_root, "Reticle_OnCruiseLockCourse", &params)) {
+                g_coursePipeline.MarkAsked(request->id, request->clearing);
                 REX::INFO("[course] dispatched {} uBodyID={:08X}",
-                    request.clearing ? "clear/toggle" : "lock", request.id);
+                    request->clearing ? "clear/toggle" : "lock", request->id);
             } else {
                 REX::WARN("[course] HUD rejected {} dispatch for {:08X}; mark preserved",
-                    request.clearing ? "clear" : "lock", request.id);
+                    request->clearing ? "clear" : "lock", request->id);
                 FailActiveContinuationsOrRelease("HUD rejected the course dispatch");
             }
         }

@@ -2,6 +2,7 @@
 
 #include "RE/Starfield.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -18,4 +19,10 @@ namespace CFS::ScaleformValue
     [[nodiscard]] bool BooleanMember(Value& a_object, const char* a_name,
         bool& a_value);
     [[nodiscard]] bool Payload(const Params& a_params, Value& a_data);
+    // Bounded, read-only diagnostic enumeration of an object's public member
+    // names with a coarse type tag. Copies names only: no GFx handle is
+    // retained past the visit, so nothing can outlive the movie generation
+    // that produced it.
+    [[nodiscard]] std::string JoinMemberNames(Value& a_object,
+        std::size_t a_limit);
 }

@@ -90,11 +90,10 @@
                 REX::INFO("[course] engine lock transition {:08X} -> {:08X} on low-frequency feed {}",
                     previousCourse, course, feedRevision);
             }
-            const auto asked = g_courseAskedID.load(std::memory_order_acquire);
-            if (asked && g_courseAskedClearing.load(std::memory_order_acquire) && course != asked) {
-                g_courseAskedID.store(0, std::memory_order_release);
-                g_courseAskedClearing.store(false, std::memory_order_release);
-                REX::INFO("[course] engine confirmed clear of {:08X}", asked);
+            const auto asked = g_coursePipeline.Asked();
+            if (asked.id && asked.clearing && course != asked.id) {
+                g_coursePipeline.ClearAsked();
+                REX::INFO("[course] engine confirmed clear of {:08X}", asked.id);
             }
 
             const auto destination = Destination();
@@ -102,7 +101,7 @@
                 return;
             const auto courseTarget = CourseTargetID(*destination);
 
-            if (RemoteMoonContinuationActive())
+            if (OrbitalContinuationActive())
                 return;
 
             if (RemoteStationTargetAssigned() && course != 0 &&
@@ -131,16 +130,15 @@
                         destination->formID, courseTarget,
                         destination->localizedName);
                 }
-                RecordCourseLock(hudGeneration);
-                g_courseAskedID.store(0, std::memory_order_release);
-                g_courseAskedClearing.store(false, std::memory_order_release);
+                g_arrivalAudit.RecordCourseLock(hudGeneration);
+                g_coursePipeline.ClearAsked();
                 g_state.store(NavState::kAutopilotLocked, std::memory_order_release);
                 if (previousCourse != course) {
                     REX::INFO("[course] engine confirmed lock on {:08X} '{}'",
                         courseTarget, destination->localizedName);
                 }
             } else if (previousCourse == courseTarget) {
-                const auto arrival = ArmArrivalCheck(destination->formID, hudGeneration);
+                const auto arrival = g_arrivalAudit.Arm(destination->formID, hudGeneration);
                 if (!arrival.armed)
                     return;
                 g_state.store(NavState::kMarked, std::memory_order_release);
@@ -193,11 +191,9 @@
                         break;
                     }
             }
-            if (index != static_cast<std::size_t>(-1) && a_distances[index].valid) {
-                std::lock_guard lock{ g_arrivalAuditMutex };
-                g_arrivalAudit.markedDistance = a_distances[index].distance;
-                g_arrivalAudit.distanceGeneration = a_hudGeneration;
-            }
+            if (index != static_cast<std::size_t>(-1) && a_distances[index].valid)
+                g_arrivalAudit.RecordDistance(a_distances[index].distance,
+                    a_hudGeneration);
         }
 
         class HighHandler : public RE::Scaleform::GFx::FunctionHandler
@@ -240,19 +236,8 @@
         void OnHudMovieReplaced()
         {
             ResetHold("Spaceship HUD movie replacement");
-            {
-                std::lock_guard lock{ g_hudCruiseInputMutex };
-                g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
-                g_hudCruiseUserEvent = "Cruise";
-                g_hudCruiseInputLatched = false;
-                g_hudCruiseInputStarted = {};
-            }
-            {
-                std::lock_guard lock{ g_courseMutex };
-                g_courseRequest = {};
-            }
-            g_courseAskedID.store(0, std::memory_order_release);
-            g_courseAskedClearing.store(false, std::memory_order_release);
+            g_hudCruiseInput.Reset();
+            g_coursePipeline.Reset();
             g_confirmedCourseID.store(0, std::memory_order_release);
             g_haveCurrentSystem.store(false, std::memory_order_release);
             {
@@ -310,35 +295,13 @@
         void DriveHudCruiseInput(RE::Scaleform::GFx::ASMovieRootBase* a_root,
             const char* a_rootPath)
         {
-            bool press = false;
-            bool release = false;
-            const char* userEvent = "Cruise";
-            {
-                std::lock_guard lock{ g_hudCruiseInputMutex };
-                userEvent = g_hudCruiseUserEvent;
-                if (g_hudCruiseInputPhase == HudCruiseInputPhase::kPressPending) {
-                    // Publish the new phase before calling ActionScript. This
-                    // prevents a synchronous callback from repeating the edge.
-                    g_hudCruiseInputPhase = HudCruiseInputPhase::kPressed;
-                    press = true;
-                } else if (g_hudCruiseInputPhase == HudCruiseInputPhase::kReleasePending) {
-                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
-                    g_hudCruiseUserEvent = "Cruise";
-                    release = true;
-                }
-            }
-
-            if (press && !InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, true)) {
-                {
-                    std::lock_guard lock{ g_hudCruiseInputMutex };
-                    g_hudCruiseInputPhase = HudCruiseInputPhase::kIdle;
-                    g_hudCruiseUserEvent = "Cruise";
-                    g_hudCruiseInputLatched = false;
-                    g_hudCruiseInputStarted = {};
-                }
+            const auto edges = g_hudCruiseInput.TakePending();
+            if (edges.press &&
+                !InvokeHudCruiseUserEvent(a_root, a_rootPath, edges.userEvent, true)) {
+                g_hudCruiseInput.FailPress();
                 FailActiveContinuationsOrRelease("stock HUD Cruise press invocation failed");
-            } else if (release)
-                InvokeHudCruiseUserEvent(a_root, a_rootPath, userEvent, false);
+            } else if (edges.release)
+                InvokeHudCruiseUserEvent(a_root, a_rootPath, edges.userEvent, false);
         }
 
         void ReconcileHudUi()
@@ -419,13 +382,13 @@
             }
 
             if (active && !wasActive) {
-                CancelOrReleaseHudCruiseInput("CruiseModeHUDActive confirmed");
+                g_hudCruiseInput.CancelOrRelease("CruiseModeHUDActive confirmed");
                 const auto state = g_state.load(std::memory_order_acquire);
                 const auto destination = Destination();
-                if (RemoteMoonContinuationActive()) {
-                    const auto continuation = TakeRemoteMoonCruiseActivation();
+                if (OrbitalContinuationActive()) {
+                    const auto continuation = TakeOrbitalCruiseActivation();
                     if (!continuation) {
-                        FailRemoteMoonContinuation("Cruise activated outside the guarded continuous orbital transition");
+                        FailOrbitalContinuation("Cruise activated outside the guarded continuous orbital transition");
                     } else {
                         g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                         REX::INFO("[orbital] stock Cruise activation confirmed; dispatching retained final {} {:08X} '{}' once; exact final readback remains the success gate",

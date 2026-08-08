@@ -2,10 +2,12 @@
 
 #include "BodyIndex.h"
 #include "Engine/GalaxyState.h"
+#include "Engine/GlobalEventProof.h"
 #include "Engine/RuntimeBindings.h"
 #include "Engine/RuntimeMemory.h"
 #include "Input/CruiseBindingResolver.h"
 #include "MainThreadUiPump.h"
+#include "Scaleform/UiEventDispatch.h"
 #include "Scaleform/ValueAccess.h"
 #include "Settings.h"
 #include "Types.h"
@@ -38,9 +40,10 @@ namespace CFS::Bridge
     namespace
     {
         using Engine::HexBytes;
-        using Engine::ReadMemory;
+        using ScaleformEvents::DispatchUiEvent;
         using ScaleformValue::AsNumber;
         using ScaleformValue::BooleanMember;
+        using ScaleformValue::JoinMemberNames;
         using ScaleformValue::ObjectMember;
         using ScaleformValue::Payload;
         using ScaleformValue::StringMember;

@@ -80,7 +80,10 @@ stay unchanged. Only stateful orchestration remains in ordered `.inl` fragments:
 
 ```text
 src/Bridge/
-  State.inl                    constants, snapshots, process state
+  State.inl                    constants, snapshots, process state, and the
+                               pure CoursePipeline/ArrivalAudit machines
+  NavShared.inl                shared utility floor and guarded accessors
+  HudCruiseInput.inl           the complete synthetic HUD Cruise press latch
   Destination.inl              current-system and destination lifecycle
   SafetyEvents.inl             guarded load and grav-jump sinks
   Selection.inl                exact map eligibility and identity construction
@@ -88,7 +91,8 @@ src/Bridge/
     Inspection.inl             read-only vanilla focus/route proof
     Course.inl                 course requests, continuation setup, UI dispatch
     MapAction.inl              accepted action -> navigation transition
-    Driver.inl                 Back -> Set Course -> Execute state machine
+    Driver.inl                 Back -> Set Course -> Execute state machine,
+                               one function per phase
   MapUi/
     Input.inl                  physical input and native hook
     ActionHint.inl             runtime map controls
@@ -96,7 +100,8 @@ src/Bridge/
   HudCruise.inl                HUD feeds, Cruise, course and distance readback
   Lifecycle/
     Subscriptions.inl          movie subscriptions and menu/focus events
-    Continuation.inl           remote moon/station and arrival reconciliation
+    Continuation.inl           orbital (remote moon/station) continuation and
+                               arrival reconciliation, one function per phase
     FramePump.inl              audits and queued main-thread work
 ```
 
@@ -107,8 +112,13 @@ Infrastructure with an independent lifetime is compiled as a normal module:
   passes.
 - `Engine/RuntimeMemory.*`: bounded process-memory reads and executable-image
   range helpers.
+- `Engine/GlobalEventProof.h`: the shared prologue/vtable identity proof for
+  guarded global-event sources.
 - `Input/CruiseBindingResolver.*`: read-only live ControlMap discovery.
-- `Scaleform/ValueAccess.*`: typed GFx payload/member decoding.
+- `Scaleform/ValueAccess.*`: typed GFx payload/member decoding and the bounded
+  member-name diagnostics enumeration.
+- `Scaleform/UiEventDispatch.*`: the stock BSUIDataManager event dispatch
+  invocation (callers own every liveness and threading gate).
 
 The Bridge fragments are still ordered pieces of one translation unit, not
 independent modules. New reusable infrastructure should use a normal header and

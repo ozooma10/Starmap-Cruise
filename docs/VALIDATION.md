@@ -188,6 +188,35 @@ explicitly as not-run. Expected startup-log delta vs the captured baseline:
 the config line loses `galaxyDiagnosticsMode`; timeout log strings now print
 their formatted durations.
 
+### Encapsulation campaign (2026-08-08, code-complete, NOT yet compiled, smoke pending)
+
+Behavior-preserving reorganization authored in an environment without the
+MSVC/CommonLibSF toolchain — **a clean build and `RecordReaderTests` run are
+required before any smoke**:
+
+- [ ] Stateless helpers moved to normal modules: BSUIDataManager event
+  dispatch to `Scaleform/UiEventDispatch.*`, member-name diagnostics to
+  `ScaleformValue::JoinMemberNames`, the global-event prologue/vtable proof to
+  `Engine/GlobalEventProof.h`. Bodies verbatim; the one observable delta is
+  the BSUIDataManager-unavailable warning tag (`[course]` -> `[ui]`).
+- [ ] `HudCruiseInputLatch` (HudCruiseInput.inl) now owns the entire synthetic
+  press machine; `CoursePipeline` replaces `g_courseMutex`+`g_courseAsked*`
+  (one mutex now covers both stages); `ArrivalAudit` replaces the loose
+  audit mutex/fields. Transition logic verbatim; queued-course clears that
+  always accompanied asked-course clears are folded into
+  `ResetDestinationDependentState`.
+- [ ] `RemoteMoonContinuation`/`RemoteMoonPhase` renamed to
+  `OrbitalContinuation`/`OrbitalPhase` (the machine has covered stations
+  since the station continuation landed); moon-specific starters keep their
+  names.
+- [ ] `DriveRemoteRouteRequest` and `DriveOrbitalContinuation` split into one
+  function per phase (`OrbitalTick` carries the shared per-tick context).
+  Conditions, commit predicates, and log strings verbatim (string-diff
+  verified against the prior revision).
+
+The consolidated smoke session above covers this campaign too; no additional
+rows are required beyond the expected `[ui]`-tag log delta.
+
 ## Required release smoke
 
 - [ ] Restart on the newly built DLL and run one no-mouse remote-moon flow from

@@ -25,7 +25,7 @@
   ControlMap, and Scaleform helpers into normal modules without changing the
   navigation state machine.
 - Deduplicated the fail-closed and phase-commit mechanisms behind shared
-  helpers (`FailRemoteRoute`, `TryCommitRemoteMoonPhase`), merged the twin
+  helpers (`FailRemoteRoute`, `TryCommitOrbitalPhase`), merged the twin
   Starmap button builders and plugin-record walks, extracted raw
   StarMapMenu/GalaxyState memory access into `src/Engine/GalaxyState.*`, and
   split the shared utility floor into `NavShared.inl`/`HudCruiseInput.inl` so
@@ -33,6 +33,13 @@
 - Removed the never-run `iGalaxyDiagnosticsMode` capture modes and the deep
   galaxy-focus diagnostics sweeps; failure paths keep the selection proof and
   root member list.
+- Split the remote-route and orbital-continuation drivers into one function
+  per phase, encapsulated the HUD Cruise press latch, arrival audit, and
+  two-stage course pipeline behind single-owner machines, renamed the shared
+  moon/station continuation to `OrbitalContinuation`, and moved stateless
+  Scaleform event dispatch, member-name diagnostics, and the global-event
+  source proof into normal modules; behavior unchanged apart from the
+  BSUIDataManager-unavailable warning tag (`[course]` -> `[ui]`).
 
 ### Removed
 

@@ -86,60 +86,6 @@
             return StringMember(textField, "text");
         }
 
-        // Bounded, read-only member enumeration. It copies names and a type tag
-        // only: no GFx handle is retained past the visit, so nothing can outlive
-        // the movie generation that produced it.
-        class MemberNameCollector : public V::ObjectVisitor
-        {
-        public:
-            explicit MemberNameCollector(std::size_t a_limit) : limit(a_limit) {}
-
-            bool IncludeAS3PublicMembers() const override { return true; }
-
-            void Visit(const char* a_name, const V& a_value) override
-            {
-                ++seen;
-                if (!a_name || names.size() >= limit)
-                    return;
-                const char* kind = "value";
-                if (a_value.IsArray())
-                    kind = "array";
-                else if (a_value.IsDisplayObject())
-                    kind = "displayobject";
-                else if (a_value.IsObject())
-                    kind = "object";
-                else if (a_value.IsBoolean())
-                    kind = "bool";
-                else if (a_value.IsString() || a_value.IsStringW())
-                    kind = "string";
-                else if (a_value.IsNumber() || a_value.IsInt() || a_value.IsUInt())
-                    kind = "number";
-                names.emplace_back(std::format("{}:{}", a_name, kind));
-            }
-
-            std::vector<std::string> names;
-            std::size_t seen{ 0 };
-            std::size_t limit{ 0 };
-        };
-
-        std::string JoinMemberNames(V& a_object, std::size_t a_limit)
-        {
-            if (!a_object.IsObject())
-                return "<not an object>";
-            MemberNameCollector collector{ a_limit };
-            a_object.VisitMembers(&collector);
-            std::string joined;
-            for (const auto& name : collector.names) {
-                if (!joined.empty())
-                    joined += ", ";
-                joined += name;
-            }
-            if (collector.seen > collector.names.size())
-                joined += std::format(", ...(+{} more)",
-                    collector.seen - collector.names.size());
-            return joined.empty() ? "<none>" : joined;
-        }
-
         // Thin guards over Engine::GalaxyState: the Bridge owns the live-menu,
         // map-open, and movie-generation gate; the Engine module owns the
         // vtable proofs and the raw memory access. Every native touch resolves

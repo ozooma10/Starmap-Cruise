@@ -22,9 +22,9 @@
         constexpr auto kRemoteRouteExecuteSettleTime = std::chrono::milliseconds(500);
         constexpr auto kRemoteRouteTimeout = std::chrono::seconds(5);
         constexpr auto kRemoteExecuteAckTimeout = std::chrono::seconds(2);
-        constexpr auto kRemoteMoonFeedTimeout = std::chrono::seconds(10);
-        constexpr auto kRemoteMoonCruiseTimeout = std::chrono::seconds(5);
-        constexpr auto kRemoteMoonLockExitTimeout = std::chrono::seconds(2);
+        constexpr auto kOrbitalFeedTimeout = std::chrono::seconds(10);
+        constexpr auto kOrbitalCruiseTimeout = std::chrono::seconds(5);
+        constexpr auto kOrbitalLockExitTimeout = std::chrono::seconds(2);
         constexpr auto kRemoteStationResolveTimeout = std::chrono::seconds(10);
         // Distinct fail-closed budgets that happen to share values; do not merge.
         constexpr auto kArrivalEvidenceWindow = std::chrono::seconds(2);
@@ -44,10 +44,6 @@
         constexpr REL::ID kLoadGameSourceVtable{ 413741 };
         constexpr REL::ID kGravJumpGetEventSource{ 93876 };
         constexpr REL::ID kGravJumpSourceVtable{ 445846 };
-        constexpr std::array<std::uint8_t, 16> kGlobalEventGetEventSource116244Prologue{
-            0x48, 0x83, 0xEC, 0x28, 0x65, 0x48, 0x8B, 0x04,
-            0x25, 0x58, 0x00, 0x00, 0x00, 0xBA, 0xB8, 0x00,
-        };
 
         struct MovieState
         {
@@ -150,7 +146,10 @@
         std::mutex g_remoteRouteMutex;
         RemoteRouteRequest g_remoteRouteRequest;
 
-        enum class RemoteMoonPhase : std::uint8_t
+        // The shared remote moon/station continuation. "Orbital" covers both
+        // final-target kinds: a moon staging through its unique GNAM parent and
+        // a station staging through its CELL/DNAM/GNAM ancestry.
+        enum class OrbitalPhase : std::uint8_t
         {
             kNone,
             kAwaitingParentFeed,
@@ -166,9 +165,9 @@
             kAwaitingFinalLock,
         };
 
-        struct RemoteMoonContinuation
+        struct OrbitalContinuation
         {
-            RemoteMoonPhase phase{ RemoteMoonPhase::kNone };
+            OrbitalPhase phase{ OrbitalPhase::kNone };
             BodyKind finalKind{ BodyKind::kOther };
             std::uint32_t finalFormID{ 0 };
             std::uint32_t finalCourseFormID{ 0 };
@@ -183,8 +182,8 @@
             Clock::time_point phaseStarted{};
             Clock::time_point inactiveSince{};
         };
-        std::mutex g_remoteMoonMutex;
-        RemoteMoonContinuation g_remoteMoonContinuation;
+        std::mutex g_orbitalMutex;
+        OrbitalContinuation g_orbitalContinuation;
 
         struct MapActionHintState
         {
@@ -214,8 +213,8 @@
         // Driver.inl sets kPendingJump immediately before stock Execute;
         // Course.inl/Continuation.inl publish kAwaitingCruise around queued
         // Cruise presses and waypoint commits (Continuation also CASes
-        // kPendingJump->kAwaitingCruise on arrival); completeFinalLock and the
-        // HudCruise course confirmation publish kAutopilotLocked. Several
+        // kPendingJump->kAwaitingCruise on arrival); OrbitalTick::CompleteFinalLock
+        // and the HudCruise course confirmation publish kAutopilotLocked. Several
         // stores are CAS- or lock-context-dependent; do not funnel them
         // through a wrapper that cannot enforce those contexts.
         std::atomic<NavState> g_state{ NavState::kIdle };
@@ -250,31 +249,92 @@
         PhysicalHold g_hold;
         bool g_claimMapKey{ false };
 
-        enum class HudCruiseInputPhase : std::uint8_t
-        {
-            kIdle,
-            kPressPending,
-            kPressed,
-            kReleasePending,
-        };
-
-        std::mutex g_hudCruiseInputMutex;
-        HudCruiseInputPhase g_hudCruiseInputPhase{ HudCruiseInputPhase::kIdle };
-        const char* g_hudCruiseUserEvent{ "Cruise" };
-        bool g_hudCruiseInputLatched{ false };
-        Clock::time_point g_hudCruiseInputStarted{};
-
-        struct CourseRequest
+        struct QueuedCourse
         {
             std::uint32_t id{ 0 };
             bool clearing{ false };
-            Clock::time_point queued{};
         };
-        std::mutex g_courseMutex;
-        CourseRequest g_courseRequest;
-        std::atomic<std::uint32_t> g_courseAskedID{ 0 };
-        std::atomic<std::int64_t> g_courseAskedTicks{ 0 };
-        std::atomic<bool> g_courseAskedClearing{ false };
+
+        struct AskedCourse
+        {
+            std::uint32_t id{ 0 };
+            bool clearing{ false };
+            Clock::time_point at{};
+        };
+
+        // The two-stage course pipeline: a queued request waits for the Cruise
+        // HUD to become ready, and a dispatched ("asked") request awaits exact
+        // bIsCruiseTargetLock readback. Pure state transitions only; dispatch,
+        // logging, and every timeout policy stay with the callers.
+        class CoursePipeline
+        {
+        public:
+            void Queue(std::uint32_t a_id, bool a_clearing)
+            {
+                std::lock_guard lock{ mutex };
+                queued = { a_id, a_clearing };
+                queuedAt = Clock::now();
+            }
+
+            // Takes the queued request for dispatch only when Cruise is active;
+            // otherwise the request stays queued for a later ready pass.
+            [[nodiscard]] std::optional<QueuedCourse> TakeQueuedForDispatch(
+                bool a_cruiseActive)
+            {
+                std::lock_guard lock{ mutex };
+                if (!queued.id || !a_cruiseActive)
+                    return std::nullopt;
+                const auto request = queued;
+                queued = {};
+                queuedAt = {};
+                return request;
+            }
+
+            [[nodiscard]] std::optional<QueuedCourse> ExpireQueued(
+                Clock::duration a_limit)
+            {
+                std::lock_guard lock{ mutex };
+                if (!queued.id || Clock::now() - queuedAt <= a_limit)
+                    return std::nullopt;
+                const auto expired = queued;
+                queued = {};
+                queuedAt = {};
+                return expired;
+            }
+
+            void MarkAsked(std::uint32_t a_id, bool a_clearing)
+            {
+                std::lock_guard lock{ mutex };
+                asked = { a_id, a_clearing, Clock::now() };
+            }
+
+            [[nodiscard]] AskedCourse Asked()
+            {
+                std::lock_guard lock{ mutex };
+                return asked;
+            }
+
+            void ClearAsked()
+            {
+                std::lock_guard lock{ mutex };
+                asked = {};
+            }
+
+            void Reset()
+            {
+                std::lock_guard lock{ mutex };
+                queued = {};
+                queuedAt = {};
+                asked = {};
+            }
+
+        private:
+            std::mutex mutex;
+            QueuedCourse queued;
+            Clock::time_point queuedAt{};
+            AskedCourse asked;
+        };
+        CoursePipeline g_coursePipeline;
 
         struct HudRow
         {
@@ -319,8 +379,100 @@
             std::uint32_t checkGeneration{ 0 };
             std::int64_t checkTicks{ 0 };
         };
-        std::mutex g_arrivalAuditMutex;
-        ArrivalAuditState g_arrivalAudit;
+
+        struct ArmedArrivalCheck
+        {
+            bool armed{ false };
+            double lastDistance{ -1.0 };
+            std::uint32_t distanceGeneration{ 0 };
+        };
+
+        // The independent close-distance arrival audit: an exact course-lock
+        // loss arms a bounded check against the last same-generation distance
+        // sample. Pure state transitions only; the evidence evaluation and the
+        // destination-clearing policy stay with the callers.
+        class ArrivalAudit
+        {
+        public:
+            // Reacquiring an exact lock invalidates any still-armed audit from
+            // its previous loss while preserving the latest valid distance.
+            void RecordCourseLock(std::uint32_t a_hudGeneration)
+            {
+                std::lock_guard lock{ mutex };
+                state.courseWasLocked = a_hudGeneration != 0;
+                state.courseLockGeneration = a_hudGeneration;
+                state.checkID = 0;
+                state.checkGeneration = 0;
+                state.checkTicks = 0;
+            }
+
+            [[nodiscard]] ArmedArrivalCheck Arm(std::uint32_t a_destinationID,
+                std::uint32_t a_hudGeneration)
+            {
+                std::lock_guard lock{ mutex };
+                ArmedArrivalCheck result{
+                    .lastDistance = state.markedDistance,
+                    .distanceGeneration = state.distanceGeneration,
+                };
+                if (!a_destinationID || !a_hudGeneration ||
+                    !state.courseWasLocked ||
+                    state.courseLockGeneration != a_hudGeneration) {
+                    if (state.courseWasLocked &&
+                        state.courseLockGeneration != a_hudGeneration) {
+                        state.courseWasLocked = false;
+                        state.courseLockGeneration = 0;
+                    }
+                    return result;
+                }
+
+                state.courseWasLocked = false;
+                state.courseLockGeneration = 0;
+                state.checkID = a_destinationID;
+                state.checkGeneration = a_hudGeneration;
+                state.checkTicks = Clock::now().time_since_epoch().count();
+                result.armed = true;
+                return result;
+            }
+
+            void RecordDistance(double a_distance, std::uint32_t a_generation)
+            {
+                std::lock_guard lock{ mutex };
+                state.markedDistance = a_distance;
+                state.distanceGeneration = a_generation;
+            }
+
+            [[nodiscard]] ArrivalAuditState Snapshot()
+            {
+                std::lock_guard lock{ mutex };
+                return state;
+            }
+
+            // Clears the armed check only while it is still the one the caller
+            // sampled; a newer arming survives.
+            bool TryClearCheck(std::uint32_t a_checkID,
+                std::uint32_t a_checkGeneration)
+            {
+                std::lock_guard lock{ mutex };
+                if (state.checkID != a_checkID ||
+                    state.checkGeneration != a_checkGeneration)
+                    return false;
+                state.checkID = 0;
+                state.checkGeneration = 0;
+                state.checkTicks = 0;
+                return true;
+            }
+
+            void Reset()
+            {
+                std::lock_guard lock{ mutex };
+                state = {};
+            }
+
+        private:
+            std::mutex mutex;
+            ArrivalAuditState state;
+        };
+        ArrivalAudit g_arrivalAudit;
 
         std::atomic<std::int64_t> g_lastUnsettledTicks{ 0 };
 

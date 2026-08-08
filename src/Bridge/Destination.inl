@@ -1,7 +1,8 @@
 // Included by Bridge.cpp inside CFS::Bridge's anonymous namespace.
 // Owns the destination lifecycle: current-system resolution, native station
-// target assignment, arrival-audit arming, and the store/clear/fail-closed
-// plumbing every driver funnels through.
+// target assignment, and the store/clear/fail-closed plumbing every driver
+// funnels through. The arrival audit itself is the ArrivalAudit machine in
+// State.inl; its evidence policy lives with the HUD feed and frame audits.
 
         void ResolveCurrentSystem(const std::vector<HudRow>& a_rows)
         {
@@ -97,54 +98,6 @@
             return true;
         }
 
-        void RecordCourseLock(std::uint32_t a_hudGeneration)
-        {
-            std::lock_guard lock{ g_arrivalAuditMutex };
-            g_arrivalAudit.courseWasLocked = a_hudGeneration != 0;
-            g_arrivalAudit.courseLockGeneration = a_hudGeneration;
-            // Reacquiring an exact lock invalidates any still-armed audit from
-            // its previous loss while preserving the latest valid distance.
-            g_arrivalAudit.checkID = 0;
-            g_arrivalAudit.checkGeneration = 0;
-            g_arrivalAudit.checkTicks = 0;
-        }
-
-        struct ArmedArrivalCheck
-        {
-            bool armed{ false };
-            double lastDistance{ -1.0 };
-            std::uint32_t distanceGeneration{ 0 };
-        };
-
-        ArmedArrivalCheck ArmArrivalCheck(std::uint32_t a_destinationID,
-            std::uint32_t a_hudGeneration)
-        {
-            std::lock_guard lock{ g_arrivalAuditMutex };
-            ArmedArrivalCheck result{
-                .lastDistance = g_arrivalAudit.markedDistance,
-                .distanceGeneration = g_arrivalAudit.distanceGeneration,
-            };
-            if (!a_destinationID || !a_hudGeneration ||
-                !g_arrivalAudit.courseWasLocked ||
-                g_arrivalAudit.courseLockGeneration != a_hudGeneration) {
-                if (g_arrivalAudit.courseWasLocked &&
-                    g_arrivalAudit.courseLockGeneration != a_hudGeneration) {
-                    g_arrivalAudit.courseWasLocked = false;
-                    g_arrivalAudit.courseLockGeneration = 0;
-                }
-                return result;
-            }
-
-            g_arrivalAudit.courseWasLocked = false;
-            g_arrivalAudit.courseLockGeneration = 0;
-            g_arrivalAudit.checkID = a_destinationID;
-            g_arrivalAudit.checkGeneration = a_hudGeneration;
-            g_arrivalAudit.checkTicks =
-                Clock::now().time_since_epoch().count();
-            result.armed = true;
-            return result;
-        }
-
         bool ReleaseNavStateToMark()
         {
             auto expected = NavState::kAwaitingCruise;
@@ -155,14 +108,10 @@
 
         void ResetDestinationDependentState(NavState a_state)
         {
-            ResetRemoteMoonContinuation();
-            g_courseAskedID.store(0, std::memory_order_release);
-            g_courseAskedClearing.store(false, std::memory_order_release);
+            ResetOrbitalContinuation();
+            g_coursePipeline.Reset();
             g_state.store(a_state, std::memory_order_release);
-            {
-                std::lock_guard lock{ g_arrivalAuditMutex };
-                g_arrivalAudit = {};
-            }
+            g_arrivalAudit.Reset();
             g_pendingJumpDevice.store(RE::InputEvent::DeviceType::kNone,
                 std::memory_order_release);
             g_pendingStationResolveTicks.store(0, std::memory_order_release);
@@ -177,10 +126,6 @@
                 std::lock_guard lock{ g_destinationMutex };
                 old = std::move(g_destination);
                 g_destination.reset();
-            }
-            {
-                std::lock_guard lock{ g_courseMutex };
-                g_courseRequest = {};
             }
             {
                 std::lock_guard lock{ g_remoteRouteMutex };
@@ -199,10 +144,6 @@
                 std::lock_guard lock{ g_destinationMutex };
                 old = g_destination;
                 g_destination = a_destination;
-            }
-            {
-                std::lock_guard lock{ g_courseMutex };
-                g_courseRequest = {};
             }
             // Do not clear g_remoteRouteRequest here. An active guarded route is
             // authoritative: if another mark appears, its retained target must
@@ -227,19 +168,19 @@
                 return;
             REX::WARN("[station] automatic remote continuation failed closed: {}",
                 a_reason);
-            CancelOrReleaseHudCruiseInput(a_reason);
+            g_hudCruiseInput.CancelOrRelease(a_reason);
             ClearDestination(a_reason);
         }
 
-        void FailRemoteMoonContinuation(const std::string& a_reason)
+        void FailOrbitalContinuation(const std::string& a_reason)
         {
-            if (!RemoteMoonContinuationActive())
+            if (!OrbitalContinuationActive())
                 return;
-            const auto continuation = RemoteMoonState();
+            const auto continuation = OrbitalState();
             REX::WARN("[orbital] automatic {} continuation failed closed: {}",
                 continuation ? DestinationKindName(continuation->finalKind) : "target",
                 a_reason);
-            CancelOrReleaseHudCruiseInput(a_reason.c_str());
+            g_hudCruiseInput.CancelOrRelease(a_reason.c_str());
             ClearDestination(a_reason.c_str());
         }
 
@@ -248,8 +189,8 @@
         // does. Returns true when a continuation consumed the failure.
         bool FailActiveContinuationsOrRelease(const char* a_reason)
         {
-            if (RemoteMoonContinuationActive()) {
-                FailRemoteMoonContinuation(a_reason);
+            if (OrbitalContinuationActive()) {
+                FailOrbitalContinuation(a_reason);
                 return true;
             }
             if (RemoteStationTargetAssigned()) {

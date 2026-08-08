@@ -16,50 +16,12 @@
             }
         } g_loadGameSink;
 
-        // Shared mechanical legs of the global-event identity guard: exact
-        // 1.16.244 getter prologue, then the live source's primary vtable.
-        // Per-sink policy (the extra source-static leg, logging, registration)
-        // stays with each installer.
-        template <class Event>
-        struct GlobalEventSourceProof
-        {
-            RE::BSTEventSource<Event>* source{ nullptr };
-            std::uintptr_t vtable{ 0 };
-            std::array<std::uint8_t, kGlobalEventGetEventSource116244Prologue.size()> prologue{};
-            bool prologueReadable{ false };
-            bool prologueMatches{ false };
-            bool vtableMatches{ false };
-
-            [[nodiscard]] std::uintptr_t SourceAddress() const noexcept
-            {
-                return reinterpret_cast<std::uintptr_t>(source);
-            }
-        };
-
-        template <class Event>
-        GlobalEventSourceProof<Event> ProveGlobalEventSource(
-            const REL::ID& a_getter, const REL::ID& a_expectedVtable)
-        {
-            GlobalEventSourceProof<Event> proof;
-            proof.prologueReadable = ReadMemory(a_getter.address(), proof.prologue);
-            proof.prologueMatches = proof.prologueReadable &&
-                proof.prologue == kGlobalEventGetEventSource116244Prologue;
-            if (!proof.prologueMatches)
-                return proof;
-            proof.source = Event::GetEventSource();
-            const bool sourceReadable = proof.source &&
-                ReadMemory(proof.SourceAddress(), proof.vtable);
-            proof.vtableMatches = sourceReadable &&
-                proof.vtable == a_expectedVtable.address();
-            return proof;
-        }
-
         void TryInstallLoadGameSink()
         {
             if (g_loadGameSinkAttempted.exchange(true, std::memory_order_acq_rel))
                 return;
 
-            const auto proof = ProveGlobalEventSource<RE::TESLoadGameEvent>(
+            const auto proof = Engine::ProveGlobalEventSource<RE::TESLoadGameEvent>(
                 kLoadGameGetEventSource, kLoadGameSourceVtable);
             if (!proof.prologueMatches) {
                 REX::ERROR("[safety] TESLoadGameEvent ID 64149 fingerprint failed at {:016X}: [{}]; remote targets disabled",
@@ -109,7 +71,7 @@
             if (g_gravJumpSinkAttempted.exchange(true, std::memory_order_acq_rel))
                 return;
 
-            const auto proof = ProveGlobalEventSource<RE::Spaceship::GravJumpEvent>(
+            const auto proof = Engine::ProveGlobalEventSource<RE::Spaceship::GravJumpEvent>(
                 kGravJumpGetEventSource, kGravJumpSourceVtable);
             REX::INFO("[jump] GravJumpEvent guard prologue=[{}] source={:016X} vtable={:016X}/{:016X} match={}",
                 proof.prologueReadable ? HexBytes(proof.prologue) : "unreadable",
