@@ -78,7 +78,6 @@
             std::uint32_t generation{ 0 };
             bool openedWhileFlying{ false };
             bool wasCruising{ false };
-            bool cruiseEngageAvailable{ false };
             bool haveCapturedSystem{ false };
             std::uint32_t capturedSystem{ 0 };
             std::int32_t view{ -1 };

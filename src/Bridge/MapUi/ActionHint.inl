@@ -7,14 +7,22 @@
                    (a_buttonBar.IsObject() || a_buttonBar.IsDisplayObject());
         }
 
-        bool BuildCruiseComboButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
+        // Builds either the stacked tap+hold combo button or the tap-only
+        // button; the two differ only in the hold leg, the ButtonData class,
+        // and the factory type.
+        bool BuildCruiseActionButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
             V& a_buttonBar, V& a_vanillaData, V& a_button,
-            V& a_mkbButtonData, V& a_gamepadButtonData)
+            V& a_mkbButtonData, V& a_gamepadButtonData, bool a_combo)
         {
+            const char* const variant = a_combo ? "stacked" : "tap-only";
             V tapCallback;
             a_root->CreateFunction(&tapCallback, &g_mapTapActionHandler);
             V holdCallback;
-            a_root->CreateFunction(&holdCallback, &g_mapHoldActionHandler);
+            if (a_combo)
+                a_root->CreateFunction(&holdCallback, &g_mapHoldActionHandler);
+            // ShipReticle swaps distinct data objects on input-device changes:
+            // Cruise for MKB and SHMonocle for gamepad. The Starmap mirrors
+            // that stock pattern so ButtonKeyHelper can resolve a real glyph.
             const auto buildData = [&](const char* a_userEvent, V& a_buttonData) {
                 V pressEventName;
                 a_root->CreateString(&pressEventName, a_userEvent);
@@ -22,40 +30,53 @@
                 V pressEvent;
                 a_root->CreateObject(&pressEvent,
                     "Shared.Components.ButtonControls.ButtonData.UserEventData", pressArgs, 2);
-
-                V emptyName;
-                a_root->CreateString(&emptyName, "");
-                V holdArgs[2]{ emptyName, holdCallback };
-                V holdEvent;
-                a_root->CreateObject(&holdEvent,
-                    "Shared.Components.ButtonControls.ButtonData.UserEventData", holdArgs, 2);
-                if (!(pressEvent.IsObject() || pressEvent.IsDisplayObject()) ||
-                    !(holdEvent.IsObject() || holdEvent.IsDisplayObject())) {
-                    REX::WARN("[map] stacked '{}' action hint unavailable: UserEventData construction failed",
-                        a_userEvent);
+                if (!(pressEvent.IsObject() || pressEvent.IsDisplayObject())) {
+                    REX::WARN("[map] {} '{}' action hint unavailable: UserEventData construction failed",
+                        variant, a_userEvent);
                     return false;
                 }
 
                 V events;
                 a_root->CreateArray(&events);
-                if (!events.IsArray() || !events.PushBack(pressEvent) ||
-                    !events.PushBack(holdEvent)) {
-                    REX::WARN("[map] stacked '{}' action hint unavailable: combo event array construction failed",
-                        a_userEvent);
+                if (!events.IsArray() || !events.PushBack(pressEvent)) {
+                    REX::WARN("[map] {} '{}' action hint unavailable: event array construction failed",
+                        variant, a_userEvent);
                     return false;
+                }
+                if (a_combo) {
+                    V emptyName;
+                    a_root->CreateString(&emptyName, "");
+                    V holdArgs[2]{ emptyName, holdCallback };
+                    V holdEvent;
+                    a_root->CreateObject(&holdEvent,
+                        "Shared.Components.ButtonControls.ButtonData.UserEventData", holdArgs, 2);
+                    if (!(holdEvent.IsObject() || holdEvent.IsDisplayObject()) ||
+                        !events.PushBack(holdEvent)) {
+                        REX::WARN("[map] {} '{}' action hint unavailable: combo event array construction failed",
+                            variant, a_userEvent);
+                        return false;
+                    }
                 }
 
                 V pressLabel;
-                V holdLabel;
                 a_root->CreateString(&pressLabel, kCruiseMapActionLabel);
-                a_root->CreateString(&holdLabel, kCruiseMapActionHoldLabel);
-                V dataArgs[3]{ pressLabel, holdLabel, events };
-                a_root->CreateObject(&a_buttonData,
-                    "Shared.Components.ButtonControls.ButtonData.ReleaseHoldComboButtonData",
-                    dataArgs, 3);
+                if (a_combo) {
+                    V holdLabel;
+                    a_root->CreateString(&holdLabel, kCruiseMapActionHoldLabel);
+                    V dataArgs[3]{ pressLabel, holdLabel, events };
+                    a_root->CreateObject(&a_buttonData,
+                        "Shared.Components.ButtonControls.ButtonData.ReleaseHoldComboButtonData",
+                        dataArgs, 3);
+                } else {
+                    V dataArgs[2]{ pressLabel, events };
+                    a_root->CreateObject(&a_buttonData,
+                        "Shared.Components.ButtonControls.ButtonData.ButtonBaseData",
+                        dataArgs, 2);
+                }
                 if (!(a_buttonData.IsObject() || a_buttonData.IsDisplayObject())) {
-                    REX::WARN("[map] stacked '{}' action hint unavailable: ReleaseHoldComboButtonData construction failed",
-                        a_userEvent);
+                    REX::WARN("[map] {} '{}' action hint unavailable: {} construction failed",
+                        variant, a_userEvent, a_combo ?
+                            "ReleaseHoldComboButtonData" : "ButtonBaseData");
                     return false;
                 }
 
@@ -70,99 +91,29 @@
                 !buildData(kCruiseMapGamepadUserEvent, a_gamepadButtonData))
                 return false;
 
-            // ReleaseHoldComboButton is an imported library symbol. Let the
-            // movie instantiate it through the same factory used by
+            // ReleaseHoldComboButton/BasicButton are imported library symbols.
+            // Let the movie instantiate them through the same factory used by
             // StarMapButtonHintBar.PopulateButtons; creating the AS3 class
             // directly does not attach the exported display asset.
             V factory;
             if (!a_root->GetVariable(&factory,
                     "Shared.Components.ButtonControls.ButtonFactory.ButtonFactory") ||
                 !(factory.IsObject() || factory.IsDisplayObject())) {
-                REX::WARN("[map] stacked action hint unavailable: stock ButtonFactory is inaccessible");
+                REX::WARN("[map] {} action hint unavailable: stock ButtonFactory is inaccessible",
+                    variant);
                 return false;
             }
+            const char* const buttonClass =
+                a_combo ? "ReleaseHoldComboButton" : "BasicButton";
             V buttonType;
-            a_root->CreateString(&buttonType, "ReleaseHoldComboButton");
+            a_root->CreateString(&buttonType, buttonClass);
             V& initialData = g_lastInputWasGamepad.load(std::memory_order_acquire) ?
                                  a_gamepadButtonData : a_mkbButtonData;
             V factoryArgs[3]{ buttonType, initialData, a_buttonBar };
             if (!factory.Invoke("AddToButtonBar", &a_button, factoryArgs, 3) ||
                 !(a_button.IsObject() || a_button.IsDisplayObject())) {
-                REX::WARN("[map] stacked action hint unavailable: stock ButtonFactory rejected ReleaseHoldComboButton");
-                return false;
-            }
-
-            return true;
-        }
-
-        bool BuildCruiseTapButton(RE::Scaleform::GFx::ASMovieRootBase* a_root,
-            V& a_buttonBar, V& a_vanillaData, V& a_button,
-            V& a_mkbButtonData, V& a_gamepadButtonData)
-        {
-            V tapCallback;
-            a_root->CreateFunction(&tapCallback, &g_mapTapActionHandler);
-            // ShipReticle swaps distinct data objects on input-device changes:
-            // Cruise for MKB and SHMonocle for gamepad. The Starmap mirrors
-            // that stock pattern so ButtonKeyHelper can resolve a real glyph.
-            const auto buildData = [&](const char* a_userEvent, V& a_buttonData) {
-                V eventName;
-                a_root->CreateString(&eventName, a_userEvent);
-                V eventArgs[2]{ eventName, tapCallback };
-                V tapEvent;
-                a_root->CreateObject(&tapEvent,
-                    "Shared.Components.ButtonControls.ButtonData.UserEventData", eventArgs, 2);
-                if (!(tapEvent.IsObject() || tapEvent.IsDisplayObject())) {
-                    REX::WARN("[map] tap-only '{}' action hint unavailable: UserEventData construction failed",
-                        a_userEvent);
-                    return false;
-                }
-
-                V events;
-                a_root->CreateArray(&events);
-                if (!events.IsArray() || !events.PushBack(tapEvent)) {
-                    REX::WARN("[map] tap-only '{}' action hint unavailable: event array construction failed",
-                        a_userEvent);
-                    return false;
-                }
-
-                V label;
-                a_root->CreateString(&label, kCruiseMapActionLabel);
-                V dataArgs[2]{ label, events };
-                a_root->CreateObject(&a_buttonData,
-                    "Shared.Components.ButtonControls.ButtonData.ButtonBaseData",
-                    dataArgs, 2);
-                if (!(a_buttonData.IsObject() || a_buttonData.IsDisplayObject())) {
-                    REX::WARN("[map] tap-only '{}' action hint unavailable: ButtonBaseData construction failed",
-                        a_userEvent);
-                    return false;
-                }
-
-                for (const char* member : { "bEnabled", "bVisible" }) {
-                    V value;
-                    if (a_vanillaData.GetMember(member, &value))
-                        a_buttonData.SetMember(member, value);
-                }
-                return true;
-            };
-            if (!buildData(kCruiseMapUserEvent, a_mkbButtonData) ||
-                !buildData(kCruiseMapGamepadUserEvent, a_gamepadButtonData))
-                return false;
-
-            V factory;
-            if (!a_root->GetVariable(&factory,
-                    "Shared.Components.ButtonControls.ButtonFactory.ButtonFactory") ||
-                !(factory.IsObject() || factory.IsDisplayObject())) {
-                REX::WARN("[map] tap-only action hint unavailable: stock ButtonFactory is inaccessible");
-                return false;
-            }
-            V buttonType;
-            a_root->CreateString(&buttonType, "BasicButton");
-            V& initialData = g_lastInputWasGamepad.load(std::memory_order_acquire) ?
-                                 a_gamepadButtonData : a_mkbButtonData;
-            V factoryArgs[3]{ buttonType, initialData, a_buttonBar };
-            if (!factory.Invoke("AddToButtonBar", &a_button, factoryArgs, 3) ||
-                !(a_button.IsObject() || a_button.IsDisplayObject())) {
-                REX::WARN("[map] tap-only action hint unavailable: stock ButtonFactory rejected BasicButton");
+                REX::WARN("[map] {} action hint unavailable: stock ButtonFactory rejected {}",
+                    variant, buttonClass);
                 return false;
             }
 
@@ -249,8 +200,8 @@
                 V tapButton;
                 V tapMkbButtonData;
                 V tapGamepadButtonData;
-                if (!BuildCruiseTapButton(a_root, a_buttonBar, a_vanillaData,
-                        tapButton, tapMkbButtonData, tapGamepadButtonData)) {
+                if (!BuildCruiseActionButton(a_root, a_buttonBar, a_vanillaData,
+                        tapButton, tapMkbButtonData, tapGamepadButtonData, false)) {
                     SyncCruiseMapButtons(a_vanillaData, a_buttonBar, {}, true);
                     REX::WARN("[map] tap-only action hint installation failed; preserving vanilla route button");
                     return false;
@@ -263,8 +214,8 @@
                 V comboButton;
                 V comboMkbButtonData;
                 V comboGamepadButtonData;
-                if (!BuildCruiseComboButton(a_root, a_buttonBar, a_vanillaData,
-                        comboButton, comboMkbButtonData, comboGamepadButtonData)) {
+                if (!BuildCruiseActionButton(a_root, a_buttonBar, a_vanillaData,
+                        comboButton, comboMkbButtonData, comboGamepadButtonData, true)) {
                     SyncCruiseMapButtons(a_vanillaData, a_buttonBar, {}, false);
                     REX::WARN("[map] stacked action hint installation failed; preserving vanilla route button");
                     return false;
@@ -295,8 +246,12 @@
             const bool remoteRoutable = eligibility.destination &&
                 UsesRemoteSystemRoute(*eligibility.destination) &&
                 eligibility.destination->galaxy.system != snapshot.capturedSystem;
+            // Read once so the tap-only decision, the hint signature, and the
+            // verbose log stay coherent within this pass.
+            const bool engageAvailable =
+                g_cruiseEngageAvailable.load(std::memory_order_acquire);
             const bool tapOnly = remoteRoutable || snapshot.wasCruising ||
-                                 !snapshot.cruiseEngageAvailable;
+                                 !engageAvailable;
 
             RE::Scaleform::GFx::ASMovieRootBase* root = nullptr;
             V menuRoot;
@@ -331,7 +286,8 @@
                 }
             }
 
-            const auto signature = EligibilitySignature(snapshot, eligibility);
+            const auto signature = EligibilitySignature(snapshot, eligibility,
+                engageAvailable);
             const bool signatureChanged =
                 g_mapActionHintSignature.load(std::memory_order_acquire) != signature;
             if (!signatureChanged)
@@ -377,7 +333,7 @@
                     eligibility.show ? (eligibility.enabled ? "ENABLED" : "DISABLED") : "HIDDEN",
                     remoteRoutable ? "TAP/REMOTE" :
                         snapshot.wasCruising ? "TAP/ACTIVE" :
-                        (snapshot.cruiseEngageAvailable ? "TAP/HOLD" : "TAP/UNAVAILABLE"),
+                        (engageAvailable ? "TAP/HOLD" : "TAP/UNAVAILABLE"),
                     eligibility.show ? eligibility.label : "",
                     eligibility.detail, snapshot.session, snapshot.generation);
         }

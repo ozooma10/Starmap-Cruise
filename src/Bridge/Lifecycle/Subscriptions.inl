@@ -121,15 +121,13 @@
                     g_map.generation = g_mapMovie.generation.load(std::memory_order_acquire);
                     g_map.openedWhileFlying = IsFlying();
                     g_map.wasCruising = g_cruiseActive.load(std::memory_order_acquire);
-                    g_map.cruiseEngageAvailable =
-                        g_cruiseEngageAvailable.load(std::memory_order_acquire);
                     g_map.haveCapturedSystem = haveSystem;
                     g_map.capturedSystem = g_currentSystem.load(std::memory_order_acquire);
                     g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
                     if (Settings::Verbose())
                         REX::INFO("[map] open session={} generation={} flying={} cruise={} cruiseAvailable={} currentSystem={}",
                             session, g_map.generation, g_map.openedWhileFlying, g_map.wasCruising,
-                            g_map.cruiseEngageAvailable,
+                            g_cruiseEngageAvailable.load(std::memory_order_acquire),
                             haveSystem ? std::format("{}", g_map.capturedSystem) : "unresolved");
                 } else {
                     g_mapActionInteractive.store(false, std::memory_order_release);

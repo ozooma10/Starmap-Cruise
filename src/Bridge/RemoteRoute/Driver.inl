@@ -35,6 +35,16 @@
             return true;
         }
 
+        // Shared fail-closed exit for the route driver: every abandoned
+        // request drops the session acceptance latch, clears the mark, and
+        // re-dirties the map hint. Each caller logs its own [jump] warning.
+        void FailRemoteRoute(const char* a_reason)
+        {
+            g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
+            ClearDestination(a_reason);
+            g_mapUiDirty.store(true, std::memory_order_release);
+        }
+
         void DriveRemoteRouteRequest()
         {
             if (!g_applicationForeground.load(std::memory_order_acquire))
@@ -61,8 +71,7 @@
                 request.generation != snapshot.generation) {
                 if (!g_mapOpen.load(std::memory_order_acquire))
                     return;  // The menu-close sink owns cancellation or success.
-                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                ClearDestination("remote Set Course session or destination changed");
+                FailRemoteRoute("remote Set Course session or destination changed");
                 REX::WARN("[jump] remote route request lost its guarded map identity; mark cleared");
                 return;
             }
@@ -70,10 +79,8 @@
             if (request.phase == RemoteRoutePhase::kAwaitExecuteAck) {
                 if (age <= kRemoteExecuteAckTimeout)
                     return;
-                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                ClearDestination(
+                FailRemoteRoute(
                     "stock Execute Route produced no map-close acknowledgement");
-                g_mapUiDirty.store(true, std::memory_order_release);
                 REX::WARN("[jump] stock Execute Route produced no map-close acknowledgement after {} ms; remote mark cleared",
                     std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
                 return;
@@ -120,11 +127,9 @@
 
                 if (age < kRemoteRouteTimeout)
                     return;
-                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
                 const auto reason = std::format("vanilla Back did not produce a matching galaxy focus: {}",
                     gateDetail);
-                ClearDestination(reason.c_str());
-                g_mapUiDirty.store(true, std::memory_order_release);
+                FailRemoteRoute(reason.c_str());
                 REX::WARN("[jump] {}; remote mark cleared", reason);
                 return;
             }
@@ -133,9 +138,7 @@
                 if (snapshot.view != kGalaxyView) {
                     if (age < kRemoteRouteTimeout)
                         return;
-                    g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                    ClearDestination("galaxy marker context left galaxy view before Set Course");
-                    g_mapUiDirty.store(true, std::memory_order_release);
+                    FailRemoteRoute("galaxy marker context left galaxy view before Set Course");
                     REX::WARN("[jump] marker-context gate timed out outside galaxy view; remote mark cleared");
                     return;
                 }
@@ -165,9 +168,7 @@
                     std::string routeSelectionDetail;
                     if (!ArmNativeQuickSelectRouteSelection(snapshot,
                             request.systemBodyID, routeSelectionDetail)) {
-                        g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                        ClearDestination("native Quick Select route selection could not be armed");
-                        g_mapUiDirty.store(true, std::memory_order_release);
+                        FailRemoteRoute("native Quick Select route selection could not be armed");
                         REX::WARN("[jump] native Quick Select route selection unavailable ({}); remote mark cleared",
                             routeSelectionDetail);
                         return;
@@ -177,9 +178,7 @@
                     if (!DispatchVanillaSetCourse(root)) {
                         std::string cleanupDetail;
                         ConfirmNativeQuickSelectConsumed(snapshot, cleanupDetail);
-                        g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                        ClearDestination("vanilla system-level Set Course handoff failed");
-                        g_mapUiDirty.store(true, std::memory_order_release);
+                        FailRemoteRoute("vanilla system-level Set Course handoff failed");
                         REX::WARN("[jump] stock system-level SetRouteDestination dispatch failed; remote mark cleared ({})",
                             cleanupDetail);
                         return;
@@ -187,9 +186,7 @@
                     std::string consumedDetail;
                     if (!ConfirmNativeQuickSelectConsumed(snapshot,
                             consumedDetail)) {
-                        g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                        ClearDestination("vanilla Set Course did not consume Quick Select route selection");
-                        g_mapUiDirty.store(true, std::memory_order_release);
+                        FailRemoteRoute("vanilla Set Course did not consume Quick Select route selection");
                         REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
                             consumedDetail);
                         return;
@@ -229,9 +226,7 @@
                             detail);
                         LogGalaxyFocusDiagnostics(menuRoot, snapshot, proof,
                             request.systemBodyID);
-                        g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                        ClearDestination("guarded native galaxy system selection was unavailable");
-                        g_mapUiDirty.store(true, std::memory_order_release);
+                        FailRemoteRoute("guarded native galaxy system selection was unavailable");
                         REX::WARN("[jump] guarded native galaxy system selection failed closed; remote mark cleared and vanilla route state preserved");
                         return;
                     }
@@ -254,11 +249,9 @@
 
                 if (age < kRemoteRouteTimeout)
                     return;
-                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
                 const auto reason = std::format("no cursor-independent galaxy marker context was established: {}",
                     proof.Describe(snapshot, request.systemBodyID));
-                ClearDestination(reason.c_str());
-                g_mapUiDirty.store(true, std::memory_order_release);
+                FailRemoteRoute(reason.c_str());
                 REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
                     reason);
                 return;
@@ -267,9 +260,7 @@
             if (snapshot.view != kGalaxyView) {
                 if (age < kRemoteRouteTimeout)
                     return;
-                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                ClearDestination("system-level Set Course left galaxy view before producing a route");
-                g_mapUiDirty.store(true, std::memory_order_release);
+                FailRemoteRoute("system-level Set Course left galaxy view before producing a route");
                 REX::WARN("[jump] system-level route gate timed out outside galaxy view; remote mark cleared");
                 return;
             }
@@ -287,11 +278,9 @@
                 if (age < kRemoteRouteTimeout)
                     return;
 
-                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
                 const auto reason = std::format("vanilla Set Course did not produce an executable matching route: {}",
                     gate.detail);
-                ClearDestination(reason.c_str());
-                g_mapUiDirty.store(true, std::memory_order_release);
+                FailRemoteRoute(reason.c_str());
                 REX::WARN("[jump] {}; remote mark cleared and vanilla route state preserved",
                     reason);
                 return;
@@ -314,11 +303,7 @@
                 return;
 
             if (g_cruiseActive.load(std::memory_order_acquire)) {
-                g_selectionAcceptedThisOpen.store(false,
-                    std::memory_order_release);
-                ClearDestination(
-                    "Cruise became active before remote Execute");
-                g_mapUiDirty.store(true, std::memory_order_release);
+                FailRemoteRoute("Cruise became active before remote Execute");
                 REX::WARN("[jump] Cruise became active after remote selection; route cleared before Execute");
                 return;
             }
@@ -336,9 +321,7 @@
             // dispatching StarMapMenu_ExecuteRoute.
             g_state.store(NavState::kPendingJump, std::memory_order_release);
             if (!jumpData.Invoke("SendExecuteEvent")) {
-                g_selectionAcceptedThisOpen.store(false, std::memory_order_release);
-                ClearDestination("vanilla Execute Route handoff failed");
-                g_mapUiDirty.store(true, std::memory_order_release);
+                FailRemoteRoute("vanilla Execute Route handoff failed");
                 REX::WARN("[jump] JumpDataPanel.SendExecuteEvent invocation failed; remote mark cleared");
                 return;
             }

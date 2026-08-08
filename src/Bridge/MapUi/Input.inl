@@ -123,6 +123,29 @@
             return false;
         }
 
+        // Resolves the map-context Cruise binding (and keyboard chord
+        // modifier) for a device; -1 means unbound.
+        void CruiseMapBindingFor(RE::InputEvent::DeviceType a_device,
+            std::int32_t& a_binding, std::int32_t& a_modifier)
+        {
+            a_binding = -1;
+            a_modifier = -1;
+            switch (a_device) {
+            case RE::InputEvent::DeviceType::kKeyboard:
+                a_binding = g_cruiseMapKey.load(std::memory_order_acquire);
+                a_modifier = g_cruiseMapModifier.load(std::memory_order_acquire);
+                break;
+            case RE::InputEvent::DeviceType::kMouse:
+                a_binding = g_cruiseMapMouseButton.load(std::memory_order_acquire);
+                break;
+            case RE::InputEvent::DeviceType::kGamepad:
+                a_binding = g_cruiseMapGamepadButton.load(std::memory_order_acquire);
+                break;
+            default:
+                break;
+            }
+        }
+
         bool RouteCruiseMapControl(RE::ButtonEvent* a_button)
         {
             if (!a_button || !g_mapOpen.load(std::memory_order_acquire) ||
@@ -131,20 +154,7 @@
 
             std::int32_t binding = -1;
             std::int32_t modifier = -1;
-            switch (a_button->deviceType) {
-            case RE::InputEvent::DeviceType::kKeyboard:
-                binding = g_cruiseMapKey.load(std::memory_order_acquire);
-                modifier = g_cruiseMapModifier.load(std::memory_order_acquire);
-                break;
-            case RE::InputEvent::DeviceType::kMouse:
-                binding = g_cruiseMapMouseButton.load(std::memory_order_acquire);
-                break;
-            case RE::InputEvent::DeviceType::kGamepad:
-                binding = g_cruiseMapGamepadButton.load(std::memory_order_acquire);
-                break;
-            default:
-                return false;
-            }
+            CruiseMapBindingFor(a_button->deviceType, binding, modifier);
             if (binding < 0 || a_button->idCode != binding)
                 return false;
 
@@ -178,19 +188,8 @@
                 return false;
 
             std::int32_t binding = -1;
-            switch (a_button->deviceType) {
-            case RE::InputEvent::DeviceType::kKeyboard:
-                binding = g_cruiseMapKey.load(std::memory_order_acquire);
-                break;
-            case RE::InputEvent::DeviceType::kMouse:
-                binding = g_cruiseMapMouseButton.load(std::memory_order_acquire);
-                break;
-            case RE::InputEvent::DeviceType::kGamepad:
-                binding = g_cruiseMapGamepadButton.load(std::memory_order_acquire);
-                break;
-            default:
-                return false;
-            }
+            std::int32_t modifier = -1;
+            CruiseMapBindingFor(a_button->deviceType, binding, modifier);
             if (binding < 0 || a_button->idCode != binding)
                 return false;
             if (a_button->value != 0.0f && a_button->heldDownSecs == 0.0f)
@@ -274,7 +273,7 @@
         }
 
         std::uint64_t EligibilitySignature(const MapSnapshot& a_snapshot,
-            const MapEligibility& a_eligibility)
+            const MapEligibility& a_eligibility, bool a_engageAvailable)
         {
             std::uint64_t signature = 1469598103934665603ull;
             const auto mix = [&signature](std::uint64_t a_value) {
@@ -284,7 +283,7 @@
             mix(a_snapshot.generation);
             mix(a_snapshot.session);
             mix(a_snapshot.wasCruising);
-            mix(a_snapshot.cruiseEngageAvailable);
+            mix(a_engageAvailable);
             mix(g_lastInputWasGamepad.load(std::memory_order_acquire));
             mix(static_cast<std::uint64_t>(a_eligibility.code));
             mix(a_snapshot.markerBodyID);

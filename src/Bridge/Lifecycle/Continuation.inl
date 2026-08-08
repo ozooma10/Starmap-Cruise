@@ -211,14 +211,13 @@
                 if (parentRows.empty())
                     return;
                 bool firstResolved = false;
-                {
-                    std::lock_guard lock{ g_remoteMoonMutex };
-                    if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kAwaitingParentFeed)
-                        return;
-                    firstResolved = g_remoteMoonContinuation.parentName.empty();
-                    g_remoteMoonContinuation.parentName = parentRows.front().name.empty() ?
-                        g_remoteMoonContinuation.parentEditorID : parentRows.front().name;
-                }
+                if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentFeed,
+                        *continuation, [&](RemoteMoonContinuation& a_live) {
+                            firstResolved = a_live.parentName.empty();
+                            a_live.parentName = parentRows.front().name.empty() ?
+                                a_live.parentEditorID : parentRows.front().name;
+                        }))
+                    return;
                 if (firstResolved) {
                     REX::INFO("[orbital] exact private waypoint {:08X} '{}' confirmed as one HUD row; retained public {} destination remains {:08X} '{}'",
                         continuation->parentFormID,
@@ -248,11 +247,10 @@
                         return;
                     }
                     if (asked == finalCourseTarget) {
-                        std::lock_guard lock{ g_remoteMoonMutex };
-                        auto& live = g_remoteMoonContinuation;
-                        if (live.phase == RemoteMoonPhase::kTraveling &&
-                            live.finalCourseFormID == finalCourseTarget)
-                            live.dispatchConfirmed = true;
+                        TryCommitRemoteMoonPhase(RemoteMoonPhase::kTraveling,
+                            *continuation, [](RemoteMoonContinuation& a_live) {
+                                a_live.dispatchConfirmed = true;
+                            });
                     } else {
                         // The queued dispatch has not registered yet. This is
                         // the only bounded part of the phase; travel itself is
@@ -276,17 +274,13 @@
                 }
                 if (course == continuation->parentFormID && parentRows.size() == 1 &&
                     parentRows.front().courseLocked) {
-                    std::lock_guard lock{ g_remoteMoonMutex };
-                    auto& live = g_remoteMoonContinuation;
-                    if (live.phase != RemoteMoonPhase::kTraveling ||
-                        live.finalFormID != a_destination.formID ||
-                        live.finalCourseFormID != finalCourseTarget ||
-                        live.parentFormID != course)
+                    if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kTraveling,
+                            *continuation, [&](RemoteMoonContinuation& a_live) {
+                                AdvanceRemoteMoonPhase(a_live,
+                                    RemoteMoonPhase::kParentLocked, now,
+                                    feedRevision);
+                            }))
                         return;
-                    live.phase = RemoteMoonPhase::kParentLocked;
-                    live.phaseStarted = now;
-                    live.feedRevisionFloor = feedRevision;
-                    live.inactiveSince = {};
                     g_courseAskedID.store(0, std::memory_order_release);
                     g_courseAskedClearing.store(false, std::memory_order_release);
                     g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
@@ -306,16 +300,13 @@
                         FailRemoteMoonContinuation("private waypoint readback no longer has one exact locked HUD row");
                         return;
                     }
-                    {
-                        std::lock_guard lock{ g_remoteMoonMutex };
-                        auto& live = g_remoteMoonContinuation;
-                        if (live.phase == RemoteMoonPhase::kParentLocked) {
-                            live.feedRevisionFloor = std::max(
-                                live.feedRevisionFloor, feedRevision);
+                    TryCommitRemoteMoonPhase(RemoteMoonPhase::kParentLocked,
+                        *continuation, [&](RemoteMoonContinuation& a_live) {
+                            a_live.feedRevisionFloor = std::max(
+                                a_live.feedRevisionFloor, feedRevision);
                             if (cruiseActive)
-                                live.inactiveSince = {};
-                        }
-                    }
+                                a_live.inactiveSince = {};
+                        });
                     if (!cruiseActive) {
                         if (continuousCruiseExitExpired(RemoteMoonPhase::kParentLocked))
                             FailRemoteMoonContinuation("Cruise exited while the exact private waypoint course was still active");
@@ -335,17 +326,14 @@
                 }
 
                 const bool finalExposed = finalRows.size() == 1;
-                {
-                    std::lock_guard lock{ g_remoteMoonMutex };
-                    auto& live = g_remoteMoonContinuation;
-                    if (live.phase != RemoteMoonPhase::kParentLocked)
-                        return;
-                    live.phase = finalExposed ? RemoteMoonPhase::kAwaitingFinalLock :
-                                               RemoteMoonPhase::kAwaitingParentArrival;
-                    live.phaseStarted = now;
-                    live.feedRevisionFloor = feedRevision;
-                    live.inactiveSince = {};
-                }
+                if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kParentLocked,
+                        *continuation, [&](RemoteMoonContinuation& a_live) {
+                            AdvanceRemoteMoonPhase(a_live,
+                                finalExposed ? RemoteMoonPhase::kAwaitingFinalLock :
+                                               RemoteMoonPhase::kAwaitingParentArrival,
+                                now, feedRevision);
+                        }))
+                    return;
                 g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                 if (finalExposed) {
                     REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: its exact lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
@@ -381,16 +369,14 @@
                     return;
                 if (course == continuation->parentFormID && parentRows.size() == 1 &&
                     parentRows.front().courseLocked) {
-                    std::lock_guard lock{ g_remoteMoonMutex };
-                    auto& live = g_remoteMoonContinuation;
-                    if (live.phase != RemoteMoonPhase::kAwaitingParentArrival)
-                        return;
-                    live.phase = RemoteMoonPhase::kParentLocked;
-                    live.phaseStarted = now;
-                    live.feedRevisionFloor = feedRevision;
-                    live.inactiveSince = {};
-                    REX::INFO("[orbital] exact waypoint lock {:08X} '{}' republished before the final-target feed transition",
-                        continuation->parentFormID, continuation->parentName);
+                    if (TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentArrival,
+                            *continuation, [&](RemoteMoonContinuation& a_live) {
+                                AdvanceRemoteMoonPhase(a_live,
+                                    RemoteMoonPhase::kParentLocked, now,
+                                    feedRevision);
+                            }))
+                        REX::INFO("[orbital] exact waypoint lock {:08X} '{}' republished before the final-target feed transition",
+                            continuation->parentFormID, continuation->parentName);
                     return;
                 }
                 if (course != 0 && course != finalCourseTarget) {
@@ -399,16 +385,13 @@
                 }
                 if (finalRows.empty())
                     return;
-                {
-                    std::lock_guard lock{ g_remoteMoonMutex };
-                    auto& live = g_remoteMoonContinuation;
-                    if (live.phase != RemoteMoonPhase::kAwaitingParentArrival)
-                        return;
-                    live.phase = RemoteMoonPhase::kAwaitingFinalLock;
-                    live.phaseStarted = now;
-                    live.feedRevisionFloor = feedRevision;
-                    live.inactiveSince = {};
-                }
+                if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentArrival,
+                        *continuation, [&](RemoteMoonContinuation& a_live) {
+                            AdvanceRemoteMoonPhase(a_live,
+                                RemoteMoonPhase::kAwaitingFinalLock, now,
+                                feedRevision);
+                        }))
+                    return;
                 g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                 REX::INFO("[orbital] waypoint {:08X} '{}' arrival/feed refresh independently confirmed: exact prior lock ended and newer feed {} uniquely exposes retained final {} {:08X} '{}' while Cruise remains active",
                     continuation->parentFormID, continuation->parentName, feedRevision,

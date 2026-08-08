@@ -10,6 +10,40 @@
                 REX::INFO("[course] queued {} for {:08X}", a_clearing ? "clear" : "lock", a_id);
         }
 
+        // The continuation drivers tick from a lock-free copy; every mutation
+        // re-locks and re-verifies the continuation identity (phase, the
+        // retained final-target tuple, system, and the current private
+        // waypoint) before committing, mirroring TryCommitRemoteRoutePhase.
+        // A false return means the live continuation moved on and this tick's
+        // decision must be abandoned.
+        template <class Apply>
+        bool TryCommitRemoteMoonPhase(RemoteMoonPhase a_expectedPhase,
+            const RemoteMoonContinuation& a_continuation, Apply&& a_apply)
+        {
+            std::lock_guard lock{ g_remoteMoonMutex };
+            auto& live = g_remoteMoonContinuation;
+            if (live.phase != a_expectedPhase ||
+                live.finalKind != a_continuation.finalKind ||
+                live.finalFormID != a_continuation.finalFormID ||
+                live.finalCourseFormID != a_continuation.finalCourseFormID ||
+                live.system != a_continuation.system ||
+                live.parentFormID != a_continuation.parentFormID)
+                return false;
+            a_apply(live);
+            return true;
+        }
+
+        // The common phase-transition tail every commit shares.
+        void AdvanceRemoteMoonPhase(RemoteMoonContinuation& a_live,
+            RemoteMoonPhase a_phase, Clock::time_point a_now,
+            std::uint64_t a_feedRevisionFloor)
+        {
+            a_live.phase = a_phase;
+            a_live.phaseStarted = a_now;
+            a_live.feedRevisionFloor = a_feedRevisionFloor;
+            a_live.inactiveSince = {};
+        }
+
         void FailRemoteMoonContinuation(const std::string& a_reason)
         {
             if (!RemoteMoonContinuationActive())
@@ -239,17 +273,14 @@
 
             const auto now = Clock::now();
             if (g_cruiseActive.load(std::memory_order_acquire)) {
-                {
-                    std::lock_guard lock{ g_remoteMoonMutex };
-                    if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kAwaitingParentFeed)
-                        return false;
-                    g_remoteMoonContinuation.phase = RemoteMoonPhase::kTraveling;
-                    g_remoteMoonContinuation.dispatchConfirmed = false;
-                    g_remoteMoonContinuation.feedRevisionFloor =
-                        CurrentProcessedHudSnapshot().revision;
-                    g_remoteMoonContinuation.phaseStarted = now;
-                    g_remoteMoonContinuation.inactiveSince = {};
-                }
+                if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentFeed,
+                        *continuation, [now](RemoteMoonContinuation& a_live) {
+                            AdvanceRemoteMoonPhase(a_live,
+                                RemoteMoonPhase::kTraveling, now,
+                                CurrentProcessedHudSnapshot().revision);
+                            a_live.dispatchConfirmed = false;
+                        }))
+                    return false;
                 g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
                 QueueCourse(CourseTargetID(*destination), false);
                 REX::INFO("[orbital] Cruise already active; dispatched retained final {} {:08X} '{}' once and awaiting exact final or optional waypoint readback",
@@ -265,16 +296,13 @@
                 device = RE::InputEvent::DeviceType::kKeyboard;
             if (!QueueHudCruisePress(device))
                 return false;
-            {
-                std::lock_guard lock{ g_remoteMoonMutex };
-                if (g_remoteMoonContinuation.phase != RemoteMoonPhase::kAwaitingParentFeed)
-                    return false;
-                g_remoteMoonContinuation.phase = RemoteMoonPhase::kAwaitingParentCruise;
-                g_remoteMoonContinuation.feedRevisionFloor =
-                    CurrentProcessedHudSnapshot().revision;
-                g_remoteMoonContinuation.phaseStarted = now;
-                g_remoteMoonContinuation.inactiveSince = {};
-            }
+            if (!TryCommitRemoteMoonPhase(RemoteMoonPhase::kAwaitingParentFeed,
+                    *continuation, [now](RemoteMoonContinuation& a_live) {
+                        AdvanceRemoteMoonPhase(a_live,
+                            RemoteMoonPhase::kAwaitingParentCruise, now,
+                            CurrentProcessedHudSnapshot().revision);
+                    }))
+                return false;
             g_state.store(NavState::kAwaitingCruise, std::memory_order_release);
             REX::INFO("[orbital] queued one latched stock HUD Cruise press for retained final {} {:08X} '{}'; stock may resolve it latently through waypoint {:08X} '{}'",
                 DestinationKindName(destination->kind),

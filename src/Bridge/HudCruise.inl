@@ -339,13 +339,8 @@
             const bool wasEngageAvailable = g_cruiseEngageAvailable.exchange(
                 engageAvailable, std::memory_order_acq_rel);
             if (engageAvailable != wasEngageAvailable) {
-                if (g_mapOpen.load(std::memory_order_acquire)) {
-                    {
-                        std::lock_guard lock{ g_mapMutex };
-                        g_map.cruiseEngageAvailable = engageAvailable;
-                    }
+                if (g_mapOpen.load(std::memory_order_acquire))
                     g_mapUiDirty.store(true, std::memory_order_release);
-                }
                 if (Settings::Verbose())
                     REX::INFO("[hud] stock Cruise engage availability -> {} (activeResolved={} resolved={} monocleResolved={} active={})",
                         engageAvailable, activeResolved, canActivateResolved,
