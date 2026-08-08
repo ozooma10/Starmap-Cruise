@@ -140,9 +140,107 @@
             return joined.empty() ? "<none>" : joined;
         }
 
+        // Thin guards over Engine::GalaxyState: the Bridge owns the live-menu,
+        // map-open, and movie-generation gate; the Engine module owns the
+        // vtable proofs and the raw memory access. Every native touch resolves
+        // a fresh proven pair; nothing is retained between passes.
+        bool ResolveLiveGalaxyState(const MapSnapshot& a_snapshot,
+            Engine::GalaxyState::Live& a_live, std::string& a_detail)
+        {
+            const auto ui = RE::UI::GetSingleton();
+            const RE::BSFixedString mapName{ kMapMenu };
+            const auto menu = ui ? ui->GetMenu(mapName) : nullptr;
+            if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot ||
+                !g_mapOpen.load(std::memory_order_acquire) ||
+                a_snapshot.generation !=
+                    g_mapMovie.generation.load(std::memory_order_acquire)) {
+                a_detail = "live StarMapMenu instance changed before galaxy selection";
+                return false;
+            }
+            return Engine::GalaxyState::Resolve(menu.get(), a_live, a_detail);
+        }
+
         bool ReadNativeGalaxySelection(const MapSnapshot& a_snapshot,
             std::uint32_t& a_selectedSystem, bool& a_quickSelectOpen,
-            std::string& a_detail);
+            std::string& a_detail)
+        {
+            Engine::GalaxyState::Live live;
+            if (!ResolveLiveGalaxyState(a_snapshot, live, a_detail))
+                return false;
+            Engine::GalaxyState::ReadSelection(live, a_selectedSystem,
+                a_quickSelectOpen);
+            a_detail = std::format("selected={:08X} quickSelectOpen={}",
+                a_selectedSystem, a_quickSelectOpen);
+            return true;
+        }
+
+        bool InvokeNativeGalaxySystemSelection(const MapSnapshot& a_snapshot,
+            std::uint32_t a_systemBodyID, std::string& a_detail)
+        {
+            if (a_systemBodyID == 0) {
+                a_detail = "captured system body ID is zero";
+                return false;
+            }
+
+            Engine::GalaxyState::Live live;
+            if (!ResolveLiveGalaxyState(a_snapshot, live, a_detail))
+                return false;
+
+            // This is GalaxyState's stock non-entering selected-system setter,
+            // used by normal galaxy selection before Quick Select decides
+            // whether the action means focus or plot.
+            if (!RuntimeBindings::SelectGalaxySystem(live.state,
+                    a_systemBodyID)) {
+                a_detail = "native selected-system binding is unavailable";
+                return false;
+            }
+
+            // Full re-proof for the post-call readback.
+            std::uint32_t selectedSystem = 0;
+            bool quickSelectOpen = false;
+            if (!ReadNativeGalaxySelection(a_snapshot, selectedSystem,
+                    quickSelectOpen, a_detail) ||
+                selectedSystem != a_systemBodyID) {
+                if (selectedSystem != a_systemBodyID)
+                    a_detail = std::format(
+                        "native selected-system readback mismatch (expected={:08X} actual={:08X})",
+                        a_systemBodyID, selectedSystem);
+                return false;
+            }
+            a_detail = std::format(
+                "native GalaxyState selected system bodyID={:08X}",
+                selectedSystem);
+            return true;
+        }
+
+        bool ArmNativeQuickSelectRouteSelection(const MapSnapshot& a_snapshot,
+            std::uint32_t a_systemBodyID, std::string& a_detail)
+        {
+            Engine::GalaxyState::Live live;
+            if (!ResolveLiveGalaxyState(a_snapshot, live, a_detail))
+                return false;
+            return Engine::GalaxyState::ArmQuickSelectRouteOwnership(live,
+                a_systemBodyID, a_detail);
+        }
+
+        bool ConfirmNativeQuickSelectConsumed(const MapSnapshot& a_snapshot,
+            std::string& a_detail)
+        {
+            Engine::GalaxyState::Live live;
+            if (!ResolveLiveGalaxyState(a_snapshot, live, a_detail))
+                return false;
+
+            if (!Engine::GalaxyState::ReadQuickSelectOpen(live)) {
+                a_detail = "native Set Course consumed Quick Select route ownership";
+                return true;
+            }
+
+            const bool closed = Engine::GalaxyState::CloseQuickSelect(live);
+            a_detail = closed ?
+                "Set Course did not consume Quick Select route ownership; stock close restored it" :
+                "Set Course did not consume Quick Select route ownership and close binding is unavailable";
+            return false;
+        }
 
         struct GalaxySelectionProof
         {

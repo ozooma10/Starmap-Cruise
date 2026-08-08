@@ -39,19 +39,11 @@
         // The unit is completed AS3 advances, not wall clock: each pass means
         // native finished one advance with the selection already applied.
         constexpr std::uint32_t kGalaxyFocusReadbackPasses = 10;
-        // Starfield 1.16.244: GalaxyState's non-entering selected-system setter
-        // and the stock Quick Select close/consume path. The setter is vtable
-        // slot +0x48; SetRouteDestination reads that selected ID when Quick
-        // Select mode is active, then closes the mode itself.
         constexpr REL::ID kLoadGameGetEventSource{ 64149 };
         constexpr REL::ID kLoadGameSourceStatic{ 838425 };
         constexpr REL::ID kLoadGameSourceVtable{ 413741 };
         constexpr REL::ID kGravJumpGetEventSource{ 93876 };
         constexpr REL::ID kGravJumpSourceVtable{ 445846 };
-        constexpr std::size_t kStarMapMenuDataModelOffset = 0x1B8;
-        constexpr std::size_t kStarMapMenuGalaxyStateOffset = 0x1240;
-        constexpr std::size_t kGalaxyStateSelectedSystemOffset = 0x880;
-        constexpr std::size_t kGalaxyStateQuickSelectOpenOffset = 0x8F8;
         constexpr std::array<std::uint8_t, 16> kGlobalEventGetEventSource116244Prologue{
             0x48, 0x83, 0xEC, 0x28, 0x65, 0x48, 0x8B, 0x04,
             0x25, 0x58, 0x00, 0x00, 0x00, 0xBA, 0xB8, 0x00,

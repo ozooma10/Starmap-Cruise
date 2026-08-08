@@ -26,6 +26,8 @@ state ownership and initialization order are redesigned and revalidated.
 
 Reusable low-level work does not belong in a Bridge fragment. Core navigation
 callable fingerprints and ownership live in `src/Engine/RuntimeBindings.*`,
+raw StarMapMenu/GalaxyState memory access (vtable proofs, layout offsets,
+Quick Select route-ownership arming) in `src/Engine/GalaxyState.*`,
 safe process-memory reads in `src/Engine/RuntimeMemory.*`, live ControlMap
 discovery in `src/Input/CruiseBindingResolver.*`, and GFx value decoding in
 `src/Scaleform/ValueAccess.*`. Pure plugin-record decoding and load-order FormID

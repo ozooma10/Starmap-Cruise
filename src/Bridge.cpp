@@ -1,6 +1,7 @@
 #include "Bridge.h"
 
 #include "BodyIndex.h"
+#include "Engine/GalaxyState.h"
 #include "Engine/RuntimeBindings.h"
 #include "Engine/RuntimeMemory.h"
 #include "Input/CruiseBindingResolver.h"
