@@ -23,6 +23,7 @@ namespace
         { "BodyResolver", &RunBodyResolverTests },
         { "CruiseController", &RunCruiseControllerTests },
         { "ActionPresenter", &RunActionPresenterTests },
+        { "BodyCatalog", &RunBodyCatalogTests },
     };
 
     bool RunSuite(const TestSuite& suite)
