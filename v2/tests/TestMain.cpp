@@ -33,6 +33,7 @@ namespace
         {"PluginResolverBuilder", &RunPluginResolverBuilderTests},
         {"PluginEntryReader", &RunPluginEntryReaderTests},
         {"PluginPlanetScanner", &RunPluginPlanetScannerTests},
+        {"PluginHeaderParser", &RunPluginHeaderParserTests},
     };
 
     bool RunSuite(const TestSuite& suite)

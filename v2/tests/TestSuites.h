@@ -19,3 +19,4 @@ void RunPluginMasterParserTests();
 void RunPluginResolverBuilderTests();
 void RunPluginEntryReaderTests();
 void RunPluginPlanetScannerTests();
+void RunPluginHeaderParserTests();
