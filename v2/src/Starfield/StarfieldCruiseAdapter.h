@@ -4,6 +4,14 @@
 #include "Presentation/ActionPresenter.h"
 #include "Starfield/StarfieldBodyResolutionSource.h"
 
+#include <atomic>
+#include <cstdint>
+
+namespace RE
+{
+    class IMenu;
+}
+
 class StarfieldCruiseAdapter final
 {
 public:
@@ -33,7 +41,10 @@ private:
 
     StarfieldCruiseAdapter();
 
+    static void OnMovieCreated(RE::IMenu* menu);
     static void OnUiSafeFrame();
+
+    void DrainMapMovieObservation();
 
     // Dependency order is intentional: CruiseRuntime retains references to the body source and commands for the adapter's process lifetime.
     StarfieldBodyResolutionSource bodySource_;
@@ -41,5 +52,7 @@ private:
     CruiseRuntime runtime_;
     ActionPresenter presenter_;
     ActionView actionView_;
+    std::atomic<std::uint64_t> mapMovieSequence_ {0};
+    std::uint64_t consumedMapMovieSequence_ {0};
     bool initialized_ {false};
 };
