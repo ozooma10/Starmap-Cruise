@@ -1,10 +1,18 @@
 #include "Application/BodyResolver.h"
 #include "Bodies/CatalogBodyResolutionSource.h"
+#include "Starfield/StarfieldLiveBodyProbe.h"
 #include "TestSuites.h"
 
+#include <concepts>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+
+static_assert(std::derived_from<
+    ::StarfieldLiveBodyProbe,
+    ::LiveBodyProbe>);
+static_assert(!std::is_abstract_v<::StarfieldLiveBodyProbe>);
 
 namespace
 {

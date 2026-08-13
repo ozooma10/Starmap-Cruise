@@ -30,9 +30,16 @@ target("CruiseFromStarmap", function()
         description = "Fail-closed Starmap bridge with vanilla system-level jumps and exact planet, moon, and station Cruise targets."
     })
 
-    add_files("src/**.cpp")
-    add_headerfiles("src/**.h", "src/**.inl")
-    add_includedirs("src")
+    add_files(
+        "src/**.cpp",
+        "v2/src/Starfield/StarfieldLiveBodyProbe.cpp"
+    )
+    add_headerfiles(
+        "src/**.h",
+        "src/**.inl",
+        "v2/src/Starfield/**.h"
+    )
+    add_includedirs("src", "v2/src")
     add_packages("zlib")
     add_defines("NOMINMAX", "WIN32_LEAN_AND_MEAN")
 
