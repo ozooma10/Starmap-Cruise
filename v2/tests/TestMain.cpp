@@ -20,6 +20,7 @@ namespace
         { "MapSessionState", &RunMapSessionStateTests },
         { "CruiseRuntime", &RunCruiseRuntimeTests },
         { "EffectDispatcher", &RunEffectDispatcherTests },
+        { "BodyResolver", &RunBodyResolverTests },
     };
 
     bool RunSuite(const TestSuite& suite)
