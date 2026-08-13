@@ -2,8 +2,9 @@
 
 namespace CFS::MainThreadUiPump
 {
-    // Installs a byte-verified 1.16.244 hook around UI_AdvanceActiveMenus.
-    // The callback runs after the original returns, on the Scaleform-owning
-    // game thread with that advance's AS3 work complete.
-    [[nodiscard]] bool Install();
+    using PostAdvanceCallback = void (*)();
+
+    // Installs hook around UI_AdvanceActiveMenus.
+    // The callback runs after the original returns, on the Scaleform-owning game thread that advance's AS3 work. 
+    [[nodiscard]] bool Install(PostAdvanceCallback a_callback);
 }

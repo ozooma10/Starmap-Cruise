@@ -177,7 +177,7 @@ namespace CFS::Bridge
             return;
         TryInstallLoadGameSink();
         TryInstallGravJumpSink();
-        if (!MainThreadUiPump::Install()) {
+        if (!MainThreadUiPump::Install(&OnUiSafeFrame)) {
             REX::ERROR("post-advance UI pump unavailable; bridge disabled to prevent off-thread Scaleform access");
             return;
         }
