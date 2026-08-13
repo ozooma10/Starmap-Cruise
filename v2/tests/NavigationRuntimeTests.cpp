@@ -16,7 +16,7 @@ namespace
     }
 
     template <class T>
-    const T* FindEffect(const TransitionResult& result)
+    const T* FindEffect(const ::TransitionResult& result)
     {
         for (const auto& effect : result.effects) {
             if (const auto* value = std::get_if<T>(&effect))
@@ -26,10 +26,10 @@ namespace
         return nullptr;
     }
 
-    Destination Jemison()
+    ::Destination Jemison()
     {
-        return Destination{
-            .kind = DestinationKind::Planet,
+        return ::Destination{
+            .kind = ::DestinationKind::Planet,
             .targetId = 0x00000010,
             .courseId = 0x00000010,
             .systemId = 0x00000100,
@@ -37,10 +37,10 @@ namespace
         };
     }
 
-    Destination Mars()
+    ::Destination Mars()
     {
-        return Destination{
-            .kind = DestinationKind::Planet,
+        return ::Destination{
+            .kind = ::DestinationKind::Planet,
             .targetId = 0x00000020,
             .courseId = 0x00000020,
             .systemId = 0x00000100,
@@ -50,19 +50,19 @@ namespace
 
     void TestTapMarksDestination()
     {
-        NavigationRuntime runtime;
+        ::NavigationRuntime runtime;
 
         const auto selected = runtime.SelectDestination(
             Jemison(),
-            SelectionIntent::Mark,
+            ::SelectionIntent::Mark,
             false);
 
         Require(selected.handled,
             "valid destination was not accepted");
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::ClosingMap,
+                ::NavigationPhase::ClosingMap,
             "selection did not wait for map close");
-        Require(FindEffect<CloseMap>(selected) != nullptr,
+        Require(FindEffect<::CloseMap>(selected) != nullptr,
             "selection did not request map close");
 
         const auto closed = runtime.MapClosed();
@@ -70,7 +70,7 @@ namespace
         Require(closed.handled,
             "expected map close was not handled");
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::Marked,
+                ::NavigationPhase::Marked,
             "tap did not leave the destination marked");
         Require(runtime.CurrentState().destination.has_value(),
             "tap lost the selected destination");
@@ -83,47 +83,47 @@ namespace
 
     void TestSameDestinationTogglesOff()
     {
-        NavigationRuntime runtime;
+        ::NavigationRuntime runtime;
 
         runtime.SelectDestination(
             Jemison(),
-            SelectionIntent::Mark,
+            ::SelectionIntent::Mark,
             false);
         runtime.MapClosed();
 
         const auto toggled = runtime.SelectDestination(
             Jemison(),
-            SelectionIntent::Mark,
+            ::SelectionIntent::Mark,
             false);
 
         Require(toggled.handled,
             "same-destination toggle was not handled");
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::Idle,
+                ::NavigationPhase::Idle,
             "same-destination toggle did not return to Idle");
         Require(!runtime.CurrentState().destination,
             "same-destination toggle retained the destination");
-        Require(FindEffect<CloseMap>(toggled) != nullptr,
+        Require(FindEffect<::CloseMap>(toggled) != nullptr,
             "same-destination toggle did not request map close");
     }
 
     void TestDestinationReplacement()
     {
-        NavigationRuntime runtime;
+        ::NavigationRuntime runtime;
 
         runtime.SelectDestination(
             Jemison(),
-            SelectionIntent::Mark,
+            ::SelectionIntent::Mark,
             false);
         runtime.MapClosed();
 
         runtime.SelectDestination(
             Mars(),
-            SelectionIntent::Mark,
+            ::SelectionIntent::Mark,
             false);
 
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::ClosingMap,
+                ::NavigationPhase::ClosingMap,
             "replacement did not enter ClosingMap");
         Require(runtime.CurrentState().destination.has_value(),
             "replacement lost the destination");
@@ -134,32 +134,32 @@ namespace
         runtime.MapClosed();
 
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::Marked,
+                ::NavigationPhase::Marked,
             "replacement was not marked after map close");
     }
 
     void TestCompletedHoldUsesExactCourseLock()
     {
-        NavigationRuntime runtime;
+        ::NavigationRuntime runtime;
 
         runtime.SelectDestination(
             Jemison(),
-            SelectionIntent::StartCruise,
+            ::SelectionIntent::StartCruise,
             false);
 
         const auto closed = runtime.MapClosed();
 
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::CruiseRequested,
+                ::NavigationPhase::CruiseRequested,
             "completed hold did not request Cruise");
-        Require(FindEffect<PressCruise>(closed) != nullptr,
+        Require(FindEffect<::PressCruise>(closed) != nullptr,
             "completed hold did not emit PressCruise");
 
         const auto activated = runtime.CruiseChanged(true);
-        const auto* course = FindEffect<RequestCourse>(activated);
+        const auto* course = FindEffect<::RequestCourse>(activated);
 
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::AwaitingCourseLock,
+                ::NavigationPhase::AwaitingCourseLock,
             "Cruise activation did not await course confirmation");
         Require(course != nullptr,
             "Cruise activation did not request the course");
@@ -171,7 +171,7 @@ namespace
         Require(!unrelated.handled,
             "unrelated course lock was accepted");
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::AwaitingCourseLock,
+                ::NavigationPhase::AwaitingCourseLock,
             "unrelated course lock changed navigation phase");
 
         const auto exact = runtime.CourseLockChanged(
@@ -180,7 +180,7 @@ namespace
         Require(exact.handled,
             "exact course lock was ignored");
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::CourseLocked,
+                ::NavigationPhase::CourseLocked,
             "exact course lock did not establish success");
 
         const auto lost = runtime.CourseLockChanged(0);
@@ -188,7 +188,7 @@ namespace
         Require(lost.handled,
             "exact lock loss was ignored");
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::Marked,
+                ::NavigationPhase::Marked,
             "lock loss did not return to Marked");
         Require(runtime.CurrentState().destination.has_value(),
             "lock loss discarded the destination");
@@ -196,20 +196,20 @@ namespace
 
     void TestAlreadyCruisingSkipsCruisePress()
     {
-        NavigationRuntime runtime;
+        ::NavigationRuntime runtime;
 
         runtime.SelectDestination(
             Mars(),
-            SelectionIntent::Mark,
+            ::SelectionIntent::Mark,
             true);
 
         const auto closed = runtime.MapClosed();
-        const auto* course = FindEffect<RequestCourse>(closed);
+        const auto* course = FindEffect<::RequestCourse>(closed);
 
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::AwaitingCourseLock,
+                ::NavigationPhase::AwaitingCourseLock,
             "active-Cruise selection did not await course lock");
-        Require(FindEffect<PressCruise>(closed) == nullptr,
+        Require(FindEffect<::PressCruise>(closed) == nullptr,
             "active-Cruise selection emitted another Cruise press");
         Require(course != nullptr,
             "active-Cruise selection did not request a course");
@@ -219,11 +219,11 @@ namespace
 
     void TestInvalidDestinationFailsClosed()
     {
-        NavigationRuntime runtime;
+        ::NavigationRuntime runtime;
 
         const auto result = runtime.SelectDestination(
-            Destination{},
-            SelectionIntent::Mark,
+            ::Destination{},
+            ::SelectionIntent::Mark,
             false);
 
         Require(!result.handled,
@@ -231,7 +231,7 @@ namespace
         Require(result.effects.empty(),
             "invalid destination emitted effects");
         Require(runtime.CurrentState().phase ==
-                NavigationPhase::Idle,
+                ::NavigationPhase::Idle,
             "invalid destination changed navigation phase");
         Require(!runtime.CurrentState().destination,"invalid destination was retained");
     }
