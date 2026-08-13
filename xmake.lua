@@ -74,6 +74,7 @@ target("CruiseFromStarmapV2Tests", function()
         "v2/src/Bodies/CatalogBodyResolutionSource.cpp",
         "v2/src/Bodies/PluginFormId.cpp",
         "v2/src/Bodies/SubrecordReader.cpp",
+        "v2/src/Bodies/RecordBodyDecoder.cpp",
         "v2/src/Map/MapSessionState.cpp",
         "v2/src/Application/CruiseRuntime.cpp",
         "v2/src/Application/EffectDispatcher.cpp",
@@ -88,6 +89,7 @@ target("CruiseFromStarmapV2Tests", function()
         "v2/src",
         "v2/tests"
     )
+    add_packages("zlib")
 
     add_tests("v2")
 end)

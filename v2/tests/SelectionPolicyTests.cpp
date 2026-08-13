@@ -10,7 +10,7 @@ namespace
     void Require(bool condition, std::string_view message)
     {
         if (!condition) {
-            throw std::runtime_error{ std::string{ message } };
+            throw std::runtime_error {std::string {message}};
         }
     }
 
@@ -22,27 +22,28 @@ namespace
             .systemView = true,
             .currentSystemId = 0x100,
             .highlightedMarkerCount = 1,
-            .marker = {
-                .id = 0x10,
-                .kind = ::ObservedTargetKind::Planet,
-                .displayName = "Jemison Marker",
-            },
-            .dossier = {
-                .id = 0x10,
-                .kind = ::ObservedTargetKind::Planet,
-                .displayName = "Jemison",
-            },
+            .marker =
+                {
+                    .id = 0x10,
+                    .kind = ::ObservedTargetKind::Planet,
+                    .displayName = "Jemison Marker",
+                },
+            .dossier =
+                {
+                    .id = 0x10,
+                    .kind = ::ObservedTargetKind::Planet,
+                    .displayName = "Jemison",
+                },
             .dossierIsLiveBody = true,
             .bodyIndexReady = true,
-            .indexedBody = ::IndexedBodyObservation{
+            .indexedBody = ::IndexedBodyObservation {
                 .id = 0x10,
                 .systemId = 0x100,
             },
         };
     }
 
-    void RequireDecision(const ::SelectionDecision& decision,
-        ::SelectionAvailability availability, ::SelectionReason reason)
+    void RequireDecision(const ::SelectionDecision& decision, ::SelectionAvailability availability, ::SelectionReason reason)
     {
         Require(decision.availability == availability, "selection availability did not match");
         Require(decision.reason == reason, "selection reason did not match");
@@ -52,8 +53,7 @@ namespace
     {
         const auto decision = ::EvaluateSelection(ValidPlanet());
 
-        RequireDecision(decision, ::SelectionAvailability::Eligible,
-            ::SelectionReason::Eligible);
+        RequireDecision(decision, ::SelectionAvailability::Eligible, ::SelectionReason::Eligible);
 
         Require(decision.IsEligible(), "eligible decision did not contain a destination");
 
@@ -93,8 +93,7 @@ namespace
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        RequireDecision(decision, ::SelectionAvailability::Disabled,
-            ::SelectionReason::SelectDestination);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::SelectDestination);
 
         Require(!decision.destination, "missing highlight produced a destination");
     }
@@ -106,8 +105,7 @@ namespace
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        RequireDecision(decision, ::SelectionAvailability::Disabled,
-            ::SelectionReason::AmbiguousTarget);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::AmbiguousTarget);
     }
 
     void TestMarkerAndDossierMustAgree()
@@ -117,8 +115,7 @@ namespace
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        RequireDecision(decision, ::SelectionAvailability::Disabled,
-            ::SelectionReason::TargetDataUpdating);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetDataUpdating);
     }
 
     void TestUnsupportedMarkerIsHidden()
@@ -128,8 +125,7 @@ namespace
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        RequireDecision(decision, ::SelectionAvailability::Hidden,
-            ::SelectionReason::UnsupportedTarget);
+        RequireDecision(decision, ::SelectionAvailability::Hidden, ::SelectionReason::UnsupportedTarget);
     }
 
     void TestIndexMustConfirmExactBody()
@@ -139,8 +135,7 @@ namespace
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        RequireDecision(decision, ::SelectionAvailability::Disabled,
-            ::SelectionReason::TargetNotIndexed);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetNotIndexed);
     }
 
     void TestRemoteSystemIsNotPartOfMvp()
@@ -150,8 +145,7 @@ namespace
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        RequireDecision(decision, ::SelectionAvailability::Disabled,
-            ::SelectionReason::RemoteSystem);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::RemoteSystem);
 
         Require(!decision.destination, "remote-system rejection produced a destination");
     }
@@ -163,8 +157,7 @@ namespace
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        RequireDecision(decision, ::SelectionAvailability::Hidden,
-            ::SelectionReason::InactiveContext);
+        RequireDecision(decision, ::SelectionAvailability::Hidden, ::SelectionReason::InactiveContext);
     }
 
     void RunTests()

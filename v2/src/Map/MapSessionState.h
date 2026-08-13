@@ -8,8 +8,8 @@
 
 struct MapSessionIdentity
 {
-    std::uint32_t session{ 0 };
-    std::uint32_t generation{ 0 };
+    std::uint32_t session {0};
+    std::uint32_t generation {0};
 
     bool IsValid() const
     {
@@ -31,15 +31,15 @@ struct MapOpenContext
 {
     MapSessionIdentity identity;
 
-    bool flying{ false };
-    bool cruiseWasActive{ false };
+    bool flying {false};
+    bool cruiseWasActive {false};
 
-    FormID currentSystemId{ 0 };
+    FormID currentSystemId {0};
 };
 
 struct MarkerUpdate
 {
-    std::size_t highlightedCount{ 0 };
+    std::size_t highlightedCount {0};
     TargetObservation highlighted;
 };
 
@@ -47,10 +47,10 @@ struct BodyResolutionUpdate
 {
     // Identifies the dossier for which this resolution was produced.
     // A delayed resolution for an older dossier is rejected.
-    FormID dossierId{ 0 };
+    FormID dossierId {0};
 
-    bool dossierIsLiveBody{ false };
-    bool bodyIndexReady{ false };
+    bool dossierIsLiveBody {false};
+    bool bodyIndexReady {false};
 
     std::optional<IndexedBodyObservation> indexedBody;
 };
@@ -87,22 +87,22 @@ private:
     void ClearTargetObservations();
     void ResetSession();
 
-    std::uint32_t movieGeneration_{ 0 };
+    std::uint32_t movieGeneration_ {0};
 
-    bool open_{ false };
+    bool open_ {false};
     MapSessionIdentity identity_;
 
-    bool flyingAtOpen_{ false };
-    bool cruiseWasActiveAtOpen_{ false };
-    FormID currentSystemId_{ 0 };
+    bool flyingAtOpen_ {false};
+    bool cruiseWasActiveAtOpen_ {false};
+    FormID currentSystemId_ {0};
 
-    MapView view_{ MapView::Unknown };
+    MapView view_ {MapView::Unknown};
 
-    std::size_t highlightedMarkerCount_{ 0 };
+    std::size_t highlightedMarkerCount_ {0};
     TargetObservation marker_;
     TargetObservation dossier_;
 
-    bool dossierIsLiveBody_{ false };
-    bool bodyIndexReady_{ false };
+    bool dossierIsLiveBody_ {false};
+    bool bodyIndexReady_ {false};
     std::optional<IndexedBodyObservation> indexedBody_;
 };

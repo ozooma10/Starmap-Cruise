@@ -5,11 +5,10 @@
 
 bool SubrecordView::HasSignature(std::string_view expected) const
 {
-    return expected.size() == signature.size() && std::equal( signature.begin(), signature.end(), expected.begin());
+    return expected.size() == signature.size() && std::equal(signature.begin(), signature.end(), expected.begin());
 }
 
-SubrecordReader::SubrecordReader(std::span<const std::byte> body) 
-    : body_(body) {}
+SubrecordReader::SubrecordReader(std::span<const std::byte> body) : body_(body) {}
 
 SubrecordReadResult SubrecordReader::Next(SubrecordView& subrecord)
 {
@@ -37,7 +36,7 @@ SubrecordReadResult SubrecordReader::Next(SubrecordView& subrecord)
             return Fail(SubrecordReadResult::TruncatedHeader, headerOffset);
         }
 
-        std::array<char, 4> signature{};
+        std::array<char, 4> signature {};
         std::memcpy(signature.data(), body_.data() + offset_, signature.size());
 
         std::uint16_t size16 = 0;
@@ -45,8 +44,7 @@ SubrecordReadResult SubrecordReader::Next(SubrecordView& subrecord)
 
         offset_ += headerSize;
 
-        const bool isExtendedSize =
-            std::memcmp(signature.data(), "XXXX", signature.size()) == 0;
+        const bool isExtendedSize = std::memcmp(signature.data(), "XXXX", signature.size()) == 0;
 
         if (isExtendedSize) {
             if (extendedSize_) {

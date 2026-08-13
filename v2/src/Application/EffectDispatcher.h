@@ -17,8 +17,8 @@ public:
 
 struct EffectDispatchResult
 {
-    bool handled{ false };
-    std::size_t completedCount{ 0 };
+    bool handled {false};
+    std::size_t completedCount {0};
     std::optional<Effect> failedEffect;
 
     bool Succeeded() const

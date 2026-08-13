@@ -8,12 +8,11 @@ namespace
     }
 }
 
-BodyResolver::BodyResolver(const BodyResolutionSource& source) : source_(source)
-{}
+BodyResolver::BodyResolver(const BodyResolutionSource& source) : source_(source) {}
 
 BodyResolutionUpdate BodyResolver::Resolve(const TargetObservation& dossier) const
 {
-    BodyResolutionUpdate result{
+    BodyResolutionUpdate result {
         .dossierId = dossier.id,
     };
 
@@ -25,8 +24,7 @@ BodyResolutionUpdate BodyResolver::Resolve(const TargetObservation& dossier) con
 
     result.bodyIndexReady = source_.IsBodyIndexReady();
 
-    if (!result.dossierIsLiveBody ||
-        !result.bodyIndexReady) {
+    if (!result.dossierIsLiveBody || !result.bodyIndexReady) {
         return result;
     }
 

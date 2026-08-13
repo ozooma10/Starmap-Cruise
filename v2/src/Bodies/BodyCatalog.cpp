@@ -19,7 +19,7 @@ namespace
 
 BodyCatalogGeneration BodyCatalog::BeginLoad()
 {
-    std::lock_guard lock{ mutex_ };
+    std::lock_guard lock {mutex_};
 
     generation_ = NextGeneration(generation_);
     status_ = BodyCatalogStatus::Loading;
@@ -41,7 +41,7 @@ bool BodyCatalog::Publish(BodyCatalogGeneration generation, std::vector<IndexedB
         }
     }
 
-    std::lock_guard lock{ mutex_ };
+    std::lock_guard lock {mutex_};
 
     if (generation != generation_ || status_ != BodyCatalogStatus::Loading) {
         return false;
@@ -61,7 +61,7 @@ bool BodyCatalog::Publish(BodyCatalogGeneration generation, std::vector<IndexedB
 
 bool BodyCatalog::Fail(BodyCatalogGeneration generation)
 {
-    std::lock_guard lock{ mutex_ };
+    std::lock_guard lock {mutex_};
 
     if (generation != generation_ || status_ != BodyCatalogStatus::Loading) {
         return false;
@@ -75,7 +75,7 @@ bool BodyCatalog::Fail(BodyCatalogGeneration generation)
 
 void BodyCatalog::Clear()
 {
-    std::lock_guard lock{ mutex_ };
+    std::lock_guard lock {mutex_};
 
     generation_ = NextGeneration(generation_);
     status_ = BodyCatalogStatus::Empty;
@@ -84,25 +84,25 @@ void BodyCatalog::Clear()
 
 bool BodyCatalog::IsReady() const
 {
-    std::lock_guard lock{ mutex_ };
+    std::lock_guard lock {mutex_};
     return status_ == BodyCatalogStatus::Ready;
 }
 
 BodyCatalogStatus BodyCatalog::Status() const
 {
-    std::lock_guard lock{ mutex_ };
+    std::lock_guard lock {mutex_};
     return status_;
 }
 
 BodyCatalogGeneration BodyCatalog::CurrentGeneration() const
 {
-    std::lock_guard lock{ mutex_ };
+    std::lock_guard lock {mutex_};
     return generation_;
 }
 
 std::optional<IndexedBodyObservation> BodyCatalog::Find(FormID bodyId) const
 {
-    std::lock_guard lock{ mutex_ };
+    std::lock_guard lock {mutex_};
 
     if (status_ != BodyCatalogStatus::Ready) {
         return std::nullopt;

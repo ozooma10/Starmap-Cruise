@@ -10,8 +10,7 @@ void MapSessionState::BeginMovie(std::uint32_t generation)
 
 bool MapSessionState::Open(const MapOpenContext& context)
 {
-    if (!context.identity.IsValid() ||
-        context.identity.generation != movieGeneration_) {
+    if (!context.identity.IsValid() || context.identity.generation != movieGeneration_) {
         return false;
     }
 
@@ -68,9 +67,7 @@ bool MapSessionState::SetMarkers(const MapSessionIdentity& identity, MarkerUpdat
     return true;
 }
 
-bool MapSessionState::SetDossier(
-    const MapSessionIdentity& identity,
-    TargetObservation dossier)
+bool MapSessionState::SetDossier(const MapSessionIdentity& identity, TargetObservation dossier)
 {
     if (!Accepts(identity)) {
         return false;

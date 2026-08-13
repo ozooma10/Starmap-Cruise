@@ -7,8 +7,8 @@
 
 struct MapActionPresentation
 {
-    ActionControl control{ ActionControl::Hidden };
-    bool enabled{ false };
+    ActionControl control {ActionControl::Hidden};
+    bool enabled {false};
 
     std::string label;
     std::string holdLabel;
@@ -27,8 +27,8 @@ public:
 
 struct PresentationResult
 {
-    bool changed{ false };
-    bool applied{ false };
+    bool changed {false};
+    bool applied {false};
 };
 
 class ActionPresenter

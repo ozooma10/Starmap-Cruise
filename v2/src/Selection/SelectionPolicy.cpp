@@ -27,8 +27,9 @@ namespace
 
     DestinationKind ToDestinationKind(ObservedTargetKind kind)
     {
-        if (kind == ObservedTargetKind::Moon) { return DestinationKind::Moon; }
-            
+        if (kind == ObservedTargetKind::Moon) {
+            return DestinationKind::Moon;
+        }
 
         return DestinationKind::Planet;
     }
@@ -76,7 +77,7 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
         return Disabled(SelectionReason::RemoteSystem);
     }
 
-    Destination destination{
+    Destination destination {
         .kind = ToDestinationKind(snapshot.dossier.kind),
         .targetId = snapshot.dossier.id,
         .courseId = snapshot.dossier.id,

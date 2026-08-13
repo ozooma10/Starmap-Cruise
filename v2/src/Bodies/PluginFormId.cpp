@@ -34,8 +34,7 @@ namespace
                 return std::nullopt;
             }
 
-            return
-                0xFE000000 | (static_cast<FormID>(owner.index) << 12) | localId;
+            return 0xFE000000 | (static_cast<FormID>(owner.index) << 12) | localId;
         }
 
         return std::nullopt;
@@ -59,8 +58,7 @@ bool PluginLoadIdentity::IsValid() const
     return false;
 }
 
-PluginFormIdResolver::PluginFormIdResolver(std::vector<PluginLoadIdentity> masters, PluginLoadIdentity self) :
-    masters_(std::move(masters)), self_(self) {}
+PluginFormIdResolver::PluginFormIdResolver(std::vector<PluginLoadIdentity> masters, PluginLoadIdentity self) : masters_(std::move(masters)), self_(self) {}
 
 bool PluginFormIdResolver::IsValid() const
 {
@@ -81,7 +79,7 @@ std::optional<FormID> PluginFormIdResolver::Resolve(FormID pluginFormId) const
 {
     // Zero is the explicit null FormID.
     if (pluginFormId == 0) {
-        return FormID{ 0 };
+        return FormID {0};
     }
 
     if (!IsValid()) {

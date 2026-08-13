@@ -15,25 +15,25 @@ enum class ActionControl : std::uint8_t
 struct ActionContext
 {
     // The Cruise action has a binding for the active input device.
-    bool cruiseControlBound{ false };
+    bool cruiseControlBound {false};
 
     // Captured when this Starmap session opened.
-    bool cruiseWasActiveWhenMapOpened{ false };
+    bool cruiseWasActiveWhenMapOpened {false};
 
     // The stock cockpit Cruise control can currently activate Cruise.
     // False includes cooldown and other temporarily unavailable states.
-    bool cruiseEngageAvailable{ false };
+    bool cruiseEngageAvailable {false};
 
     // Copied from the vanilla Starmap button state.
-    bool vanillaActionEnabled{ false };
+    bool vanillaActionEnabled {false};
 };
 
 struct ActionDecision
 {
-    ActionControl control{ ActionControl::Hidden };
-    bool enabled{ false };
+    ActionControl control {ActionControl::Hidden};
+    bool enabled {false};
 
-    SelectionReason selectionReason{ SelectionReason::InactiveContext };
+    SelectionReason selectionReason {SelectionReason::InactiveContext};
 
     std::string label;
     std::string holdLabel;

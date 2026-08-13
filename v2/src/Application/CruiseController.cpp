@@ -2,8 +2,7 @@
 
 #include <utility>
 
-CruiseController::CruiseController(const BodyResolutionSource& bodySource, CruiseCommands& commands) :
-    bodyResolver_(bodySource), commands_(commands) {}
+CruiseController::CruiseController(const BodyResolutionSource& bodySource, CruiseCommands& commands) : bodyResolver_(bodySource), commands_(commands) {}
 
 void CruiseController::OnMapMovieCreated(std::uint32_t generation)
 {
@@ -78,8 +77,7 @@ EffectDispatchResult CruiseController::OnCourseLockChanged(FormID lockedCourseId
     return Execute(runtime_.OnCourseLockChanged(lockedCourseId));
 }
 
-const NavigationState&
-CruiseController::CurrentNavigationState() const
+const NavigationState& CruiseController::CurrentNavigationState() const
 {
     return runtime_.CurrentNavigationState();
 }

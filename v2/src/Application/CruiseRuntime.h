@@ -14,9 +14,9 @@ enum class MapActionGesture : std::uint8_t
 
 struct MapActionEnvironment
 {
-    bool cruiseControlBound{ false };
-    bool cruiseEngageAvailable{ false };
-    bool vanillaActionEnabled{ false };
+    bool cruiseControlBound {false};
+    bool cruiseEngageAvailable {false};
+    bool vanillaActionEnabled {false};
 };
 
 class CruiseRuntime

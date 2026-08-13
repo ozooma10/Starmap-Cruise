@@ -15,8 +15,8 @@ enum class PluginTier : std::uint8_t
 
 struct PluginLoadIdentity
 {
-    PluginTier tier{ PluginTier::Full };
-    std::uint16_t index{ 0 };
+    PluginTier tier {PluginTier::Full};
+    std::uint16_t index {0};
 
     bool IsValid() const;
 };

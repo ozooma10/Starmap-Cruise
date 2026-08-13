@@ -71,7 +71,7 @@ ActionDecision EvaluateAction(const SelectionDecision& selection, const ActionCo
         };
     }
 
-    ActionDecision decision{
+    ActionDecision decision {
         .control = SelectControl(selection, context),
         .selectionReason = selection.reason,
         .label = LabelFor(selection.reason),

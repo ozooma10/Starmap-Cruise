@@ -40,8 +40,8 @@ public:
 private:
     mutable std::mutex mutex_;
 
-    BodyCatalogGeneration generation_{ 0 };
-    BodyCatalogStatus status_{ BodyCatalogStatus::Empty };
+    BodyCatalogGeneration generation_ {0};
+    BodyCatalogStatus status_ {BodyCatalogStatus::Empty};
 
     std::unordered_map<FormID, IndexedBodyObservation> bodies_;
 };

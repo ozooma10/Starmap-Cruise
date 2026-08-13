@@ -14,16 +14,16 @@ enum class DestinationKind : std::uint8_t
 
 struct Destination
 {
-    DestinationKind kind{ DestinationKind::Planet };
+    DestinationKind kind {DestinationKind::Planet};
 
     // The identity presented publicly as the selected destination.
-    FormID targetId{ 0 };
+    FormID targetId {0};
 
     // The identity expected in the HUD course-lock feed.
     // This matches targetId for planets and moons, but may differ for stations.
-    FormID courseId{ 0 };
+    FormID courseId {0};
 
-    FormID systemId{ 0 };
+    FormID systemId {0};
     std::string displayName;
 
     bool IsValid() const
@@ -33,6 +33,6 @@ struct Destination
 
     bool SameIdentityAs(const Destination& other) const
     {
-        return kind == other.kind && targetId == other.targetId && courseId == other.courseId &&  systemId == other.systemId;
+        return kind == other.kind && targetId == other.targetId && courseId == other.courseId && systemId == other.systemId;
     }
 };

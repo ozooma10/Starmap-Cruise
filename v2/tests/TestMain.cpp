@@ -13,20 +13,21 @@ namespace
         void (*run)();
     };
 
-    constexpr TestSuite Suites[]{
-        { "NavigationRuntime", &RunNavigationRuntimeTests },
-        { "SelectionPolicy", &RunSelectionPolicyTests },
-        { "ActionPolicy", &RunActionPolicyTests },
-        { "MapSessionState", &RunMapSessionStateTests },
-        { "CruiseRuntime", &RunCruiseRuntimeTests },
-        { "EffectDispatcher", &RunEffectDispatcherTests },
-        { "BodyResolver", &RunBodyResolverTests },
-        { "CruiseController", &RunCruiseControllerTests },
-        { "ActionPresenter", &RunActionPresenterTests },
-        { "BodyCatalog", &RunBodyCatalogTests },
-        { "CatalogBodyResolutionSource", &RunCatalogBodyResolutionSourceTests },
-        { "PluginFormId", &RunPluginFormIdTests },
-        { "SubrecordReader", &RunSubrecordReaderTests },
+    constexpr TestSuite Suites[] {
+        {"NavigationRuntime", &RunNavigationRuntimeTests},
+        {"SelectionPolicy", &RunSelectionPolicyTests},
+        {"ActionPolicy", &RunActionPolicyTests},
+        {"MapSessionState", &RunMapSessionStateTests},
+        {"CruiseRuntime", &RunCruiseRuntimeTests},
+        {"EffectDispatcher", &RunEffectDispatcherTests},
+        {"BodyResolver", &RunBodyResolverTests},
+        {"CruiseController", &RunCruiseControllerTests},
+        {"ActionPresenter", &RunActionPresenterTests},
+        {"BodyCatalog", &RunBodyCatalogTests},
+        {"CatalogBodyResolutionSource", &RunCatalogBodyResolutionSourceTests},
+        {"PluginFormId", &RunPluginFormIdTests},
+        {"SubrecordReader", &RunSubrecordReaderTests},
+        {"RecordBodyDecoder", &RunRecordBodyDecoderTests},
     };
 
     bool RunSuite(const TestSuite& suite)

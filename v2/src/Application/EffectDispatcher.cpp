@@ -27,7 +27,7 @@ namespace
 
 EffectDispatchResult DispatchEffects(const TransitionResult& transition, CruiseCommands& commands)
 {
-    EffectDispatchResult result{
+    EffectDispatchResult result {
         .handled = transition.handled,
     };
 
@@ -36,7 +36,7 @@ EffectDispatchResult DispatchEffects(const TransitionResult& transition, CruiseC
     }
 
     for (const auto& effect : transition.effects) {
-        if (!std::visit(DispatchVisitor{ commands }, effect)) {
+        if (!std::visit(DispatchVisitor {commands}, effect)) {
             result.failedEffect = effect;
             return result;
         }

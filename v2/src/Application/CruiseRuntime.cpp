@@ -53,10 +53,9 @@ bool CruiseRuntime::RecoverFromEffectFailure(const Effect& effect)
 
 ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& environment) const
 {
-    const auto selection =
-        EvaluateSelection(map_.Snapshot());
+    const auto selection = EvaluateSelection(map_.Snapshot());
 
-    const ActionContext context{
+    const ActionContext context {
         .cruiseControlBound = environment.cruiseControlBound,
         .cruiseWasActiveWhenMapOpened = map_.CruiseWasActiveWhenOpened(),
         .cruiseEngageAvailable = environment.cruiseEngageAvailable,
@@ -88,10 +87,7 @@ TransitionResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& iden
         intent = SelectionIntent::StartCruise;
     }
 
-    return navigation_.SelectDestination(
-        *action.destination,
-        intent,
-        map_.CruiseWasActiveWhenOpened());
+    return navigation_.SelectDestination(*action.destination, intent, map_.CruiseWasActiveWhenOpened());
 }
 
 TransitionResult CruiseRuntime::OnCruiseChanged(bool active)

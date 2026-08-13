@@ -1,7 +1,6 @@
 #include "Bodies/CatalogBodyResolutionSource.h"
 
-CatalogBodyResolutionSource::CatalogBodyResolutionSource(const LiveBodyProbe& liveBodies, const BodyCatalog& catalog) :
-    liveBodies_(liveBodies), catalog_(catalog) {}
+CatalogBodyResolutionSource::CatalogBodyResolutionSource(const LiveBodyProbe& liveBodies, const BodyCatalog& catalog) : liveBodies_(liveBodies), catalog_(catalog) {}
 
 bool CatalogBodyResolutionSource::IsLiveBody(FormID bodyId) const
 {

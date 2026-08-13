@@ -15,34 +15,34 @@ enum class ObservedTargetKind : std::uint8_t
 
 struct TargetObservation
 {
-    FormID id{ 0 };
-    ObservedTargetKind kind{ ObservedTargetKind::Unsupported };
+    FormID id {0};
+    ObservedTargetKind kind {ObservedTargetKind::Unsupported};
     std::string displayName;
 };
 
 struct IndexedBodyObservation
 {
-    FormID id{ 0 };
-    FormID systemId{ 0 };
+    FormID id {0};
+    FormID systemId {0};
 };
 
 struct SelectionSnapshot
 {
     // The adapter proves menu openness, session identity, and movie generation before setting this.
-    bool sessionValid{ false };
+    bool sessionValid {false};
 
-    bool flying{ false };
-    bool systemView{ false };
+    bool flying {false};
+    bool systemView {false};
 
-    FormID currentSystemId{ 0 };
+    FormID currentSystemId {0};
 
-    std::size_t highlightedMarkerCount{ 0 };
+    std::size_t highlightedMarkerCount {0};
     TargetObservation marker;
     TargetObservation dossier;
 
     // These values are copied from engine/index checks by the adapter.
-    bool dossierIsLiveBody{ false };
-    bool bodyIndexReady{ false };
+    bool dossierIsLiveBody {false};
+    bool bodyIndexReady {false};
     std::optional<IndexedBodyObservation> indexedBody;
 };
 
@@ -70,9 +70,9 @@ enum class SelectionReason : std::uint8_t
 
 struct SelectionDecision
 {
-    SelectionAvailability availability{ SelectionAvailability::Hidden };
+    SelectionAvailability availability {SelectionAvailability::Hidden};
 
-    SelectionReason reason{ SelectionReason::InactiveContext };
+    SelectionReason reason {SelectionReason::InactiveContext};
 
     std::optional<Destination> destination;
 

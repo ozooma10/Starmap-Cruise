@@ -8,7 +8,7 @@
 
 namespace
 {
-    constexpr ::MapSessionIdentity CurrentIdentity{
+    constexpr ::MapSessionIdentity CurrentIdentity {
         .session = 7,
         .generation = 3,
     };
@@ -16,12 +16,10 @@ namespace
     void Require(bool condition, std::string_view message)
     {
         if (!condition)
-            throw std::runtime_error{ std::string{ message } };
+            throw std::runtime_error {std::string {message}};
     }
 
-    void OpenSession(
-        ::MapSessionState& state,
-        ::FormID currentSystemId = 0x100)
+    void OpenSession(::MapSessionState& state, ::FormID currentSystemId = 0x100)
     {
         state.BeginMovie(CurrentIdentity.generation);
 
@@ -37,24 +35,23 @@ namespace
 
     void PopulateExactPlanet(::MapSessionState& state)
     {
-        Require(
-            state.SetView(
-                CurrentIdentity,
-                ::MapView::System),
-            "system-view update was rejected");
+        Require(state.SetView(CurrentIdentity, ::MapView::System), "system-view update was rejected");
 
         Require(
             state.SetMarkers(
                 CurrentIdentity,
                 {
                     .highlightedCount = 1,
-                    .highlighted = {
-                        .id = 0x10,
-                        .kind = ::ObservedTargetKind::Planet,
-                        .displayName = "Jemison Marker",
-                    },
-                }),
-            "marker update was rejected");
+                    .highlighted =
+                        {
+                            .id = 0x10,
+                            .kind = ::ObservedTargetKind::Planet,
+                            .displayName = "Jemison Marker",
+                        },
+                }
+            ),
+            "marker update was rejected"
+        );
 
         Require(
             state.SetDossier(
@@ -63,8 +60,10 @@ namespace
                     .id = 0x10,
                     .kind = ::ObservedTargetKind::Planet,
                     .displayName = "Jemison",
-                }),
-            "dossier update was rejected");
+                }
+            ),
+            "dossier update was rejected"
+        );
 
         Require(
             state.SetBodyResolution(
@@ -73,12 +72,15 @@ namespace
                     .dossierId = 0x10,
                     .dossierIsLiveBody = true,
                     .bodyIndexReady = true,
-                    .indexedBody = ::IndexedBodyObservation{
-                        .id = 0x10,
-                        .systemId = 0x100,
-                    },
-                }),
-            "body resolution was rejected");
+                    .indexedBody =
+                        ::IndexedBodyObservation {
+                            .id = 0x10,
+                            .systemId = 0x100,
+                        },
+                }
+            ),
+            "body resolution was rejected"
+        );
     }
 
     void TestExactFeedsProduceEligibleSelection()
@@ -88,20 +90,15 @@ namespace
         PopulateExactPlanet(state);
 
         const auto snapshot = state.Snapshot();
-        const auto selection =
-            ::EvaluateSelection(snapshot);
+        const auto selection = ::EvaluateSelection(snapshot);
 
-        Require(snapshot.sessionValid,
-            "open session did not produce a valid snapshot");
+        Require(snapshot.sessionValid, "open session did not produce a valid snapshot");
 
-        Require(selection.IsEligible(),
-            "coherent provider state was not eligible");
+        Require(selection.IsEligible(), "coherent provider state was not eligible");
 
-        Require(selection.destination->targetId == 0x10,
-            "selection retained the wrong target");
+        Require(selection.destination->targetId == 0x10, "selection retained the wrong target");
 
-        Require(selection.destination->systemId == 0x100,
-            "selection retained the wrong system");
+        Require(selection.destination->systemId == 0x100, "selection retained the wrong system");
     }
 
     void TestStaleSessionUpdateIsIgnored()
@@ -109,7 +106,7 @@ namespace
         ::MapSessionState state;
         OpenSession(state);
 
-        const ::MapSessionIdentity stale{
+        const ::MapSessionIdentity stale {
             .session = 6,
             .generation = 3,
         };
@@ -122,14 +119,12 @@ namespace
                     .id = 0x20,
                     .kind = ::ObservedTargetKind::Planet,
                 },
-            });
+            }
+        );
 
-        Require(!accepted,
-            "stale session update was accepted");
+        Require(!accepted, "stale session update was accepted");
 
-        Require(
-            state.Snapshot().highlightedMarkerCount == 0,
-            "stale session changed marker state");
+        Require(state.Snapshot().highlightedMarkerCount == 0, "stale session changed marker state");
     }
 
     void TestViewChangeClearsTargetEvidence()
@@ -138,25 +133,17 @@ namespace
         OpenSession(state);
         PopulateExactPlanet(state);
 
-        Require(
-            state.SetView(
-                CurrentIdentity,
-                ::MapView::Galaxy),
-            "galaxy-view update was rejected");
+        Require(state.SetView(CurrentIdentity, ::MapView::Galaxy), "galaxy-view update was rejected");
 
         const auto snapshot = state.Snapshot();
 
-        Require(!snapshot.systemView,
-            "galaxy view remained a system view");
+        Require(!snapshot.systemView, "galaxy view remained a system view");
 
-        Require(snapshot.highlightedMarkerCount == 0,
-            "view change retained marker evidence");
+        Require(snapshot.highlightedMarkerCount == 0, "view change retained marker evidence");
 
-        Require(snapshot.dossier.id == 0,
-            "view change retained dossier evidence");
+        Require(snapshot.dossier.id == 0, "view change retained dossier evidence");
 
-        Require(!snapshot.indexedBody,
-            "view change retained body resolution");
+        Require(!snapshot.indexedBody, "view change retained body resolution");
     }
 
     void TestRepeatedViewDoesNotClearEvidence()
@@ -165,17 +152,11 @@ namespace
         OpenSession(state);
         PopulateExactPlanet(state);
 
-        Require(
-            state.SetView(
-                CurrentIdentity,
-                ::MapView::System),
-            "repeated system-view update was rejected");
+        Require(state.SetView(CurrentIdentity, ::MapView::System), "repeated system-view update was rejected");
 
-        const auto selection =
-            ::EvaluateSelection(state.Snapshot());
+        const auto selection = ::EvaluateSelection(state.Snapshot());
 
-        Require(selection.IsEligible(),
-            "repeated view update cleared valid evidence");
+        Require(selection.IsEligible(), "repeated view update cleared valid evidence");
     }
 
     void TestDossierChangeClearsOldResolution()
@@ -190,35 +171,31 @@ namespace
                 .id = 0x20,
                 .kind = ::ObservedTargetKind::Planet,
                 .displayName = "Mars",
-            });
+            }
+        );
 
         const auto snapshot = state.Snapshot();
 
-        Require(!snapshot.dossierIsLiveBody,
-            "new dossier inherited old live-form proof");
+        Require(!snapshot.dossierIsLiveBody, "new dossier inherited old live-form proof");
 
-        Require(!snapshot.bodyIndexReady,
-            "new dossier inherited old index readiness");
+        Require(!snapshot.bodyIndexReady, "new dossier inherited old index readiness");
 
-        Require(!snapshot.indexedBody,
-            "new dossier inherited old indexed identity");
+        Require(!snapshot.indexedBody, "new dossier inherited old indexed identity");
 
-        const bool acceptedOldResolution =
-            state.SetBodyResolution(
-                CurrentIdentity,
-                {
-                    .dossierId = 0x10,
-                    .dossierIsLiveBody = true,
-                    .bodyIndexReady = true,
-                    .indexedBody =
-                        ::IndexedBodyObservation{
-                            .id = 0x10,
-                            .systemId = 0x100,
-                        },
-                });
+        const bool acceptedOldResolution = state.SetBodyResolution(
+            CurrentIdentity,
+            {
+                .dossierId = 0x10,
+                .dossierIsLiveBody = true,
+                .bodyIndexReady = true,
+                .indexedBody = ::IndexedBodyObservation {
+                    .id = 0x10,
+                    .systemId = 0x100,
+                },
+            }
+        );
 
-        Require(!acceptedOldResolution,
-            "delayed old-dossier resolution was accepted");
+        Require(!acceptedOldResolution, "delayed old-dossier resolution was accepted");
     }
 
     void TestAmbiguousMarkersClearStoredTarget()
@@ -235,19 +212,15 @@ namespace
                     .id = 0x20,
                     .kind = ::ObservedTargetKind::Planet,
                 },
-            });
+            }
+        );
 
         const auto snapshot = state.Snapshot();
-        const auto selection =
-            ::EvaluateSelection(snapshot);
+        const auto selection = ::EvaluateSelection(snapshot);
 
-        Require(snapshot.marker.id == 0,
-            "ambiguous update retained one marker as authoritative");
+        Require(snapshot.marker.id == 0, "ambiguous update retained one marker as authoritative");
 
-        Require(
-            selection.reason ==
-                ::SelectionReason::AmbiguousTarget,
-            "ambiguous markers produced the wrong rejection");
+        Require(selection.reason == ::SelectionReason::AmbiguousTarget, "ambiguous markers produced the wrong rejection");
     }
 
     void TestLateCurrentSystemIsCapturedOnce()
@@ -255,31 +228,15 @@ namespace
         ::MapSessionState state;
         OpenSession(state, 0);
 
-        Require(
-            state.Snapshot().currentSystemId == 0,
-            "unresolved session invented a current system");
+        Require(state.Snapshot().currentSystemId == 0, "unresolved session invented a current system");
 
-        Require(
-            state.CaptureCurrentSystem(
-                CurrentIdentity,
-                0x100),
-            "first current-system resolution was rejected");
+        Require(state.CaptureCurrentSystem(CurrentIdentity, 0x100), "first current-system resolution was rejected");
 
-        Require(
-            state.CaptureCurrentSystem(
-                CurrentIdentity,
-                0x100),
-            "repeated current-system resolution was rejected");
+        Require(state.CaptureCurrentSystem(CurrentIdentity, 0x100), "repeated current-system resolution was rejected");
 
-        Require(
-            !state.CaptureCurrentSystem(
-                CurrentIdentity,
-                0x200),
-            "captured current system was rewritten");
+        Require(!state.CaptureCurrentSystem(CurrentIdentity, 0x200), "captured current system was rewritten");
 
-        Require(
-            state.Snapshot().currentSystemId == 0x100,
-            "captured current system changed unexpectedly");
+        Require(state.Snapshot().currentSystemId == 0x100, "captured current system changed unexpectedly");
     }
 
     void TestMovieReplacementInvalidatesSession()
@@ -290,14 +247,9 @@ namespace
 
         state.BeginMovie(4);
 
-        Require(!state.Snapshot().sessionValid,
-            "movie replacement retained the old session");
+        Require(!state.Snapshot().sessionValid, "movie replacement retained the old session");
 
-        Require(
-            !state.SetView(
-                CurrentIdentity,
-                ::MapView::System),
-            "old movie identity updated replacement state");
+        Require(!state.SetView(CurrentIdentity, ::MapView::System), "old movie identity updated replacement state");
 
         Require(
             !state.Open({
@@ -305,7 +257,8 @@ namespace
                 .flying = true,
                 .currentSystemId = 0x100,
             }),
-            "old movie generation reopened a session");
+            "old movie generation reopened a session"
+        );
     }
 
     void RunTests()

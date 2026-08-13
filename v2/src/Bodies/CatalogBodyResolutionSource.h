@@ -20,8 +20,7 @@ public:
 
     bool IsBodyIndexReady() const override;
 
-    std::optional<IndexedBodyObservation>
-    FindIndexedBody(FormID bodyId) const override;
+    std::optional<IndexedBodyObservation> FindIndexedBody(FormID bodyId) const override;
 
 private:
     const LiveBodyProbe& liveBodies_;
