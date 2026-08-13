@@ -46,6 +46,11 @@ bool CruiseRuntime::OnCurrentSystemResolved(const MapSessionIdentity& identity, 
     return map_.CaptureCurrentSystem(identity, systemId);
 }
 
+bool CruiseRuntime::RecoverFromEffectFailure(const Effect& effect)
+{
+    return navigation_.RecoverFromEffectFailure(effect);
+}
+
 ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& environment) const
 {
     const auto selection =

@@ -236,6 +236,108 @@ namespace
         Require(!runtime.CurrentState().destination,"invalid destination was retained");
     }
 
+    void TestCloseMapFailureAbandonsIncompleteSelection()
+    {
+        ::NavigationRuntime runtime;
+
+        runtime.SelectDestination(
+            Jemison(),
+            ::SelectionIntent::Mark,
+            false);
+
+        const bool recovered = runtime.RecoverFromEffectFailure(
+            ::CloseMap{});
+
+        Require(recovered,
+            "CloseMap failure was not recovered");
+        Require(runtime.CurrentState().phase ==
+                ::NavigationPhase::Idle,
+            "CloseMap failure left navigation waiting for map close");
+        Require(!runtime.CurrentState().destination,
+            "CloseMap failure retained an incomplete selection");
+        Require(!runtime.MapClosed().handled,
+            "CloseMap failure retained pending map-close state");
+    }
+
+    void TestCruisePressFailureFallsBackToMark()
+    {
+        ::NavigationRuntime runtime;
+
+        runtime.SelectDestination(
+            Jemison(),
+            ::SelectionIntent::StartCruise,
+            false);
+        runtime.MapClosed();
+
+        const bool recovered = runtime.RecoverFromEffectFailure(
+            ::PressCruise{});
+
+        Require(recovered,
+            "PressCruise failure was not recovered");
+        Require(runtime.CurrentState().phase ==
+                ::NavigationPhase::Marked,
+            "PressCruise failure did not fall back to a mark");
+        Require(runtime.CurrentState().destination.has_value(),
+            "PressCruise failure discarded the destination");
+        Require(runtime.CurrentState().destination->targetId ==
+                Jemison().targetId,
+            "PressCruise failure retained the wrong destination");
+    }
+
+    void TestOnlyExactCourseRequestFailureRecovers()
+    {
+        ::NavigationRuntime runtime;
+
+        runtime.SelectDestination(
+            Jemison(),
+            ::SelectionIntent::Mark,
+            false);
+        runtime.MapClosed();
+        runtime.CruiseChanged(true);
+
+        const bool staleRecovered = runtime.RecoverFromEffectFailure(
+            ::RequestCourse{ Mars().courseId });
+
+        Require(!staleRecovered,
+            "unrelated RequestCourse failure changed navigation");
+        Require(runtime.CurrentState().phase ==
+                ::NavigationPhase::AwaitingCourseLock,
+            "unrelated RequestCourse failure left the expected phase");
+
+        const bool exactRecovered = runtime.RecoverFromEffectFailure(
+            ::RequestCourse{ Jemison().courseId });
+
+        Require(exactRecovered,
+            "exact RequestCourse failure was not recovered");
+        Require(runtime.CurrentState().phase ==
+                ::NavigationPhase::Marked,
+            "RequestCourse failure did not fall back to a mark");
+        Require(runtime.CurrentState().destination.has_value(),
+            "RequestCourse failure discarded the destination");
+    }
+
+    void TestFailureOutsideOwningPhaseIsIgnored()
+    {
+        ::NavigationRuntime runtime;
+
+        runtime.SelectDestination(
+            Jemison(),
+            ::SelectionIntent::Mark,
+            false);
+        runtime.MapClosed();
+
+        const bool recovered = runtime.RecoverFromEffectFailure(
+            ::PressCruise{});
+
+        Require(!recovered,
+            "stale PressCruise failure was accepted");
+        Require(runtime.CurrentState().phase ==
+                ::NavigationPhase::Marked,
+            "stale failure changed navigation phase");
+        Require(runtime.CurrentState().destination.has_value(),
+            "stale failure discarded the destination");
+    }
+
     void RunTests()
     {
         TestTapMarksDestination();
@@ -244,6 +346,10 @@ namespace
         TestCompletedHoldUsesExactCourseLock();
         TestAlreadyCruisingSkipsCruisePress();
         TestInvalidDestinationFailsClosed();
+        TestCloseMapFailureAbandonsIncompleteSelection();
+        TestCruisePressFailureFallsBackToMark();
+        TestOnlyExactCourseRequestFailureRecovers();
+        TestFailureOutsideOwningPhaseIsIgnored();
     }
 }
 

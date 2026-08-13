@@ -53,6 +53,8 @@ public:
     TransitionResult CruiseChanged(bool active);
     TransitionResult CourseLockChanged(FormID lockedCourseId);
 
+    bool RecoverFromEffectFailure(const Effect& effect);
+
     void Reset();
     const NavigationState& CurrentState() const;
 

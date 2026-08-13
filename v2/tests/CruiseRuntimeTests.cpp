@@ -225,6 +225,28 @@ namespace
             "stale activation changed navigation state");
     }
 
+    void TestEffectFailureRecoveryIsExposedByApplicationRuntime()
+    {
+        ::CruiseRuntime runtime;
+        OpenEligibleMap(runtime);
+
+        runtime.ActivateMapAction(
+            CurrentIdentity,
+            ::MapActionGesture::HoldCompleted,
+            ReadyEnvironment());
+        runtime.OnMapClosed(CurrentIdentity);
+
+        const bool recovered = runtime.RecoverFromEffectFailure(
+            ::PressCruise{});
+
+        Require(recovered,
+            "application runtime did not forward effect failure recovery");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked,
+            "application runtime did not expose the recovered navigation state");
+        Require(runtime.CurrentNavigationState().destination.has_value(),
+            "application recovery discarded the selected destination");
+    }
+
     void RunTests()
     {
         TestEligibleSessionProducesAction();
@@ -233,6 +255,7 @@ namespace
         TestTapOnlyRejectsHold();
         TestAlreadyCruisingTapRequestsCourseOnClose();
         TestStaleSessionCannotActivateAction();
+        TestEffectFailureRecoveryIsExposedByApplicationRuntime();
     }
 }
 

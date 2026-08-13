@@ -107,6 +107,35 @@ TransitionResult NavigationRuntime::CourseLockChanged(FormID lockedCourseId)
     return result;
 }
 
+bool NavigationRuntime::RecoverFromEffectFailure(const Effect& effect)
+{
+    if (std::holds_alternative<CloseMap>(effect)) {
+        if (state_.phase != NavigationPhase::ClosingMap) {
+            return false;
+        }
+
+        Reset();
+        return true;
+    }
+
+    if (std::holds_alternative<PressCruise>(effect)) {
+        if (state_.phase != NavigationPhase::CruiseRequested || !state_.destination) {
+            return false;
+        }
+
+        state_.phase = NavigationPhase::Marked;
+        return true;
+    }
+
+    const auto* request = std::get_if<RequestCourse>(&effect);
+    if (!request || state_.phase != NavigationPhase::AwaitingCourseLock || !state_.destination || request->courseId != state_.destination->courseId) {
+        return false;
+    }
+
+    state_.phase = NavigationPhase::Marked;
+    return true;
+}
+
 void NavigationRuntime::Reset()
 {
     state_ = {};

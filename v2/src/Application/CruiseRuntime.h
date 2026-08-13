@@ -45,6 +45,8 @@ public:
 
     TransitionResult OnCourseLockChanged(FormID lockedCourseId);
 
+    bool RecoverFromEffectFailure(const Effect& effect);
+
     const NavigationState& CurrentNavigationState() const;
 
 private:
