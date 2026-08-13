@@ -30,6 +30,7 @@ namespace
         {"RecordBodyDecoder", &RunRecordBodyDecoderTests},
         {"PlanetDataParser", &RunPlanetDataParserTests},
         {"PluginMasterParser", &RunPluginMasterParserTests},
+        {"PluginResolverBuilder", &RunPluginResolverBuilderTests},
     };
 
     bool RunSuite(const TestSuite& suite)

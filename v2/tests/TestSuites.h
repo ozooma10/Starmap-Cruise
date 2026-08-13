@@ -16,3 +16,4 @@ void RunSubrecordReaderTests();
 void RunRecordBodyDecoderTests();
 void RunPlanetDataParserTests();
 void RunPluginMasterParserTests();
+void RunPluginResolverBuilderTests();
