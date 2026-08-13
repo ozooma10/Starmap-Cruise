@@ -4,3 +4,4 @@ void RunNavigationRuntimeTests();
 void RunSelectionPolicyTests();
 void RunActionPolicyTests();
 void RunMapSessionStateTests();
+void RunCruiseRuntimeTests();

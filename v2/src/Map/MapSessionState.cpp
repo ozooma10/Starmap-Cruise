@@ -1,7 +1,6 @@
 #include "Map/MapSessionState.h"
 
 #include <utility>
-#include "MapSessionState.h"
 
 void MapSessionState::BeginMovie(std::uint32_t generation)
 {
@@ -148,10 +147,11 @@ bool MapSessionState::CruiseWasActiveWhenOpened() const
     return open_ && cruiseWasActiveAtOpen_;
 }
 
-bool MapSessionState::IsActive(const MapSessionIdentity &identity) const
+bool MapSessionState::IsActive(const MapSessionIdentity& identity) const
 {
     return Accepts(identity);
 }
+
 bool MapSessionState::Accepts(const MapSessionIdentity& identity) const
 {
     return open_ && identity.IsValid() && identity == identity_ && identity.generation == movieGeneration_;

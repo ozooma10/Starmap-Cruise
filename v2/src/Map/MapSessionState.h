@@ -78,6 +78,7 @@ public:
     SelectionSnapshot Snapshot() const;
 
     bool CruiseWasActiveWhenOpened() const;
+    bool IsActive(const MapSessionIdentity& identity) const;
 
 private:
     bool Accepts(const MapSessionIdentity& identity) const;
