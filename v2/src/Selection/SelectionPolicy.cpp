@@ -61,10 +61,6 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
         return Disabled(SelectionReason::TargetDataUpdating);
     }
 
-    if (!snapshot.dossierIsLiveBody) {
-        return Disabled(SelectionReason::TargetNotLive);
-    }
-
     if (!snapshot.resolvedBody || snapshot.resolvedBody->id != snapshot.dossier.id) {
         return Disabled(SelectionReason::TargetSystemUnavailable);
     }

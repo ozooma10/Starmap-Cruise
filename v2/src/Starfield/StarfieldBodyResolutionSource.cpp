@@ -12,32 +12,28 @@ namespace
     using ResolveBodySystemIdFunction = FormID* (*)(FormID* systemId, FormID bodyId);
 }
 
-BodyLookupResult StarfieldBodyResolutionSource::ResolveBody(FormID bodyId) const
+std::optional<ResolvedBody> StarfieldBodyResolutionSource::ResolveBody(FormID bodyId) const
 {
-    BodyLookupResult result;
-
     if (bodyId == 0) {
-        return result;
+        return std::nullopt;
     }
 
     const auto* form = RE::TESForm::LookupByID(bodyId);
 
     if (!form || form->GetFormType() != RE::FormType::kPNDT || form->IsDeleted()) {
-        return result;
+        return std::nullopt;
     }
-
-    result.isLiveBody = true;
 
     FormID systemId = MissingSystemId;
     static REL::Relocation<ResolveBodySystemIdFunction> resolveBodySystemId {ResolveBodySystemId};
     resolveBodySystemId(&systemId, bodyId);
 
     if (systemId != MissingSystemId) {
-        result.body = ResolvedBody {
+        return ResolvedBody {
             .id = bodyId,
             .systemId = systemId,
         };
     }
 
-    return result;
+    return std::nullopt;
 }

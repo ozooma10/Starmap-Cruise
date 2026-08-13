@@ -23,9 +23,6 @@ namespace
         case SelectionReason::TargetDataUpdating:
             return "TARGET DATA IS UPDATING";
 
-        case SelectionReason::TargetNotLive:
-            return "TARGET TYPE IS NOT SUPPORTED";
-
         case SelectionReason::TargetSystemUnavailable:
             return "TARGET DATA IS NOT AVAILABLE";
 

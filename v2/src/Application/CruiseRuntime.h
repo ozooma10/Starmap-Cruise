@@ -1,10 +1,33 @@
 #pragma once
 
+#include "Application/BodyResolutionSource.h"
 #include "Map/MapSessionState.h"
 #include "Navigation/NavigationRuntime.h"
 #include "Presentation/ActionPolicy.h"
 
 #include <cstdint>
+#include <optional>
+
+class CruiseCommands
+{
+public:
+    virtual ~CruiseCommands() = default;
+
+    virtual bool CloseMap() = 0;
+    virtual bool PressCruise() = 0;
+    virtual bool RequestCourse(FormID courseId) = 0;
+};
+
+struct EffectDispatchResult
+{
+    bool handled {false};
+    std::optional<Effect> failedEffect;
+
+    bool Succeeded() const
+    {
+        return handled && !failedEffect.has_value();
+    }
+};
 
 enum class MapActionGesture : std::uint8_t
 {
@@ -22,34 +45,36 @@ struct MapActionEnvironment
 class CruiseRuntime
 {
 public:
+    CruiseRuntime(const BodyResolutionSource& bodySource, CruiseCommands& commands);
+
     void OnMapMovieCreated(std::uint32_t generation);
 
     bool OnMapOpened(const MapOpenContext& context);
-    TransitionResult OnMapClosed(const MapSessionIdentity& identity);
+    EffectDispatchResult OnMapClosed(const MapSessionIdentity& identity);
 
     bool OnMapViewChanged(const MapSessionIdentity& identity, MapView view);
 
     bool OnMarkersChanged(const MapSessionIdentity& identity, MarkerUpdate update);
 
-    bool OnDossierChanged(const MapSessionIdentity& identity, TargetObservation dossier);
-
-    bool OnBodyResolved(const MapSessionIdentity& identity, BodyResolutionUpdate resolution);
+    bool OnDossierChanged(const MapSessionIdentity& identity, const TargetObservation& dossier);
 
     bool OnCurrentSystemResolved(const MapSessionIdentity& identity, FormID systemId);
 
     ActionDecision CurrentMapAction(const MapActionEnvironment& environment) const;
 
-    TransitionResult ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment);
+    EffectDispatchResult ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment);
 
-    TransitionResult OnCruiseChanged(bool active);
+    EffectDispatchResult OnCruiseChanged(bool active);
 
-    TransitionResult OnCourseLockChanged(FormID lockedCourseId);
-
-    bool RecoverFromEffectFailure(const Effect& effect);
+    EffectDispatchResult OnCourseLockChanged(FormID lockedCourseId);
 
     const NavigationState& CurrentNavigationState() const;
 
 private:
+    EffectDispatchResult Execute(TransitionResult transition);
+
     MapSessionState map_;
     NavigationRuntime navigation_;
+    const BodyResolutionSource& bodySource_;
+    CruiseCommands& commands_;
 };

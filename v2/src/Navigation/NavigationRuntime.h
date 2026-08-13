@@ -4,7 +4,6 @@
 
 #include <optional>
 #include <variant>
-#include <vector>
 
 enum class NavigationPhase : std::uint8_t
 {
@@ -44,7 +43,7 @@ using Effect = std::variant<CloseMap, PressCruise, RequestCourse>;
 struct TransitionResult
 {
     bool handled {false};
-    std::vector<Effect> effects;
+    std::optional<Effect> effect;
 };
 
 class NavigationRuntime

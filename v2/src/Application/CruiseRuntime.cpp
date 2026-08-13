@@ -1,6 +1,37 @@
 #include "Application/CruiseRuntime.h"
 
 #include <utility>
+#include <variant>
+
+namespace
+{
+    bool IsSupported(ObservedTargetKind kind)
+    {
+        return kind == ObservedTargetKind::Planet || kind == ObservedTargetKind::Moon;
+    }
+
+    struct DispatchVisitor
+    {
+        CruiseCommands& commands;
+
+        bool operator()(const ::CloseMap&) const
+        {
+            return commands.CloseMap();
+        }
+
+        bool operator()(const ::PressCruise&) const
+        {
+            return commands.PressCruise();
+        }
+
+        bool operator()(const ::RequestCourse& effect) const
+        {
+            return commands.RequestCourse(effect.courseId);
+        }
+    };
+}
+
+CruiseRuntime::CruiseRuntime(const BodyResolutionSource& bodySource, CruiseCommands& commands) : bodySource_(bodySource), commands_(commands) {}
 
 void CruiseRuntime::OnMapMovieCreated(std::uint32_t generation)
 {
@@ -12,13 +43,13 @@ bool CruiseRuntime::OnMapOpened(const MapOpenContext& context)
     return map_.Open(context);
 }
 
-TransitionResult CruiseRuntime::OnMapClosed(const MapSessionIdentity& identity)
+EffectDispatchResult CruiseRuntime::OnMapClosed(const MapSessionIdentity& identity)
 {
     if (!map_.Close(identity)) {
         return {};
     }
 
-    return navigation_.MapClosed();
+    return Execute(navigation_.MapClosed());
 }
 
 bool CruiseRuntime::OnMapViewChanged(const MapSessionIdentity& identity, MapView view)
@@ -31,24 +62,24 @@ bool CruiseRuntime::OnMarkersChanged(const MapSessionIdentity& identity, MarkerU
     return map_.SetMarkers(identity, std::move(update));
 }
 
-bool CruiseRuntime::OnDossierChanged(const MapSessionIdentity& identity, TargetObservation dossier)
+bool CruiseRuntime::OnDossierChanged(const MapSessionIdentity& identity, const TargetObservation& dossier)
 {
-    return map_.SetDossier(identity, std::move(dossier));
-}
+    if (!map_.IsActive(identity)) {
+        return false;
+    }
 
-bool CruiseRuntime::OnBodyResolved(const MapSessionIdentity& identity, BodyResolutionUpdate resolution)
-{
-    return map_.SetBodyResolution(identity, std::move(resolution));
+    std::optional<ResolvedBody> resolvedBody;
+
+    if (dossier.id != 0 && IsSupported(dossier.kind)) {
+        resolvedBody = bodySource_.ResolveBody(dossier.id);
+    }
+
+    return map_.SetDossier(identity, dossier, std::move(resolvedBody));
 }
 
 bool CruiseRuntime::OnCurrentSystemResolved(const MapSessionIdentity& identity, FormID systemId)
 {
     return map_.CaptureCurrentSystem(identity, systemId);
-}
-
-bool CruiseRuntime::RecoverFromEffectFailure(const Effect& effect)
-{
-    return navigation_.RecoverFromEffectFailure(effect);
 }
 
 ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& environment) const
@@ -65,7 +96,7 @@ ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& envir
     return EvaluateAction(selection, context);
 }
 
-TransitionResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment)
+EffectDispatchResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment)
 {
     if (!map_.IsActive(identity)) {
         return {};
@@ -87,20 +118,38 @@ TransitionResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& iden
         intent = SelectionIntent::StartCruise;
     }
 
-    return navigation_.SelectDestination(*action.destination, intent, map_.CruiseWasActiveWhenOpened());
+    return Execute(navigation_.SelectDestination(*action.destination, intent, map_.CruiseWasActiveWhenOpened()));
 }
 
-TransitionResult CruiseRuntime::OnCruiseChanged(bool active)
+EffectDispatchResult CruiseRuntime::OnCruiseChanged(bool active)
 {
-    return navigation_.CruiseChanged(active);
+    return Execute(navigation_.CruiseChanged(active));
 }
 
-TransitionResult CruiseRuntime::OnCourseLockChanged(FormID lockedCourseId)
+EffectDispatchResult CruiseRuntime::OnCourseLockChanged(FormID lockedCourseId)
 {
-    return navigation_.CourseLockChanged(lockedCourseId);
+    return Execute(navigation_.CourseLockChanged(lockedCourseId));
 }
 
 const NavigationState& CruiseRuntime::CurrentNavigationState() const
 {
     return navigation_.CurrentState();
+}
+
+EffectDispatchResult CruiseRuntime::Execute(TransitionResult transition)
+{
+    EffectDispatchResult result {
+        .handled = transition.handled,
+    };
+
+    if (!transition.handled || !transition.effect) {
+        return result;
+    }
+
+    if (!std::visit(DispatchVisitor {commands_}, *transition.effect)) {
+        result.failedEffect = transition.effect;
+        navigation_.RecoverFromEffectFailure(*transition.effect);
+    }
+
+    return result;
 }

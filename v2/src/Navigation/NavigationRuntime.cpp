@@ -15,7 +15,7 @@ TransitionResult NavigationRuntime::SelectDestination(Destination destination, S
     // Selecting the currently marked destination acts as a toggle.
     if (state_.destination && state_.destination->SameIdentityAs(destination)) {
         Reset();
-        result.effects.emplace_back(CloseMap {});
+        result.effect = CloseMap {};
         return result;
     }
 
@@ -25,7 +25,7 @@ TransitionResult NavigationRuntime::SelectDestination(Destination destination, S
     pendingIntent_ = intent;
     cruiseWasActiveWhenSelected_ = cruiseAlreadyActive;
 
-    result.effects.emplace_back(CloseMap {});
+    result.effect = CloseMap {};
     return result;
 }
 
@@ -47,7 +47,7 @@ TransitionResult NavigationRuntime::MapClosed()
 
     if (cruiseWasActive) {
         state_.phase = NavigationPhase::AwaitingCourseLock;
-        result.effects.emplace_back(RequestCourse {state_.destination->courseId});
+        result.effect = RequestCourse {state_.destination->courseId};
         return result;
     }
 
@@ -57,7 +57,7 @@ TransitionResult NavigationRuntime::MapClosed()
     }
 
     state_.phase = NavigationPhase::CruiseRequested;
-    result.effects.emplace_back(PressCruise {});
+    result.effect = PressCruise {};
     return result;
 }
 
@@ -73,7 +73,7 @@ TransitionResult NavigationRuntime::CruiseChanged(bool active)
         state_.phase = NavigationPhase::AwaitingCourseLock;
 
         result.handled = true;
-        result.effects.emplace_back(RequestCourse {state_.destination->courseId});
+        result.effect = RequestCourse {state_.destination->courseId};
         return result;
     }
 

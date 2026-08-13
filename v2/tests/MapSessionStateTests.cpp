@@ -61,25 +61,13 @@ namespace
                     .id = 0x10,
                     .kind = ::ObservedTargetKind::Planet,
                     .displayName = "Jemison",
+                },
+                ::ResolvedBody {
+                    .id = 0x10,
+                    .systemId = 0x100,
                 }
             ),
             "dossier update was rejected"
-        );
-
-        Require(
-            state.SetBodyResolution(
-                CurrentIdentity,
-                {
-                    .dossierId = 0x10,
-                    .dossierIsLiveBody = true,
-                    .resolvedBody =
-                        ::ResolvedBody {
-                            .id = 0x10,
-                            .systemId = 0x100,
-                        },
-                }
-            ),
-            "body resolution was rejected"
         );
     }
 
@@ -159,40 +147,33 @@ namespace
         Require(selection.IsEligible(), "repeated view update cleared valid evidence");
     }
 
-    void TestDossierChangeClearsOldResolution()
+    void TestDossierUpdateAtomicallyReplacesResolution()
     {
         ::MapSessionState state;
         OpenSession(state);
         PopulateExactPlanet(state);
 
-        state.SetDossier(
-            CurrentIdentity,
-            {
-                .id = 0x20,
-                .kind = ::ObservedTargetKind::Planet,
-                .displayName = "Mars",
-            }
+        Require(
+            state.SetDossier(
+                CurrentIdentity,
+                {
+                    .id = 0x20,
+                    .kind = ::ObservedTargetKind::Planet,
+                    .displayName = "Mars",
+                },
+                ::ResolvedBody {
+                    .id = 0x20,
+                    .systemId = 0x100,
+                }
+            ),
+            "replacement dossier update was rejected"
         );
 
         const auto snapshot = state.Snapshot();
 
-        Require(!snapshot.dossierIsLiveBody, "new dossier inherited old live-form proof");
-
-        Require(!snapshot.resolvedBody, "new dossier inherited old resolved identity");
-
-        const bool acceptedOldResolution = state.SetBodyResolution(
-            CurrentIdentity,
-            {
-                .dossierId = 0x10,
-                .dossierIsLiveBody = true,
-                .resolvedBody = ::ResolvedBody {
-                    .id = 0x10,
-                    .systemId = 0x100,
-                },
-            }
-        );
-
-        Require(!acceptedOldResolution, "delayed old-dossier resolution was accepted");
+        Require(snapshot.dossier.id == 0x20, "replacement dossier retained the old identity");
+        Require(snapshot.resolvedBody.has_value(), "replacement dossier lost its resolution");
+        Require(snapshot.resolvedBody->id == 0x20, "replacement dossier inherited the old resolution");
     }
 
     void TestAmbiguousMarkersClearStoredTarget()
@@ -278,7 +259,7 @@ namespace
         TestStaleSessionUpdateIsIgnored();
         TestViewChangeClearsTargetEvidence();
         TestRepeatedViewDoesNotClearEvidence();
-        TestDossierChangeClearsOldResolution();
+        TestDossierUpdateAtomicallyReplacesResolution();
         TestAmbiguousMarkersClearStoredTarget();
         TestLateCurrentSystemIsCapturedOnce();
         TestSolSystemZeroIsCapturedOnce();

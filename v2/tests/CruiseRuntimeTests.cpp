@@ -1,16 +1,93 @@
 #include "Application/CruiseRuntime.h"
+#include "Starfield/StarfieldBodyResolutionSource.h"
 #include "TestSuites.h"
 
+#include <concepts>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <variant>
+#include <vector>
+
+static_assert(std::derived_from<::StarfieldBodyResolutionSource, ::BodyResolutionSource>);
+static_assert(!std::is_abstract_v<::StarfieldBodyResolutionSource>);
 
 namespace
 {
+    constexpr ::FormID JemisonId = 0x10;
+    constexpr ::FormID MarsId = 0x20;
+    constexpr ::FormID AlphaCentauriId = 0x100;
+
     constexpr ::MapSessionIdentity CurrentIdentity {
         .session = 7,
         .generation = 3,
+    };
+
+    enum class RecordedCommand
+    {
+        CloseMap,
+        PressCruise,
+        RequestCourse,
+    };
+
+    struct RecordedCall
+    {
+        RecordedCommand command;
+        ::FormID courseId {0};
+    };
+
+    class FakeBodyResolutionSource final : public ::BodyResolutionSource
+    {
+    public:
+        std::optional<::ResolvedBody> ResolveBody(::FormID bodyId) const override
+        {
+            ++calls;
+            lastBodyId = bodyId;
+            return result;
+        }
+
+        std::optional<::ResolvedBody> result {::ResolvedBody {
+            .id = JemisonId,
+            .systemId = AlphaCentauriId,
+        }};
+
+        mutable std::size_t calls {0};
+        mutable ::FormID lastBodyId {0};
+    };
+
+    class FakeCruiseCommands final : public ::CruiseCommands
+    {
+    public:
+        bool CloseMap() override
+        {
+            return Record(RecordedCommand::CloseMap);
+        }
+
+        bool PressCruise() override
+        {
+            return Record(RecordedCommand::PressCruise);
+        }
+
+        bool RequestCourse(::FormID courseId) override
+        {
+            return Record(RecordedCommand::RequestCourse, courseId);
+        }
+
+        std::optional<RecordedCommand> failOn;
+        std::vector<RecordedCall> calls;
+
+    private:
+        bool Record(RecordedCommand command, ::FormID courseId = 0)
+        {
+            calls.push_back({
+                .command = command,
+                .courseId = courseId,
+            });
+
+            return !failOn || *failOn != command;
+        }
     };
 
     void Require(bool condition, std::string_view message)
@@ -19,14 +96,13 @@ namespace
             throw std::runtime_error {std::string {message}};
     }
 
-    template <class T> const T* FindEffect(const ::TransitionResult& result)
+    ::TargetObservation JemisonDossier()
     {
-        for (const auto& effect : result.effects) {
-            if (const auto* value = std::get_if<T>(&effect))
-                return value;
-        }
-
-        return nullptr;
+        return {
+            .id = JemisonId,
+            .kind = ::ObservedTargetKind::Planet,
+            .displayName = "Jemison",
+        };
     }
 
     ::MapActionEnvironment ReadyEnvironment()
@@ -38,7 +114,7 @@ namespace
         };
     }
 
-    void OpenEligibleMap(::CruiseRuntime& runtime, bool cruiseWasActive = false)
+    void OpenMap(::CruiseRuntime& runtime, bool cruiseWasActive = false, std::optional<::FormID> currentSystemId = AlphaCentauriId)
     {
         runtime.OnMapMovieCreated(CurrentIdentity.generation);
 
@@ -47,12 +123,12 @@ namespace
                 .identity = CurrentIdentity,
                 .flying = true,
                 .cruiseWasActive = cruiseWasActive,
-                .currentSystemId = 0x100,
+                .currentSystemId = currentSystemId,
             }),
-            "map session was not opened"
+            "runtime rejected the map session"
         );
 
-        Require(runtime.OnMapViewChanged(CurrentIdentity, ::MapView::System), "system view was rejected");
+        Require(runtime.OnMapViewChanged(CurrentIdentity, ::MapView::System), "runtime rejected system view");
 
         Require(
             runtime.OnMarkersChanged(
@@ -61,177 +137,224 @@ namespace
                     .highlightedCount = 1,
                     .highlighted =
                         {
-                            .id = 0x10,
+                            .id = JemisonId,
                             .kind = ::ObservedTargetKind::Planet,
                             .displayName = "Jemison Marker",
                         },
                 }
             ),
-            "marker update was rejected"
+            "runtime rejected marker observation"
         );
+
+        Require(runtime.OnDossierChanged(CurrentIdentity, JemisonDossier()), "runtime rejected dossier observation");
+    }
+
+    void TestFullTapFlow()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        const auto action = runtime.CurrentMapAction(ReadyEnvironment());
+
+        Require(action.CanHandleInput(), "resolved dossier did not produce an action");
+        Require(bodySource.calls == 1 && bodySource.lastBodyId == JemisonId, "dossier did not perform one exact body lookup");
+
+        const auto activated = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
+
+        Require(activated.Succeeded(), "tap command dispatch did not succeed");
+        Require(commands.calls.size() == 1 && commands.calls[0].command == RecordedCommand::CloseMap, "tap did not dispatch exactly one CloseMap command");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::ClosingMap, "tap did not wait for map close");
+
+        const auto closed = runtime.OnMapClosed(CurrentIdentity);
+
+        Require(closed.Succeeded(), "tap map-close observation was not handled");
+        Require(commands.calls.size() == 1, "plain mark issued an unexpected command after map close");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "tap did not finish as a retained mark");
+    }
+
+    void TestFullHoldFlow()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, ReadyEnvironment()).Succeeded(), "completed hold did not close the map");
+        Require(runtime.OnMapClosed(CurrentIdentity).Succeeded(), "map close did not dispatch Cruise activation");
+        Require(runtime.OnCruiseChanged(true).Succeeded(), "Cruise activation did not dispatch the course request");
+
+        Require(commands.calls.size() == 3, "hold flow issued the wrong number of commands");
+        Require(commands.calls[0].command == RecordedCommand::CloseMap, "hold flow did not close the map first");
+        Require(commands.calls[1].command == RecordedCommand::PressCruise, "hold flow did not press Cruise second");
+        Require(commands.calls[2].command == RecordedCommand::RequestCourse, "hold flow did not request the course third");
+        Require(commands.calls[2].courseId == JemisonId, "hold flow requested the wrong course identity");
+
+        const auto locked = runtime.OnCourseLockChanged(JemisonId);
+
+        Require(locked.Succeeded(), "exact course lock was not handled");
+        Require(commands.calls.size() == 3, "course-lock confirmation dispatched an unexpected command");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::CourseLocked, "hold flow did not reach CourseLocked");
+    }
+
+    void TestTapOnlyRejectsHold()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        auto environment = ReadyEnvironment();
+        environment.cruiseEngageAvailable = false;
+
+        Require(runtime.CurrentMapAction(environment).control == ::ActionControl::TapOnly, "unavailable Cruise did not reduce the action to tap-only");
+        Require(!runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, environment).handled, "tap-only action accepted a hold");
+        Require(commands.calls.empty(), "rejected hold dispatched a command");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "rejected hold changed navigation state");
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, environment).Succeeded(), "tap-only action rejected a tap");
+    }
+
+    void TestAlreadyCruisingRequestsCourseAfterClose()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime, true);
+
+        Require(runtime.CurrentMapAction(ReadyEnvironment()).control == ::ActionControl::TapOnly, "active Cruise did not reduce the action to tap-only");
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "active-Cruise tap did not close the map");
+        Require(runtime.OnMapClosed(CurrentIdentity).Succeeded(), "active-Cruise map close did not request the course");
+
+        Require(commands.calls.size() == 2, "active-Cruise flow issued the wrong number of commands");
+        Require(commands.calls[0].command == RecordedCommand::CloseMap, "active-Cruise flow did not close the map first");
+        Require(commands.calls[1].command == RecordedCommand::RequestCourse, "active-Cruise flow did not request the course second");
+        Require(commands.calls[1].courseId == JemisonId, "active-Cruise flow requested the wrong course");
+    }
+
+    void TestMissingBodySystemFailsClosed()
+    {
+        FakeBodyResolutionSource bodySource;
+        bodySource.result.reset();
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        const auto action = runtime.CurrentMapAction(ReadyEnvironment());
+
+        Require(!action.CanHandleInput(), "missing body system produced an actionable destination");
+        Require(action.selectionReason == ::SelectionReason::TargetSystemUnavailable, "missing body system produced the wrong reason");
+        Require(bodySource.calls == 1, "missing body system was not queried exactly once");
+    }
+
+    void TestUnsupportedAndStaleDossiersDoNotQueryEngine()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        const auto callsBefore = bodySource.calls;
 
         Require(
             runtime.OnDossierChanged(
                 CurrentIdentity,
                 {
-                    .id = 0x10,
-                    .kind = ::ObservedTargetKind::Planet,
-                    .displayName = "Jemison",
+                    .id = MarsId,
+                    .kind = ::ObservedTargetKind::Unsupported,
                 }
             ),
-            "dossier update was rejected"
+            "unsupported dossier did not update the active session"
         );
-
-        Require(
-            runtime.OnBodyResolved(
-                CurrentIdentity,
-                {
-                    .dossierId = 0x10,
-                    .dossierIsLiveBody = true,
-                    .resolvedBody =
-                        ::ResolvedBody {
-                            .id = 0x10,
-                            .systemId = 0x100,
-                        },
-                }
-            ),
-            "body resolution was rejected"
-        );
-    }
-
-    void TestEligibleSessionProducesAction()
-    {
-        ::CruiseRuntime runtime;
-        OpenEligibleMap(runtime);
-
-        const auto action = runtime.CurrentMapAction(ReadyEnvironment());
-
-        Require(action.CanHandleInput(), "eligible session did not produce an actionable decision");
-        Require(action.control == ::ActionControl::TapAndHold, "available cruise did not expose tap-and-hold control");
-        Require(action.destination.has_value() && action.destination->targetId == 0x10, "action did not retain the resolved destination");
-    }
-
-    void TestTapFlowsIntoNavigation()
-    {
-        ::CruiseRuntime runtime;
-        OpenEligibleMap(runtime);
-
-        const auto activated = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
-
-        Require(activated.handled, "tap was not handled");
-        Require(FindEffect<::CloseMap>(activated) != nullptr, "tap did not request that the map close");
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::ClosingMap, "tap did not enter the closing-map phase");
-
-        const auto closed = runtime.OnMapClosed(CurrentIdentity);
-
-        Require(closed.handled, "accepted map close was not handled");
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "mark intent did not finish after the map closed");
-    }
-
-    void TestHoldReachesExactCourseLock()
-    {
-        ::CruiseRuntime runtime;
-        OpenEligibleMap(runtime);
-
-        const auto activated = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, ReadyEnvironment());
-
-        Require(activated.handled, "completed hold was not handled");
-        Require(FindEffect<::CloseMap>(activated) != nullptr, "completed hold did not request that the map close");
-
-        const auto closed = runtime.OnMapClosed(CurrentIdentity);
-        Require(FindEffect<::PressCruise>(closed) != nullptr, "map close did not request cruise engagement");
-
-        const auto cruiseStarted = runtime.OnCruiseChanged(true);
-        const auto* requestCourse = FindEffect<::RequestCourse>(cruiseStarted);
-        Require(requestCourse != nullptr, "cruise engagement did not request a course");
-        Require(requestCourse->courseId == 0x10, "course request targeted the wrong destination");
-
-        runtime.OnCourseLockChanged(0x20);
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::AwaitingCourseLock, "an unrelated course lock advanced navigation");
-
-        runtime.OnCourseLockChanged(0x10);
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::CourseLocked, "the requested course lock did not finish navigation");
-    }
-
-    void TestTapOnlyRejectsHold()
-    {
-        ::CruiseRuntime runtime;
-        OpenEligibleMap(runtime);
-
-        auto environment = ReadyEnvironment();
-        environment.cruiseEngageAvailable = false;
-
-        const auto action = runtime.CurrentMapAction(environment);
-        Require(action.control == ::ActionControl::TapOnly, "unavailable cruise did not reduce the action to tap-only");
-
-        const auto held = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, environment);
-
-        Require(!held.handled, "tap-only action accepted a hold");
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "rejected hold changed navigation state");
-
-        const auto tapped = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, environment);
-        Require(tapped.handled, "tap-only action rejected a tap");
-    }
-
-    void TestAlreadyCruisingTapRequestsCourseOnClose()
-    {
-        ::CruiseRuntime runtime;
-        OpenEligibleMap(runtime, true);
-
-        const auto action = runtime.CurrentMapAction(ReadyEnvironment());
-        Require(action.control == ::ActionControl::TapOnly, "active cruise did not reduce the action to tap-only");
-
-        const auto activated = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
-        Require(activated.handled, "tap while cruising was not handled");
-
-        const auto closed = runtime.OnMapClosed(CurrentIdentity);
-        const auto* requestCourse = FindEffect<::RequestCourse>(closed);
-
-        Require(requestCourse != nullptr, "active cruise did not request the course directly after close");
-        Require(requestCourse->courseId == 0x10, "direct course request targeted the wrong destination");
-        Require(FindEffect<::PressCruise>(closed) == nullptr, "active cruise incorrectly requested another cruise press");
-    }
-
-    void TestStaleSessionCannotActivateAction()
-    {
-        ::CruiseRuntime runtime;
-        OpenEligibleMap(runtime);
+        Require(bodySource.calls == callsBefore, "unsupported dossier queried the engine");
 
         const ::MapSessionIdentity staleIdentity {
             .session = CurrentIdentity.session - 1,
             .generation = CurrentIdentity.generation,
         };
 
-        const auto activated = runtime.ActivateMapAction(staleIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
-
-        Require(!activated.handled, "stale session activated the current action");
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "stale activation changed navigation state");
+        Require(!runtime.OnDossierChanged(staleIdentity, JemisonDossier()), "stale dossier was accepted");
+        Require(bodySource.calls == callsBefore, "stale dossier queried the engine");
+        Require(!runtime.ActivateMapAction(staleIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).handled, "stale action was handled");
+        Require(commands.calls.empty(), "stale action dispatched a command");
     }
 
-    void TestEffectFailureRecoveryIsExposedByApplicationRuntime()
+    void TestSolSystemIsEligible()
     {
-        ::CruiseRuntime runtime;
-        OpenEligibleMap(runtime);
+        FakeBodyResolutionSource bodySource;
+        bodySource.result->systemId = 0;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime, false, ::FormID {0});
 
-        runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, ReadyEnvironment());
-        runtime.OnMapClosed(CurrentIdentity);
+        Require(runtime.CurrentMapAction(ReadyEnvironment()).CanHandleInput(), "valid Sol system zero was rejected by the runtime");
+    }
 
-        const bool recovered = runtime.RecoverFromEffectFailure(::PressCruise {});
+    void TestFailedCloseMapRecoversAutomatically()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        commands.failOn = RecordedCommand::CloseMap;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
 
-        Require(recovered, "application runtime did not forward effect failure recovery");
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "application runtime did not expose the recovered navigation state");
-        Require(runtime.CurrentNavigationState().destination.has_value(), "application recovery discarded the selected destination");
+        const auto activated = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
+
+        Require(!activated.Succeeded(), "failed CloseMap command was reported as successful");
+        Require(activated.failedEffect && std::get_if<::CloseMap>(&*activated.failedEffect), "failed CloseMap retained the wrong effect");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "failed CloseMap left navigation stuck");
+        Require(!runtime.CurrentNavigationState().destination, "failed CloseMap retained an incomplete destination");
+    }
+
+    void TestFailedCruisePressFallsBackToMark()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, ReadyEnvironment()).Succeeded(), "completed hold did not close the map");
+
+        commands.failOn = RecordedCommand::PressCruise;
+        const auto closed = runtime.OnMapClosed(CurrentIdentity);
+
+        Require(!closed.Succeeded(), "failed PressCruise command was reported as successful");
+        Require(closed.failedEffect && std::get_if<::PressCruise>(&*closed.failedEffect), "failed PressCruise retained the wrong effect");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "failed PressCruise did not fall back to a mark");
+        Require(runtime.CurrentNavigationState().destination.has_value(), "failed PressCruise discarded the destination");
+    }
+
+    void TestFailedCourseRequestFallsBackToMark()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime, true);
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "active-Cruise tap did not close the map");
+
+        commands.failOn = RecordedCommand::RequestCourse;
+        const auto closed = runtime.OnMapClosed(CurrentIdentity);
+
+        Require(!closed.Succeeded(), "failed RequestCourse command was reported as successful");
+        Require(closed.failedEffect && std::get_if<::RequestCourse>(&*closed.failedEffect), "failed RequestCourse retained the wrong effect");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "failed RequestCourse did not fall back to a mark");
+        Require(runtime.CurrentNavigationState().destination.has_value(), "failed RequestCourse discarded the destination");
     }
 
     void RunTests()
     {
-        TestEligibleSessionProducesAction();
-        TestTapFlowsIntoNavigation();
-        TestHoldReachesExactCourseLock();
+        TestFullTapFlow();
+        TestFullHoldFlow();
         TestTapOnlyRejectsHold();
-        TestAlreadyCruisingTapRequestsCourseOnClose();
-        TestStaleSessionCannotActivateAction();
-        TestEffectFailureRecoveryIsExposedByApplicationRuntime();
+        TestAlreadyCruisingRequestsCourseAfterClose();
+        TestMissingBodySystemFailsClosed();
+        TestUnsupportedAndStaleDossiersDoNotQueryEngine();
+        TestSolSystemIsEligible();
+        TestFailedCloseMapRecoversAutomatically();
+        TestFailedCruisePressFallsBackToMark();
+        TestFailedCourseRequestFallsBackToMark();
     }
 }
 

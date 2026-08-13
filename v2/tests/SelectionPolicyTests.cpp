@@ -34,7 +34,6 @@ namespace
                     .kind = ::ObservedTargetKind::Planet,
                     .displayName = "Jemison",
                 },
-            .dossierIsLiveBody = true,
             .resolvedBody = ::ResolvedBody {
                 .id = 0x10,
                 .systemId = 0x100,

@@ -43,16 +43,6 @@ struct MarkerUpdate
     TargetObservation highlighted;
 };
 
-struct BodyResolutionUpdate
-{
-    // Identifies the dossier for which this resolution was produced.
-    // A delayed resolution for an older dossier is rejected.
-    FormID dossierId {0};
-
-    bool dossierIsLiveBody {false};
-    std::optional<ResolvedBody> resolvedBody;
-};
-
 class MapSessionState
 {
 public:
@@ -66,9 +56,7 @@ public:
 
     bool SetMarkers(const MapSessionIdentity& identity, MarkerUpdate update);
 
-    bool SetDossier(const MapSessionIdentity& identity, TargetObservation dossier);
-
-    bool SetBodyResolution(const MapSessionIdentity& identity, BodyResolutionUpdate resolution);
+    bool SetDossier(const MapSessionIdentity& identity, TargetObservation dossier, std::optional<ResolvedBody> resolvedBody);
 
     // Allows the first late cockpit-system resolution to complete an already-open session. Once captured, it cannot be rewritten.
     bool CaptureCurrentSystem(const MapSessionIdentity& identity, FormID systemId);
@@ -81,7 +69,6 @@ public:
 private:
     bool Accepts(const MapSessionIdentity& identity) const;
 
-    void ClearBodyResolution();
     void ClearTargetObservations();
     void ResetSession();
 
@@ -100,6 +87,5 @@ private:
     TargetObservation marker_;
     TargetObservation dossier_;
 
-    bool dossierIsLiveBody_ {false};
     std::optional<ResolvedBody> resolvedBody_;
 };

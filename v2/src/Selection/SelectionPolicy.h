@@ -40,8 +40,7 @@ struct SelectionSnapshot
     TargetObservation marker;
     TargetObservation dossier;
 
-    // These values are copied from the engine lookup by the adapter.
-    bool dossierIsLiveBody {false};
+    // This value is copied from the engine lookup by the adapter.
     std::optional<ResolvedBody> resolvedBody;
 };
 
@@ -60,7 +59,6 @@ enum class SelectionReason : std::uint8_t
     AmbiguousTarget,
     UnsupportedTarget,
     TargetDataUpdating,
-    TargetNotLive,
     TargetSystemUnavailable,
     RemoteSystem,
     Eligible,

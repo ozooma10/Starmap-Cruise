@@ -67,35 +67,14 @@ bool MapSessionState::SetMarkers(const MapSessionIdentity& identity, MarkerUpdat
     return true;
 }
 
-bool MapSessionState::SetDossier(const MapSessionIdentity& identity, TargetObservation dossier)
+bool MapSessionState::SetDossier(const MapSessionIdentity& identity, TargetObservation dossier, std::optional<ResolvedBody> resolvedBody)
 {
     if (!Accepts(identity)) {
         return false;
     }
-
-    const bool identityChanged = dossier_.id != dossier.id || dossier_.kind != dossier.kind;
 
     dossier_ = std::move(dossier);
-
-    if (identityChanged) {
-        ClearBodyResolution();
-    }
-
-    return true;
-}
-
-bool MapSessionState::SetBodyResolution(const MapSessionIdentity& identity, BodyResolutionUpdate resolution)
-{
-    if (!Accepts(identity)) {
-        return false;
-    }
-
-    if (dossier_.id == 0 || resolution.dossierId != dossier_.id) {
-        return false;
-    }
-
-    dossierIsLiveBody_ = resolution.dossierIsLiveBody;
-    resolvedBody_ = std::move(resolution.resolvedBody);
+    resolvedBody_ = std::move(resolvedBody);
 
     return true;
 }
@@ -127,7 +106,6 @@ SelectionSnapshot MapSessionState::Snapshot() const
         .highlightedMarkerCount = highlightedMarkerCount_,
         .marker = marker_,
         .dossier = dossier_,
-        .dossierIsLiveBody = dossierIsLiveBody_,
         .resolvedBody = resolvedBody_,
     };
 }
@@ -147,19 +125,12 @@ bool MapSessionState::Accepts(const MapSessionIdentity& identity) const
     return open_ && identity.IsValid() && identity == identity_ && identity.generation == movieGeneration_;
 }
 
-void MapSessionState::ClearBodyResolution()
-{
-    dossierIsLiveBody_ = false;
-    resolvedBody_.reset();
-}
-
 void MapSessionState::ClearTargetObservations()
 {
     highlightedMarkerCount_ = 0;
     marker_ = {};
     dossier_ = {};
-
-    ClearBodyResolution();
+    resolvedBody_.reset();
 }
 
 void MapSessionState::ResetSession()

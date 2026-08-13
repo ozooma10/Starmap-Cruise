@@ -19,9 +19,6 @@ namespace
         {"ActionPolicy", &RunActionPolicyTests},
         {"MapSessionState", &RunMapSessionStateTests},
         {"CruiseRuntime", &RunCruiseRuntimeTests},
-        {"EffectDispatcher", &RunEffectDispatcherTests},
-        {"BodyResolver", &RunBodyResolverTests},
-        {"CruiseController", &RunCruiseControllerTests},
         {"ActionPresenter", &RunActionPresenterTests},
     };
 

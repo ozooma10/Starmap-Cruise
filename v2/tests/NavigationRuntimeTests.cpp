@@ -17,12 +17,7 @@ namespace
 
     template <class T> const T* FindEffect(const ::TransitionResult& result)
     {
-        for (const auto& effect : result.effects) {
-            if (const auto* value = std::get_if<T>(&effect))
-                return value;
-        }
-
-        return nullptr;
+        return result.effect ? std::get_if<T>(&*result.effect) : nullptr;
     }
 
     ::Destination Jemison()
@@ -63,7 +58,7 @@ namespace
         Require(runtime.CurrentState().phase == ::NavigationPhase::Marked, "tap did not leave the destination marked");
         Require(runtime.CurrentState().destination.has_value(), "tap lost the selected destination");
         Require(runtime.CurrentState().destination->targetId == Jemison().targetId, "tap retained the wrong destination");
-        Require(closed.effects.empty(), "plain tap emitted an unexpected engine effect");
+        Require(!closed.effect, "plain tap emitted an unexpected engine effect");
     }
 
     void TestSameDestinationTogglesOff()
@@ -156,7 +151,7 @@ namespace
         const auto result = runtime.SelectDestination(::Destination {}, ::SelectionIntent::Mark, false);
 
         Require(!result.handled, "invalid destination was accepted");
-        Require(result.effects.empty(), "invalid destination emitted effects");
+        Require(!result.effect, "invalid destination emitted an effect");
         Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "invalid destination changed navigation phase");
         Require(!runtime.CurrentState().destination, "invalid destination was retained");
     }
