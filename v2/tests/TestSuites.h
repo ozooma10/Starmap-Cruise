@@ -7,3 +7,4 @@ void RunMapSessionStateTests();
 void RunCruiseRuntimeTests();
 void RunEffectDispatcherTests();
 void RunBodyResolverTests();
+void RunCruiseControllerTests();

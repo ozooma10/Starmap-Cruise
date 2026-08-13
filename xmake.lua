@@ -65,7 +65,8 @@ target("CruiseFromStarmapV2Tests", function()
         "v2/src/Map/MapSessionState.cpp",
         "v2/src/Application/CruiseRuntime.cpp",
         "v2/src/Application/EffectDispatcher.cpp",
-        "v2/src/Application/BodyResolver.cpp"
+        "v2/src/Application/BodyResolver.cpp",
+        "v2/src/Application/CruiseController.cpp"
     )
     add_headerfiles(
         "v2/src/**.h",
