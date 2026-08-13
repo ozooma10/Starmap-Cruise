@@ -1,18 +1,24 @@
 #include "Starfield/StarfieldCruiseAdapter.h"
 
 #include "MainThreadUiPump.h"
+#include "Scaleform/ValueAccess.h"
 
 #include "RE/Starfield.h"
 #include "REX/REX.h"
 #include "SFSE/SFSE.h"
 
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <utility>
 
 namespace
 {
+    using Clock = std::chrono::steady_clock;
+
     constexpr const char* MapMenuName = "GalaxyStarMapMenu";
+    constexpr const char* MapDataFeed = "StarMapMenuData";
+    constexpr auto MapMovieSettleTime = std::chrono::milliseconds(250);
 
     std::uint32_t ToIdentityComponent(std::uint64_t sequence)
     {
@@ -24,6 +30,22 @@ namespace
         return static_cast<std::uint32_t>(((sequence - 1) % generationCount) + 1);
     }
 
+    std::uintptr_t PackIdentity(const MapSessionIdentity& identity)
+    {
+        static_assert(sizeof(std::uintptr_t) >= sizeof(std::uint64_t));
+        return (static_cast<std::uintptr_t>(identity.session) << 32) |
+            identity.generation;
+    }
+
+    MapSessionIdentity UnpackIdentity(const void* token)
+    {
+        const auto packed = reinterpret_cast<std::uintptr_t>(token);
+        return {
+            .session = static_cast<std::uint32_t>(packed >> 32),
+            .generation = static_cast<std::uint32_t>(packed),
+        };
+    }
+
     bool IsPlayerFlying()
     {
         static_assert(RE::ID::TESObjectREFR::IsInSpace.id() == 63482);
@@ -31,6 +53,24 @@ namespace
         const auto player = RE::PlayerCharacter::GetSingleton();
         const auto ship = player ? player->GetSpaceship() : nullptr;
         return ship && ship->IsInSpace(false);
+    }
+
+    MapView ReadMapView(RE::Scaleform::GFx::Value& data)
+    {
+        RE::Scaleform::GFx::Value value;
+        if (!data.GetMember("iCurrentMenuView", &value) ||
+            !(value.IsNumber() || value.IsInt() || value.IsUInt())) {
+            return MapView::Unknown;
+        }
+
+        const auto raw = CFS::ScaleformValue::AsNumber(value);
+        if (raw == 0.0) {
+            return MapView::Galaxy;
+        }
+        if (raw == 1.0) {
+            return MapView::System;
+        }
+        return MapView::Other;
     }
 }
 
@@ -53,13 +93,39 @@ private:
     StarfieldCruiseAdapter& owner_;
 };
 
+class StarfieldCruiseAdapter::MapDataHandler final : public RE::Scaleform::GFx::FunctionHandler
+{
+public:
+    explicit MapDataHandler(StarfieldCruiseAdapter& owner) : owner_(owner) {}
+
+    void Call(const Params& params) override
+    {
+        const auto identity = UnpackIdentity(params.userData);
+        if (!identity.IsValid()) {
+            return;
+        }
+
+        RE::Scaleform::GFx::Value data;
+        const auto view = CFS::ScaleformValue::Payload(params, data) ?
+            ReadMapView(data) : MapView::Unknown;
+        owner_.RecordMapViewObservation(identity, view);
+    }
+
+private:
+    StarfieldCruiseAdapter& owner_;
+};
+
 StarfieldCruiseAdapter& StarfieldCruiseAdapter::GetSingleton()
 {
     static StarfieldCruiseAdapter singleton;
     return singleton;
 }
 
-StarfieldCruiseAdapter::StarfieldCruiseAdapter() : runtime_(bodySource_, commands_), mapLifecycleSink_(std::make_unique<MapLifecycleSink>(*this)) {}
+StarfieldCruiseAdapter::StarfieldCruiseAdapter() :
+    runtime_(bodySource_, commands_),
+    mapLifecycleSink_(std::make_unique<MapLifecycleSink>(*this)),
+    mapDataHandler_(std::make_unique<MapDataHandler>(*this))
+{}
 
 StarfieldCruiseAdapter::~StarfieldCruiseAdapter() = default;
 
@@ -84,7 +150,7 @@ bool StarfieldCruiseAdapter::Initialize()
     menus->Register(&OnMovieCreated);
     ui->RegisterSink<RE::MenuOpenCloseEvent>(mapLifecycleSink_.get());
     initialized_ = true;
-    REX::INFO("StarfieldCruiseAdapter: initialized with copied map movie and lifecycle observations");
+    REX::INFO("StarfieldCruiseAdapter: initialized with copied map movie, lifecycle, and view observations");
     return true;
 }
 
@@ -99,8 +165,12 @@ void StarfieldCruiseAdapter::OnMovieCreated(RE::IMenu* menu)
         return;
     }
 
-    // This callback may run outside the game-thread pump. Publish only an owned sequence number; no menu or movie pointer crosses the boundary.
-    GetSingleton().mapMovieSequence_.fetch_add(1, std::memory_order_release);
+    // This callback may run outside the game-thread pump. Publish only owned
+    // timing and sequence values; no menu or movie pointer crosses the boundary.
+    auto& adapter = GetSingleton();
+    adapter.mapMovieBornTicks_.store(
+        Clock::now().time_since_epoch().count(), std::memory_order_relaxed);
+    adapter.mapMovieSequence_.fetch_add(1, std::memory_order_release);
 }
 
 void StarfieldCruiseAdapter::OnUiSafeFrame()
@@ -108,11 +178,13 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
     auto& adapter = GetSingleton();
     adapter.DrainMapMovieObservation();
     adapter.DrainMapLifecycleObservations();
+    adapter.TrySubscribeMapView();
+    adapter.DrainMapViewObservation();
 }
 
 void StarfieldCruiseAdapter::RecordMapLifecycleObservation(bool opening)
 {
-    std::lock_guard lock {mapLifecycleMutex_};
+    std::lock_guard lock {mapObservationMutex_};
 
     if (mapLifecycleOverflow_) {
         return;
@@ -146,6 +218,34 @@ void StarfieldCruiseAdapter::RecordMapLifecycleObservation(bool opening)
     };
 }
 
+void StarfieldCruiseAdapter::RecordMapViewObservation(
+    const MapSessionIdentity& identity, MapView view)
+{
+    std::lock_guard lock {mapObservationMutex_};
+
+    const auto currentGeneration =
+        ToIdentityComponent(mapMovieSequence_.load(std::memory_order_acquire));
+    if (!identity.IsValid() || identity.generation != currentGeneration ||
+        !activeMapIdentity_.IsValid() ||
+        activeMapIdentity_ != identity) {
+        return;
+    }
+
+    if (!pendingMapView_ || pendingMapView_->identity != activeMapIdentity_) {
+        pendingMapView_ = MapViewObservation {
+            .identity = activeMapIdentity_,
+            .view = view,
+        };
+        return;
+    }
+
+    if (pendingMapView_->view != view) {
+        // Losing a transition could preserve target evidence across views.
+        // Ambiguity therefore degrades to Unknown, which clears it fail-closed.
+        pendingMapView_->view = MapView::Unknown;
+    }
+}
+
 void StarfieldCruiseAdapter::DrainMapMovieObservation()
 {
     const auto sequence = mapMovieSequence_.load(std::memory_order_acquire);
@@ -156,6 +256,11 @@ void StarfieldCruiseAdapter::DrainMapMovieObservation()
     runtime_.OnMapMovieCreated(ToIdentityComponent(sequence));
     presenter_.Invalidate();
     consumedMapMovieSequence_ = sequence;
+    mapViewSubscriptionIdentity_ = {};
+
+    std::lock_guard lock {mapObservationMutex_};
+    activeMapIdentity_ = {};
+    pendingMapView_.reset();
 }
 
 void StarfieldCruiseAdapter::DrainMapLifecycleObservations()
@@ -165,7 +270,7 @@ void StarfieldCruiseAdapter::DrainMapLifecycleObservations()
     bool overflowed = false;
 
     {
-        std::lock_guard lock {mapLifecycleMutex_};
+        std::lock_guard lock {mapObservationMutex_};
         observationCount = pendingMapLifecycleCount_;
         for (std::size_t index = 0; index < observationCount; ++index) {
             observations[index] = pendingMapLifecycle_[index];
@@ -182,6 +287,11 @@ void StarfieldCruiseAdapter::DrainMapLifecycleObservations()
         if (movieSequence != 0) {
             runtime_.OnMapMovieCreated(ToIdentityComponent(movieSequence));
         }
+        {
+            std::lock_guard lock {mapObservationMutex_};
+            activeMapIdentity_ = {};
+            pendingMapView_.reset();
+        }
         presenter_.Invalidate();
         REX::ERROR("StarfieldCruiseAdapter: map lifecycle observation queue overflowed; active map session invalidated");
         return;
@@ -190,16 +300,139 @@ void StarfieldCruiseAdapter::DrainMapLifecycleObservations()
     for (std::size_t index = 0; index < observationCount; ++index) {
         const auto& observation = observations[index];
         if (observation.opening) {
-            runtime_.OnMapOpened({
+            const bool accepted = runtime_.OnMapOpened({
                 .identity = observation.identity,
                 .flying = IsPlayerFlying(),
-                // Until the HUD source supplies exact Cruise state, treating  unknown as active prevents an unsafe hold-to-engage path.
+                // Until the HUD source supplies exact Cruise state, treating
+                // unknown as active prevents an unsafe hold-to-engage path.
                 .cruiseWasActive = true,
                 .currentSystemId = std::nullopt,
             });
+            if (accepted) {
+                std::lock_guard lock {mapObservationMutex_};
+                activeMapIdentity_ = observation.identity;
+                pendingMapView_.reset();
+            }
         } else {
             runtime_.OnMapClosed(observation.identity);
+            std::lock_guard lock {mapObservationMutex_};
+            if (activeMapIdentity_ == observation.identity) {
+                activeMapIdentity_ = {};
+                pendingMapView_.reset();
+            }
         }
+        presenter_.Invalidate();
+    }
+}
+
+bool StarfieldCruiseAdapter::IsCurrentMapMovie(
+    const void* root, const MapSessionIdentity& identity)
+{
+    if (!root || !identity.IsValid() ||
+        ToIdentityComponent(mapMovieSequence_.load(std::memory_order_acquire)) !=
+            identity.generation) {
+        return false;
+    }
+
+    {
+        std::lock_guard lock {mapObservationMutex_};
+        if (activeMapIdentity_ != identity) {
+            return false;
+        }
+    }
+
+    const auto ui = RE::UI::GetSingleton();
+    const RE::BSFixedString mapName {MapMenuName};
+    if (!ui || !ui->IsMenuOpen(mapName)) {
+        return false;
+    }
+
+    const auto menu = ui->GetMenu(mapName);
+    return menu && menu->uiMovie && menu->uiMovie->asMovieRoot &&
+        static_cast<const void*>(menu->uiMovie->asMovieRoot.get()) == root;
+}
+
+void StarfieldCruiseAdapter::TrySubscribeMapView()
+{
+    MapSessionIdentity identity;
+    {
+        std::lock_guard lock {mapObservationMutex_};
+        identity = activeMapIdentity_;
+    }
+
+    if (!identity.IsValid() || mapViewSubscriptionIdentity_ == identity) {
+        return;
+    }
+
+    const auto bornTicks = mapMovieBornTicks_.load(std::memory_order_acquire);
+    if (bornTicks == 0 ||
+        Clock::now() - Clock::time_point {Clock::duration {bornTicks}} <
+            MapMovieSettleTime) {
+        return;
+    }
+
+    const auto ui = RE::UI::GetSingleton();
+    const RE::BSFixedString mapName {MapMenuName};
+    if (!ui || !ui->IsMenuOpen(mapName)) {
+        return;
+    }
+
+    const auto menu = ui->GetMenu(mapName);
+    if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot) {
+        return;
+    }
+
+    auto* root = menu->uiMovie->asMovieRoot.get();
+    const auto rootIdentity = static_cast<const void*>(root);
+    if (!IsCurrentMapMovie(rootIdentity, identity)) {
+        return;
+    }
+
+    RE::Scaleform::GFx::Value manager;
+    if (!root->GetVariable(&manager, "Shared.AS3.Data.BSUIDataManager") ||
+        !(manager.IsObject() || manager.IsDisplayObject()) ||
+        !IsCurrentMapMovie(rootIdentity, identity)) {
+        return;
+    }
+
+    RE::Scaleform::GFx::Value args[2];
+    root->CreateString(&args[0], MapDataFeed);
+    root->CreateFunction(
+        &args[1], mapDataHandler_.get(),
+        reinterpret_cast<void*>(PackIdentity(identity)));
+    if (!IsCurrentMapMovie(rootIdentity, identity)) {
+        return;
+    }
+
+    if (!manager.Invoke("Subscribe", nullptr, args, 2)) {
+        return;
+    }
+    if (!IsCurrentMapMovie(rootIdentity, identity)) {
+        std::lock_guard lock {mapObservationMutex_};
+        if (pendingMapView_ && pendingMapView_->identity == identity) {
+            pendingMapView_.reset();
+        }
+        return;
+    }
+
+    mapViewSubscriptionIdentity_ = identity;
+    REX::INFO("StarfieldCruiseAdapter: subscribed {} -> {} session={} generation={}",
+        MapMenuName, MapDataFeed, identity.session, identity.generation);
+}
+
+void StarfieldCruiseAdapter::DrainMapViewObservation()
+{
+    std::optional<MapViewObservation> observation;
+    {
+        std::lock_guard lock {mapObservationMutex_};
+        observation = std::exchange(pendingMapView_, std::nullopt);
+    }
+
+    if (!observation) {
+        return;
+    }
+
+    if (runtime_.OnMapViewChanged(observation->identity, observation->view)) {
         presenter_.Invalidate();
     }
 }

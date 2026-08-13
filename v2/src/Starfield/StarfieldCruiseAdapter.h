@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 namespace RE
 {
@@ -35,7 +36,14 @@ private:
         MapSessionIdentity identity;
     };
 
+    struct MapViewObservation
+    {
+        MapSessionIdentity identity;
+        MapView view {MapView::Unknown};
+    };
+
     class MapLifecycleSink;
+    class MapDataHandler;
 
     class Commands final : public CruiseCommands
     {
@@ -58,8 +66,13 @@ private:
     static void OnUiSafeFrame();
 
     void RecordMapLifecycleObservation(bool opening);
+    void RecordMapViewObservation(const MapSessionIdentity& identity, MapView view);
     void DrainMapMovieObservation();
     void DrainMapLifecycleObservations();
+    void TrySubscribeMapView();
+    void DrainMapViewObservation();
+
+    bool IsCurrentMapMovie(const void* root, const MapSessionIdentity& identity);
 
     StarfieldBodyResolutionSource bodySource_;
     Commands commands_;
@@ -67,14 +80,19 @@ private:
     ActionPresenter presenter_;
     ActionView actionView_;
     std::atomic<std::uint64_t> mapMovieSequence_ {0};
+    std::atomic<std::int64_t> mapMovieBornTicks_ {0};
     std::uint64_t consumedMapMovieSequence_ {0};
-    std::mutex mapLifecycleMutex_;
+    std::mutex mapObservationMutex_;
     static constexpr std::size_t MaxPendingMapLifecycleObservations = 16;
     std::array<MapLifecycleObservation, MaxPendingMapLifecycleObservations> pendingMapLifecycle_;
     std::size_t pendingMapLifecycleCount_ {0};
     bool mapLifecycleOverflow_ {false};
     std::uint64_t mapSessionSequence_ {0};
     MapSessionIdentity publishedMapIdentity_;
+    MapSessionIdentity activeMapIdentity_;
+    std::optional<MapViewObservation> pendingMapView_;
+    MapSessionIdentity mapViewSubscriptionIdentity_;
     std::unique_ptr<MapLifecycleSink> mapLifecycleSink_;
+    std::unique_ptr<MapDataHandler> mapDataHandler_;
     bool initialized_ {false};
 };
