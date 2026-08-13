@@ -10,3 +10,4 @@ void RunBodyResolverTests();
 void RunCruiseControllerTests();
 void RunActionPresenterTests();
 void RunBodyCatalogTests();
+void RunCatalogBodyResolutionSourceTests();
