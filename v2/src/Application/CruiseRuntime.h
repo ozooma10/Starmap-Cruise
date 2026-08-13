@@ -51,6 +51,7 @@ public:
 
     bool OnMapOpened(const MapOpenContext& context);
     EffectDispatchResult OnMapClosed(const MapSessionIdentity& identity);
+    bool OnMapCloseTimedOut(const MapSessionIdentity& identity);
 
     bool OnMapViewChanged(const MapSessionIdentity& identity, MapView view);
 
@@ -65,8 +66,10 @@ public:
     EffectDispatchResult ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment);
 
     EffectDispatchResult OnCruiseChanged(bool active);
+    bool OnCruiseActivationTimedOut();
 
     EffectDispatchResult OnCourseLockChanged(FormID lockedCourseId);
+    bool OnCourseLockTimedOut(FormID courseId);
 
     const NavigationState& CurrentNavigationState() const;
 

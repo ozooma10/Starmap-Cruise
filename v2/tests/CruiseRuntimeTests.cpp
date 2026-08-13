@@ -343,6 +343,82 @@ namespace
         Require(runtime.CurrentNavigationState().destination.has_value(), "failed RequestCourse discarded the destination");
     }
 
+    void TestMapCloseTimeoutRecoversCurrentSelectionAndRejectsStaleIdentity()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "tap did not dispatch CloseMap");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::ClosingMap, "accepted CloseMap did not wait for confirmation");
+
+        const ::MapSessionIdentity staleIdentity {
+            .session = CurrentIdentity.session - 1,
+            .generation = CurrentIdentity.generation,
+        };
+
+        Require(!runtime.OnMapCloseTimedOut(staleIdentity), "stale map-close timeout was accepted");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::ClosingMap, "stale map-close timeout changed the current phase");
+        Require(runtime.CurrentNavigationState().destination.has_value(), "stale map-close timeout discarded the current destination");
+
+        Require(runtime.OnMapCloseTimedOut(CurrentIdentity), "current map-close timeout was not recovered");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "map-close timeout left navigation stuck");
+        Require(!runtime.CurrentNavigationState().destination, "map-close timeout retained an incomplete destination");
+        Require(commands.calls.size() == 1, "map-close timeout dispatched an unexpected command");
+        Require(!runtime.OnMapCloseTimedOut(CurrentIdentity), "repeated map-close timeout was accepted");
+    }
+
+    void TestCruiseActivationTimeoutFallsBackAndRejectsLateObservation()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, ReadyEnvironment()).Succeeded(), "completed hold did not dispatch CloseMap");
+        Require(runtime.OnMapClosed(CurrentIdentity).Succeeded(), "map close did not dispatch PressCruise");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::CruiseRequested, "accepted PressCruise did not wait for activation");
+
+        Require(runtime.OnCruiseActivationTimedOut(), "Cruise activation timeout was not recovered");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "Cruise activation timeout did not fall back to a mark");
+        Require(runtime.CurrentNavigationState().destination.has_value(), "Cruise activation timeout discarded the destination");
+        Require(commands.calls.size() == 2, "Cruise activation timeout dispatched an unexpected command");
+        Require(!runtime.OnCruiseActivationTimedOut(), "repeated Cruise activation timeout was accepted");
+
+        Require(runtime.OnCruiseChanged(true).Succeeded(), "late Cruise activation did not request the course from the retained mark");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::AwaitingCourseLock, "late Cruise activation did not advance to AwaitingCourseLock");
+        Require(!runtime.OnCruiseActivationTimedOut(), "stale Cruise activation timeout changed a newer phase");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::AwaitingCourseLock, "stale Cruise activation timeout changed navigation state");
+    }
+
+    void TestCourseLockTimeoutRequiresExactCourseAndFallsBack()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime, true);
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "active-Cruise tap did not dispatch CloseMap");
+        Require(runtime.OnMapClosed(CurrentIdentity).Succeeded(), "map close did not dispatch RequestCourse");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::AwaitingCourseLock, "accepted RequestCourse did not wait for the exact lock");
+
+        Require(!runtime.OnCourseLockTimedOut(MarsId), "wrong-course timeout was accepted");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::AwaitingCourseLock, "wrong-course timeout changed the current phase");
+        Require(runtime.CurrentNavigationState().destination && runtime.CurrentNavigationState().destination->courseId == JemisonId, "wrong-course timeout changed the destination");
+
+        Require(runtime.OnCourseLockTimedOut(JemisonId), "exact course-lock timeout was not recovered");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "course-lock timeout did not fall back to a mark");
+        Require(runtime.CurrentNavigationState().destination && runtime.CurrentNavigationState().destination->courseId == JemisonId, "course-lock timeout discarded the destination");
+        Require(commands.calls.size() == 2, "course-lock timeout dispatched an unexpected command");
+        Require(!runtime.OnCourseLockTimedOut(JemisonId), "repeated course-lock timeout was accepted");
+
+        Require(runtime.OnCruiseChanged(true).Succeeded(), "Cruise reactivation did not request the retained course");
+        Require(runtime.OnCourseLockChanged(JemisonId).Succeeded(), "exact course lock was not confirmed");
+        Require(!runtime.OnCourseLockTimedOut(JemisonId), "late course-lock timeout was accepted after confirmation");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::CourseLocked, "late course-lock timeout changed the confirmed lock");
+    }
+
     void RunTests()
     {
         TestFullTapFlow();
@@ -355,6 +431,9 @@ namespace
         TestFailedCloseMapRecoversAutomatically();
         TestFailedCruisePressFallsBackToMark();
         TestFailedCourseRequestFallsBackToMark();
+        TestMapCloseTimeoutRecoversCurrentSelectionAndRejectsStaleIdentity();
+        TestCruiseActivationTimeoutFallsBackAndRejectsLateObservation();
+        TestCourseLockTimeoutRequiresExactCourseAndFallsBack();
     }
 }
 

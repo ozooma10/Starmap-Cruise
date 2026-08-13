@@ -52,6 +52,15 @@ EffectDispatchResult CruiseRuntime::OnMapClosed(const MapSessionIdentity& identi
     return Execute(navigation_.MapClosed());
 }
 
+bool CruiseRuntime::OnMapCloseTimedOut(const MapSessionIdentity& identity)
+{
+    if (!map_.IsActive(identity)) {
+        return false;
+    }
+
+    return navigation_.RecoverFromEffectFailure(CloseMap {});
+}
+
 bool CruiseRuntime::OnMapViewChanged(const MapSessionIdentity& identity, MapView view)
 {
     return map_.SetView(identity, view);
@@ -126,9 +135,19 @@ EffectDispatchResult CruiseRuntime::OnCruiseChanged(bool active)
     return Execute(navigation_.CruiseChanged(active));
 }
 
+bool CruiseRuntime::OnCruiseActivationTimedOut()
+{
+    return navigation_.RecoverFromEffectFailure(PressCruise {});
+}
+
 EffectDispatchResult CruiseRuntime::OnCourseLockChanged(FormID lockedCourseId)
 {
     return Execute(navigation_.CourseLockChanged(lockedCourseId));
+}
+
+bool CruiseRuntime::OnCourseLockTimedOut(FormID courseId)
+{
+    return navigation_.RecoverFromEffectFailure(RequestCourse {courseId});
 }
 
 const NavigationState& CruiseRuntime::CurrentNavigationState() const
