@@ -8,3 +8,4 @@ void RunCruiseRuntimeTests();
 void RunEffectDispatcherTests();
 void RunBodyResolverTests();
 void RunCruiseControllerTests();
+void RunActionPresenterTests();

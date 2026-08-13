@@ -22,6 +22,7 @@ namespace
         { "EffectDispatcher", &RunEffectDispatcherTests },
         { "BodyResolver", &RunBodyResolverTests },
         { "CruiseController", &RunCruiseControllerTests },
+        { "ActionPresenter", &RunActionPresenterTests },
     };
 
     bool RunSuite(const TestSuite& suite)
