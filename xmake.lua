@@ -52,3 +52,17 @@ target("RecordReaderTests", function()
     add_packages("zlib")
     add_tests("record-reader")
 end)
+
+target("CruiseFromStarmapV2CoreTests", function()
+    set_kind("binary")
+    set_default(false)
+
+    add_files(
+        "v2/tests/NavigationRuntimeTests.cpp",
+        "v2/src/Navigation/NavigationRuntime.cpp"
+    )
+    add_headerfiles("v2/src/**.h")
+    add_includedirs("v2/src")
+
+    add_tests("v2-core")
+end)
