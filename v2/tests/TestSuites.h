@@ -18,3 +18,4 @@ void RunPlanetDataParserTests();
 void RunPluginMasterParserTests();
 void RunPluginResolverBuilderTests();
 void RunPluginEntryReaderTests();
+void RunPluginPlanetScannerTests();
