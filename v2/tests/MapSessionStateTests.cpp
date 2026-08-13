@@ -2,6 +2,7 @@
 #include "Selection/SelectionPolicy.h"
 #include "TestSuites.h"
 
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -19,7 +20,7 @@ namespace
             throw std::runtime_error {std::string {message}};
     }
 
-    void OpenSession(::MapSessionState& state, ::FormID currentSystemId = 0x100)
+    void OpenSession(::MapSessionState& state, std::optional<::FormID> currentSystemId = 0x100)
     {
         state.BeginMovie(CurrentIdentity.generation);
 
@@ -71,9 +72,8 @@ namespace
                 {
                     .dossierId = 0x10,
                     .dossierIsLiveBody = true,
-                    .bodyIndexReady = true,
-                    .indexedBody =
-                        ::IndexedBodyObservation {
+                    .resolvedBody =
+                        ::ResolvedBody {
                             .id = 0x10,
                             .systemId = 0x100,
                         },
@@ -98,7 +98,7 @@ namespace
 
         Require(selection.destination->targetId == 0x10, "selection retained the wrong target");
 
-        Require(selection.destination->systemId == 0x100, "selection retained the wrong system");
+        Require(selection.destination->systemId == ::FormID {0x100}, "selection retained the wrong system");
     }
 
     void TestStaleSessionUpdateIsIgnored()
@@ -143,7 +143,7 @@ namespace
 
         Require(snapshot.dossier.id == 0, "view change retained dossier evidence");
 
-        Require(!snapshot.indexedBody, "view change retained body resolution");
+        Require(!snapshot.resolvedBody, "view change retained body resolution");
     }
 
     void TestRepeatedViewDoesNotClearEvidence()
@@ -178,17 +178,14 @@ namespace
 
         Require(!snapshot.dossierIsLiveBody, "new dossier inherited old live-form proof");
 
-        Require(!snapshot.bodyIndexReady, "new dossier inherited old index readiness");
-
-        Require(!snapshot.indexedBody, "new dossier inherited old indexed identity");
+        Require(!snapshot.resolvedBody, "new dossier inherited old resolved identity");
 
         const bool acceptedOldResolution = state.SetBodyResolution(
             CurrentIdentity,
             {
                 .dossierId = 0x10,
                 .dossierIsLiveBody = true,
-                .bodyIndexReady = true,
-                .indexedBody = ::IndexedBodyObservation {
+                .resolvedBody = ::ResolvedBody {
                     .id = 0x10,
                     .systemId = 0x100,
                 },
@@ -226,9 +223,9 @@ namespace
     void TestLateCurrentSystemIsCapturedOnce()
     {
         ::MapSessionState state;
-        OpenSession(state, 0);
+        OpenSession(state, std::nullopt);
 
-        Require(state.Snapshot().currentSystemId == 0, "unresolved session invented a current system");
+        Require(!state.Snapshot().currentSystemId, "unresolved session invented a current system");
 
         Require(state.CaptureCurrentSystem(CurrentIdentity, 0x100), "first current-system resolution was rejected");
 
@@ -236,7 +233,21 @@ namespace
 
         Require(!state.CaptureCurrentSystem(CurrentIdentity, 0x200), "captured current system was rewritten");
 
-        Require(state.Snapshot().currentSystemId == 0x100, "captured current system changed unexpectedly");
+        Require(state.Snapshot().currentSystemId == ::FormID {0x100}, "captured current system changed unexpectedly");
+    }
+
+    void TestSolSystemZeroIsCapturedOnce()
+    {
+        ::MapSessionState state;
+        OpenSession(state, std::nullopt);
+
+        Require(state.CaptureCurrentSystem(CurrentIdentity, 0), "valid Sol system zero was rejected");
+        Require(state.CaptureCurrentSystem(CurrentIdentity, 0), "repeated Sol system resolution was rejected");
+        Require(!state.CaptureCurrentSystem(CurrentIdentity, 0x100), "captured Sol system was rewritten");
+
+        const auto snapshot = state.Snapshot();
+        Require(snapshot.currentSystemId.has_value(), "captured Sol system lost its presence");
+        Require(*snapshot.currentSystemId == 0, "captured Sol system changed identity");
     }
 
     void TestMovieReplacementInvalidatesSession()
@@ -270,6 +281,7 @@ namespace
         TestDossierChangeClearsOldResolution();
         TestAmbiguousMarkersClearStoredTarget();
         TestLateCurrentSystemIsCapturedOnce();
+        TestSolSystemZeroIsCapturedOnce();
         TestMovieReplacementInvalidatesSession();
     }
 }

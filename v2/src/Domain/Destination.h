@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 using FormID = std::uint32_t;
@@ -23,12 +24,12 @@ struct Destination
     // This matches targetId for planets and moons, but may differ for stations.
     FormID courseId {0};
 
-    FormID systemId {0};
+    std::optional<FormID> systemId;
     std::string displayName;
 
     bool IsValid() const
     {
-        return targetId != 0 && courseId != 0 && systemId != 0;
+        return targetId != 0 && courseId != 0 && systemId.has_value();
     }
 
     bool SameIdentityAs(const Destination& other) const

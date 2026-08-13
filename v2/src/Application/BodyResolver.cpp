@@ -20,15 +20,9 @@ BodyResolutionUpdate BodyResolver::Resolve(const TargetObservation& dossier) con
         return result;
     }
 
-    result.dossierIsLiveBody = source_.IsLiveBody(dossier.id);
-
-    result.bodyIndexReady = source_.IsBodyIndexReady();
-
-    if (!result.dossierIsLiveBody || !result.bodyIndexReady) {
-        return result;
-    }
-
-    result.indexedBody = source_.FindIndexedBody(dossier.id);
+    auto lookup = source_.ResolveBody(dossier.id);
+    result.dossierIsLiveBody = lookup.isLiveBody;
+    result.resolvedBody = std::move(lookup.body);
 
     return result;
 }

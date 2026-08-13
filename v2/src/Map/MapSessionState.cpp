@@ -95,24 +95,18 @@ bool MapSessionState::SetBodyResolution(const MapSessionIdentity& identity, Body
     }
 
     dossierIsLiveBody_ = resolution.dossierIsLiveBody;
-    bodyIndexReady_ = resolution.bodyIndexReady;
-
-    if (resolution.bodyIndexReady) {
-        indexedBody_ = std::move(resolution.indexedBody);
-    } else {
-        indexedBody_.reset();
-    }
+    resolvedBody_ = std::move(resolution.resolvedBody);
 
     return true;
 }
 
 bool MapSessionState::CaptureCurrentSystem(const MapSessionIdentity& identity, FormID systemId)
 {
-    if (!Accepts(identity) || systemId == 0) {
+    if (!Accepts(identity)) {
         return false;
     }
 
-    if (currentSystemId_ == 0) {
+    if (!currentSystemId_) {
         currentSystemId_ = systemId;
         return true;
     }
@@ -134,8 +128,7 @@ SelectionSnapshot MapSessionState::Snapshot() const
         .marker = marker_,
         .dossier = dossier_,
         .dossierIsLiveBody = dossierIsLiveBody_,
-        .bodyIndexReady = bodyIndexReady_,
-        .indexedBody = indexedBody_,
+        .resolvedBody = resolvedBody_,
     };
 }
 
@@ -157,8 +150,7 @@ bool MapSessionState::Accepts(const MapSessionIdentity& identity) const
 void MapSessionState::ClearBodyResolution()
 {
     dossierIsLiveBody_ = false;
-    bodyIndexReady_ = false;
-    indexedBody_.reset();
+    resolvedBody_.reset();
 }
 
 void MapSessionState::ClearTargetObservations()
@@ -177,7 +169,7 @@ void MapSessionState::ResetSession()
 
     flyingAtOpen_ = false;
     cruiseWasActiveAtOpen_ = false;
-    currentSystemId_ = 0;
+    currentSystemId_.reset();
 
     view_ = MapView::Unknown;
 

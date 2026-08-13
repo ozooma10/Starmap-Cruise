@@ -34,7 +34,7 @@ struct MapOpenContext
     bool flying {false};
     bool cruiseWasActive {false};
 
-    FormID currentSystemId {0};
+    std::optional<FormID> currentSystemId;
 };
 
 struct MarkerUpdate
@@ -50,9 +50,7 @@ struct BodyResolutionUpdate
     FormID dossierId {0};
 
     bool dossierIsLiveBody {false};
-    bool bodyIndexReady {false};
-
-    std::optional<IndexedBodyObservation> indexedBody;
+    std::optional<ResolvedBody> resolvedBody;
 };
 
 class MapSessionState
@@ -94,7 +92,7 @@ private:
 
     bool flyingAtOpen_ {false};
     bool cruiseWasActiveAtOpen_ {false};
-    FormID currentSystemId_ {0};
+    std::optional<FormID> currentSystemId_;
 
     MapView view_ {MapView::Unknown};
 
@@ -103,6 +101,5 @@ private:
     TargetObservation dossier_;
 
     bool dossierIsLiveBody_ {false};
-    bool bodyIndexReady_ {false};
-    std::optional<IndexedBodyObservation> indexedBody_;
+    std::optional<ResolvedBody> resolvedBody_;
 };

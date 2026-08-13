@@ -20,7 +20,7 @@ struct TargetObservation
     std::string displayName;
 };
 
-struct IndexedBodyObservation
+struct ResolvedBody
 {
     FormID id {0};
     FormID systemId {0};
@@ -34,16 +34,15 @@ struct SelectionSnapshot
     bool flying {false};
     bool systemView {false};
 
-    FormID currentSystemId {0};
+    std::optional<FormID> currentSystemId;
 
     std::size_t highlightedMarkerCount {0};
     TargetObservation marker;
     TargetObservation dossier;
 
-    // These values are copied from engine/index checks by the adapter.
+    // These values are copied from the engine lookup by the adapter.
     bool dossierIsLiveBody {false};
-    bool bodyIndexReady {false};
-    std::optional<IndexedBodyObservation> indexedBody;
+    std::optional<ResolvedBody> resolvedBody;
 };
 
 enum class SelectionAvailability : std::uint8_t
@@ -62,8 +61,7 @@ enum class SelectionReason : std::uint8_t
     UnsupportedTarget,
     TargetDataUpdating,
     TargetNotLive,
-    TargetDataLoading,
-    TargetNotIndexed,
+    TargetSystemUnavailable,
     RemoteSystem,
     Eligible,
 };

@@ -2,15 +2,18 @@
 
 #include "Map/MapSessionState.h"
 
+struct BodyLookupResult
+{
+    bool isLiveBody {false};
+    std::optional<ResolvedBody> body;
+};
+
 class BodyResolutionSource
 {
 public:
     virtual ~BodyResolutionSource() = default;
 
-    virtual bool IsLiveBody(FormID bodyId) const = 0;
-    virtual bool IsBodyIndexReady() const = 0;
-
-    virtual std::optional<IndexedBodyObservation> FindIndexedBody(FormID bodyId) const = 0;
+    virtual BodyLookupResult ResolveBody(FormID bodyId) const = 0;
 };
 
 class BodyResolver

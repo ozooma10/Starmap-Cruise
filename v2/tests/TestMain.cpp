@@ -23,18 +23,6 @@ namespace
         {"BodyResolver", &RunBodyResolverTests},
         {"CruiseController", &RunCruiseControllerTests},
         {"ActionPresenter", &RunActionPresenterTests},
-        {"BodyCatalog", &RunBodyCatalogTests},
-        {"CatalogBodyResolutionSource", &RunCatalogBodyResolutionSourceTests},
-        {"PluginFormId", &RunPluginFormIdTests},
-        {"SubrecordReader", &RunSubrecordReaderTests},
-        {"RecordBodyDecoder", &RunRecordBodyDecoderTests},
-        {"PlanetDataParser", &RunPlanetDataParserTests},
-        {"PluginMasterParser", &RunPluginMasterParserTests},
-        {"PluginResolverBuilder", &RunPluginResolverBuilderTests},
-        {"PluginEntryReader", &RunPluginEntryReaderTests},
-        {"PluginPlanetScanner", &RunPluginPlanetScannerTests},
-        {"PluginHeaderParser", &RunPluginHeaderParserTests},
-        {"PluginPlanetIndexer", &RunPluginPlanetIndexerTests},
     };
 
     bool RunSuite(const TestSuite& suite)

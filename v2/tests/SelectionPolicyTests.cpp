@@ -35,8 +35,7 @@ namespace
                     .displayName = "Jemison",
                 },
             .dossierIsLiveBody = true,
-            .bodyIndexReady = true,
-            .indexedBody = ::IndexedBodyObservation {
+            .resolvedBody = ::ResolvedBody {
                 .id = 0x10,
                 .systemId = 0x100,
             },
@@ -63,7 +62,7 @@ namespace
 
         Require(decision.destination->courseId == 0x10, "planet course ID did not match its target ID");
 
-        Require(decision.destination->systemId == 0x100, "destination retained the wrong system ID");
+        Require(decision.destination->systemId == ::FormID {0x100}, "destination retained the wrong system ID");
 
         Require(decision.destination->displayName == "Jemison", "dossier name was not preferred");
     }
@@ -128,26 +127,60 @@ namespace
         RequireDecision(decision, ::SelectionAvailability::Hidden, ::SelectionReason::UnsupportedTarget);
     }
 
-    void TestIndexMustConfirmExactBody()
+    void TestResolutionMustConfirmExactBody()
     {
         auto snapshot = ValidPlanet();
-        snapshot.indexedBody->id = 0x20;
+        snapshot.resolvedBody->id = 0x20;
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetNotIndexed);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
     }
 
     void TestRemoteSystemIsNotPartOfMvp()
     {
         auto snapshot = ValidPlanet();
-        snapshot.indexedBody->systemId = 0x200;
+        snapshot.resolvedBody->systemId = 0x200;
 
         const auto decision = ::EvaluateSelection(snapshot);
 
         RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::RemoteSystem);
 
         Require(!decision.destination, "remote-system rejection produced a destination");
+    }
+
+    void TestSolSystemIsEligible()
+    {
+        auto snapshot = ValidPlanet();
+        snapshot.currentSystemId = 0;
+        snapshot.resolvedBody->systemId = 0;
+
+        const auto decision = ::EvaluateSelection(snapshot);
+
+        Require(decision.IsEligible(), "valid Sol system zero was rejected");
+        Require(decision.destination->systemId.has_value(), "Sol destination lost system presence");
+        Require(*decision.destination->systemId == 0, "Sol destination changed the system identity");
+        Require(decision.destination->IsValid(), "Sol destination was treated as invalid");
+    }
+
+    void TestMissingCurrentSystemIsUnavailable()
+    {
+        auto snapshot = ValidPlanet();
+        snapshot.currentSystemId.reset();
+
+        const auto decision = ::EvaluateSelection(snapshot);
+
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::CurrentSystemUnavailable);
+    }
+
+    void TestMissingBodySystemIsUnavailable()
+    {
+        auto snapshot = ValidPlanet();
+        snapshot.resolvedBody.reset();
+
+        const auto decision = ::EvaluateSelection(snapshot);
+
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
     }
 
     void TestInvalidContextIsHidden()
@@ -168,8 +201,11 @@ namespace
         TestAmbiguousHighlightIsDisabled();
         TestMarkerAndDossierMustAgree();
         TestUnsupportedMarkerIsHidden();
-        TestIndexMustConfirmExactBody();
+        TestResolutionMustConfirmExactBody();
         TestRemoteSystemIsNotPartOfMvp();
+        TestSolSystemIsEligible();
+        TestMissingCurrentSystemIsUnavailable();
+        TestMissingBodySystemIsUnavailable();
         TestInvalidContextIsHidden();
     }
 }

@@ -41,7 +41,7 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
         return Hidden(SelectionReason::InactiveContext);
     }
 
-    if (snapshot.currentSystemId == 0) {
+    if (!snapshot.currentSystemId) {
         return Disabled(SelectionReason::CurrentSystemUnavailable);
     }
 
@@ -65,15 +65,11 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
         return Disabled(SelectionReason::TargetNotLive);
     }
 
-    if (!snapshot.bodyIndexReady) {
-        return Disabled(SelectionReason::TargetDataLoading);
+    if (!snapshot.resolvedBody || snapshot.resolvedBody->id != snapshot.dossier.id) {
+        return Disabled(SelectionReason::TargetSystemUnavailable);
     }
 
-    if (!snapshot.indexedBody || snapshot.indexedBody->id != snapshot.dossier.id || snapshot.indexedBody->systemId == 0) {
-        return Disabled(SelectionReason::TargetNotIndexed);
-    }
-
-    if (snapshot.indexedBody->systemId != snapshot.currentSystemId) {
+    if (snapshot.resolvedBody->systemId != *snapshot.currentSystemId) {
         return Disabled(SelectionReason::RemoteSystem);
     }
 
@@ -81,7 +77,7 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
         .kind = ToDestinationKind(snapshot.dossier.kind),
         .targetId = snapshot.dossier.id,
         .courseId = snapshot.dossier.id,
-        .systemId = snapshot.indexedBody->systemId,
+        .systemId = snapshot.resolvedBody->systemId,
         .displayName = snapshot.dossier.displayName.empty() ? snapshot.marker.displayName : snapshot.dossier.displayName,
     };
 

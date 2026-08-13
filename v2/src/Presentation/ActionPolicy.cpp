@@ -26,10 +26,7 @@ namespace
         case SelectionReason::TargetNotLive:
             return "TARGET TYPE IS NOT SUPPORTED";
 
-        case SelectionReason::TargetDataLoading:
-            return "CRUISE TARGET DATA LOADING";
-
-        case SelectionReason::TargetNotIndexed:
+        case SelectionReason::TargetSystemUnavailable:
             return "TARGET DATA IS NOT AVAILABLE";
 
         case SelectionReason::RemoteSystem:

@@ -36,36 +36,22 @@ namespace
     class FakeBodyResolutionSource final : public ::BodyResolutionSource
     {
     public:
-        bool IsLiveBody(::FormID bodyId) const override
+        ::BodyLookupResult ResolveBody(::FormID bodyId) const override
         {
-            ++liveBodyCalls;
+            ++calls;
             lastBodyId = bodyId;
-            return liveBody;
+            return result;
         }
 
-        bool IsBodyIndexReady() const override
-        {
-            ++indexReadyCalls;
-            return indexReady;
-        }
+        ::BodyLookupResult result {
+            .isLiveBody = true,
+            .body = ::ResolvedBody {
+                .id = JemisonId,
+                .systemId = AlphaCentauriId,
+            },
+        };
 
-        std::optional<::IndexedBodyObservation> FindIndexedBody(::FormID bodyId) const override
-        {
-            ++findBodyCalls;
-            lastBodyId = bodyId;
-            return indexedBody;
-        }
-
-        bool liveBody {true};
-        bool indexReady {true};
-        std::optional<::IndexedBodyObservation> indexedBody {::IndexedBodyObservation {
-            .id = JemisonId,
-            .systemId = AlphaCentauriId,
-        }};
-
-        mutable std::size_t liveBodyCalls {0};
-        mutable std::size_t indexReadyCalls {0};
-        mutable std::size_t findBodyCalls {0};
+        mutable std::size_t calls {0};
         mutable ::FormID lastBodyId {0};
     };
 
@@ -171,7 +157,7 @@ namespace
         const auto action = controller.CurrentMapAction(ReadyEnvironment());
 
         Require(action.CanHandleInput(), "automatically resolved dossier did not produce an action");
-        Require(bodySource.liveBodyCalls == 1 && bodySource.indexReadyCalls == 1 && bodySource.findBodyCalls == 1, "dossier did not run through the complete body resolver");
+        Require(bodySource.calls == 1, "dossier did not run through the body resolver exactly once");
         Require(bodySource.lastBodyId == JemisonId, "body resolver received the wrong dossier identity");
 
         const auto activated = controller.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
@@ -214,33 +200,19 @@ namespace
         Require(controller.CurrentNavigationState().phase == ::NavigationPhase::CourseLocked, "full hold flow did not reach CourseLocked");
     }
 
-    void TestDelayedBodyIndexCanBeRefreshed()
+    void TestMissingBodySystemFailsClosed()
     {
         FakeBodyResolutionSource bodySource;
-        bodySource.indexReady = false;
-        bodySource.indexedBody.reset();
+        bodySource.result.body.reset();
         FakeCruiseCommands commands;
         ::CruiseController controller {bodySource, commands};
         OpenMap(controller);
 
-        const auto loadingAction = controller.CurrentMapAction(ReadyEnvironment());
+        const auto action = controller.CurrentMapAction(ReadyEnvironment());
 
-        Require(!loadingAction.CanHandleInput(), "loading body index produced an actionable destination");
-        Require(loadingAction.selectionReason == ::SelectionReason::TargetDataLoading, "loading body index produced the wrong action reason");
-        Require(bodySource.findBodyCalls == 0, "loading body index was queried for an entry");
-
-        bodySource.indexReady = true;
-        bodySource.indexedBody = ::IndexedBodyObservation {
-            .id = JemisonId,
-            .systemId = AlphaCentauriId,
-        };
-
-        Require(controller.RefreshBodyResolution(CurrentIdentity, JemisonDossier()), "ready body index refresh was rejected");
-
-        const auto readyAction = controller.CurrentMapAction(ReadyEnvironment());
-
-        Require(readyAction.CanHandleInput(), "refreshed body resolution did not enable the action");
-        Require(bodySource.findBodyCalls == 1, "ready body index was not queried exactly once");
+        Require(!action.CanHandleInput(), "missing body system produced an actionable destination");
+        Require(action.selectionReason == ::SelectionReason::TargetSystemUnavailable, "missing body system produced the wrong action reason");
+        Require(bodySource.calls == 1, "body system lookup was not attempted exactly once");
     }
 
     void TestStaleEventsDoNotResolveOrDispatch()
@@ -250,9 +222,7 @@ namespace
         ::CruiseController controller {bodySource, commands};
         OpenMap(controller);
 
-        const auto liveCallsBefore = bodySource.liveBodyCalls;
-        const auto readyCallsBefore = bodySource.indexReadyCalls;
-        const auto findCallsBefore = bodySource.findBodyCalls;
+        const auto callsBefore = bodySource.calls;
 
         const ::MapSessionIdentity staleIdentity {
             .session = CurrentIdentity.session - 1,
@@ -269,7 +239,7 @@ namespace
         );
 
         Require(!dossierAccepted, "stale dossier was accepted");
-        Require(bodySource.liveBodyCalls == liveCallsBefore && bodySource.indexReadyCalls == readyCallsBefore && bodySource.findBodyCalls == findCallsBefore, "stale dossier queried the body source");
+        Require(bodySource.calls == callsBefore, "stale dossier queried the body source");
 
         const auto activated = controller.ActivateMapAction(staleIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
 
@@ -316,7 +286,7 @@ namespace
     {
         TestFullTapFlow();
         TestFullHoldFlow();
-        TestDelayedBodyIndexCanBeRefreshed();
+        TestMissingBodySystemFailsClosed();
         TestStaleEventsDoNotResolveOrDispatch();
         TestFailedCloseMapRecoversAutomatically();
         TestFailedCruisePressFallsBackToMark();

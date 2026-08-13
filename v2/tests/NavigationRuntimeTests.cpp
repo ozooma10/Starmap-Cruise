@@ -161,6 +161,19 @@ namespace
         Require(!runtime.CurrentState().destination, "invalid destination was retained");
     }
 
+    void TestSolDestinationIsValid()
+    {
+        ::NavigationRuntime runtime;
+        auto destination = Jemison();
+        destination.systemId = 0;
+
+        const auto result = runtime.SelectDestination(destination, ::SelectionIntent::Mark, false);
+
+        Require(result.handled, "valid Sol destination was rejected");
+        Require(runtime.CurrentState().destination.has_value(), "valid Sol destination was not retained");
+        Require(runtime.CurrentState().destination->systemId == ::FormID {0}, "Sol destination changed system identity");
+    }
+
     void TestCloseMapFailureAbandonsIncompleteSelection()
     {
         ::NavigationRuntime runtime;
@@ -232,6 +245,7 @@ namespace
         TestCompletedHoldUsesExactCourseLock();
         TestAlreadyCruisingSkipsCruisePress();
         TestInvalidDestinationFailsClosed();
+        TestSolDestinationIsValid();
         TestCloseMapFailureAbandonsIncompleteSelection();
         TestCruisePressFailureFallsBackToMark();
         TestOnlyExactCourseRequestFailureRecovers();

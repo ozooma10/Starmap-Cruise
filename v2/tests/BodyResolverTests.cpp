@@ -1,10 +1,15 @@
 #include "Application/BodyResolver.h"
+#include "Starfield/StarfieldBodyResolutionSource.h"
 #include "TestSuites.h"
 
-#include <optional>
+#include <concepts>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+
+static_assert(std::derived_from<::StarfieldBodyResolutionSource, ::BodyResolutionSource>);
+static_assert(!std::is_abstract_v<::StarfieldBodyResolutionSource>);
 
 namespace
 {
@@ -14,35 +19,16 @@ namespace
     class FakeBodyResolutionSource final : public ::BodyResolutionSource
     {
     public:
-        bool IsLiveBody(::FormID bodyId) const override
+        ::BodyLookupResult ResolveBody(::FormID bodyId) const override
         {
-            ++liveBodyCalls;
-            lastLiveBodyId = bodyId;
-            return liveBody;
+            ++calls;
+            lastBodyId = bodyId;
+            return result;
         }
 
-        bool IsBodyIndexReady() const override
-        {
-            ++indexReadyCalls;
-            return indexReady;
-        }
-
-        std::optional<::IndexedBodyObservation> FindIndexedBody(::FormID bodyId) const override
-        {
-            ++findBodyCalls;
-            lastFindBodyId = bodyId;
-            return indexedBody;
-        }
-
-        bool liveBody {false};
-        bool indexReady {false};
-        std::optional<::IndexedBodyObservation> indexedBody;
-
-        mutable std::size_t liveBodyCalls {0};
-        mutable std::size_t indexReadyCalls {0};
-        mutable std::size_t findBodyCalls {0};
-        mutable ::FormID lastLiveBodyId {0};
-        mutable ::FormID lastFindBodyId {0};
+        ::BodyLookupResult result;
+        mutable std::size_t calls {0};
+        mutable ::FormID lastBodyId {0};
     };
 
     void Require(bool condition, std::string_view message)
@@ -60,13 +46,6 @@ namespace
         };
     }
 
-    void RequireNoSourceCalls(const FakeBodyResolutionSource& source, std::string_view message)
-    {
-        Require(source.liveBodyCalls == 0, message);
-        Require(source.indexReadyCalls == 0, message);
-        Require(source.findBodyCalls == 0, message);
-    }
-
     void TestInvalidDossierDoesNotQuerySource()
     {
         FakeBodyResolutionSource source;
@@ -78,9 +57,8 @@ namespace
 
         Require(result.dossierId == 0, "invalid dossier produced a nonzero identity");
         Require(!result.dossierIsLiveBody, "invalid dossier was reported as live");
-        Require(!result.bodyIndexReady, "invalid dossier reported index readiness");
-        Require(!result.indexedBody, "invalid dossier produced an indexed body");
-        RequireNoSourceCalls(source, "invalid dossier queried the resolution source");
+        Require(!result.resolvedBody, "invalid dossier produced a resolved body");
+        Require(source.calls == 0, "invalid dossier queried the resolution source");
     }
 
     void TestUnsupportedDossierDoesNotQuerySource()
@@ -96,65 +74,44 @@ namespace
 
         Require(result.dossierId == JemisonId, "unsupported dossier lost its identity");
         Require(!result.dossierIsLiveBody, "unsupported dossier was reported as live");
-        Require(!result.bodyIndexReady, "unsupported dossier reported index readiness");
-        Require(!result.indexedBody, "unsupported dossier produced an indexed body");
-        RequireNoSourceCalls(source, "unsupported dossier queried the resolution source");
+        Require(!result.resolvedBody, "unsupported dossier produced a resolved body");
+        Require(source.calls == 0, "unsupported dossier queried the resolution source");
     }
 
-    void TestNonLiveBodyDoesNotQueryIndexEntry()
+    void TestNonLiveBodyFailsClosed()
     {
         FakeBodyResolutionSource source;
-        source.indexReady = true;
         ::BodyResolver resolver {source};
 
         const auto result = resolver.Resolve(Jemison());
 
         Require(result.dossierId == JemisonId, "non-live result lost the dossier identity");
         Require(!result.dossierIsLiveBody, "non-live body was reported as live");
-        Require(result.bodyIndexReady, "independent index readiness was not captured");
-        Require(!result.indexedBody, "non-live body produced an indexed observation");
-        Require(source.liveBodyCalls == 1 && source.lastLiveBodyId == JemisonId, "live-form lookup did not receive the dossier identity");
-        Require(source.indexReadyCalls == 1, "index readiness was not captured exactly once");
-        Require(source.findBodyCalls == 0, "non-live body queried the index entry");
+        Require(!result.resolvedBody, "non-live body produced a resolved body");
+        Require(source.calls == 1 && source.lastBodyId == JemisonId, "body lookup received the wrong dossier identity");
     }
 
-    void TestLoadingIndexDoesNotQueryEntry()
+    void TestLiveBodyCanLackSystemData()
     {
         FakeBodyResolutionSource source;
-        source.liveBody = true;
+        source.result.isLiveBody = true;
         ::BodyResolver resolver {source};
 
         const auto result = resolver.Resolve(Jemison());
 
         Require(result.dossierIsLiveBody, "live body was not reported as live");
-        Require(!result.bodyIndexReady, "loading index was reported as ready");
-        Require(!result.indexedBody, "loading index produced an indexed observation");
-        Require(source.findBodyCalls == 0, "loading index was queried for an entry");
+        Require(!result.resolvedBody, "missing engine system data produced a resolved body");
     }
 
-    void TestReadyIndexCanReportMissingBody()
+    void TestValidMoonProducesCompleteResolution()
     {
         FakeBodyResolutionSource source;
-        source.liveBody = true;
-        source.indexReady = true;
-        ::BodyResolver resolver {source};
-
-        const auto result = resolver.Resolve(Jemison());
-
-        Require(result.dossierIsLiveBody, "ready missing body lost live-form evidence");
-        Require(result.bodyIndexReady, "ready missing body lost index readiness");
-        Require(!result.indexedBody, "missing body produced an indexed observation");
-        Require(source.findBodyCalls == 1 && source.lastFindBodyId == JemisonId, "ready index was not queried with the dossier identity");
-    }
-
-    void TestValidIndexedMoonProducesCompleteResolution()
-    {
-        FakeBodyResolutionSource source;
-        source.liveBody = true;
-        source.indexReady = true;
-        source.indexedBody = ::IndexedBodyObservation {
-            .id = JemisonId,
-            .systemId = AlphaCentauriId,
+        source.result = {
+            .isLiveBody = true,
+            .body = ::ResolvedBody {
+                .id = JemisonId,
+                .systemId = AlphaCentauriId,
+            },
         };
         ::BodyResolver resolver {source};
 
@@ -166,21 +123,38 @@ namespace
 
         Require(result.dossierId == JemisonId, "complete resolution lost the dossier identity");
         Require(result.dossierIsLiveBody, "complete resolution lost live-form evidence");
-        Require(result.bodyIndexReady, "complete resolution lost index readiness");
-        Require(result.indexedBody.has_value(), "valid indexed body produced no observation");
-        Require(result.indexedBody->id == JemisonId, "complete resolution retained the wrong body identity");
-        Require(result.indexedBody->systemId == AlphaCentauriId, "complete resolution retained the wrong system identity");
-        Require(source.findBodyCalls == 1 && source.lastFindBodyId == JemisonId, "complete resolution queried the wrong index identity");
+        Require(result.resolvedBody.has_value(), "valid body produced no resolution");
+        Require(result.resolvedBody->id == JemisonId, "complete resolution retained the wrong body identity");
+        Require(result.resolvedBody->systemId == AlphaCentauriId, "complete resolution retained the wrong system identity");
+        Require(source.calls == 1 && source.lastBodyId == JemisonId, "complete resolution queried the wrong identity");
+    }
+
+    void TestZeroSystemIsRetained()
+    {
+        FakeBodyResolutionSource source;
+        source.result = {
+            .isLiveBody = true,
+            .body = ::ResolvedBody {
+                .id = JemisonId,
+                .systemId = 0,
+            },
+        };
+        ::BodyResolver resolver {source};
+
+        const auto result = resolver.Resolve(Jemison());
+
+        Require(result.resolvedBody.has_value(), "valid zero system was treated as missing");
+        Require(result.resolvedBody->systemId == 0, "valid zero system changed during resolution");
     }
 
     void RunTests()
     {
         TestInvalidDossierDoesNotQuerySource();
         TestUnsupportedDossierDoesNotQuerySource();
-        TestNonLiveBodyDoesNotQueryIndexEntry();
-        TestLoadingIndexDoesNotQueryEntry();
-        TestReadyIndexCanReportMissingBody();
-        TestValidIndexedMoonProducesCompleteResolution();
+        TestNonLiveBodyFailsClosed();
+        TestLiveBodyCanLackSystemData();
+        TestValidMoonProducesCompleteResolution();
+        TestZeroSystemIsRetained();
     }
 }
 

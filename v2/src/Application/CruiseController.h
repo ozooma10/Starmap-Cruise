@@ -21,9 +21,6 @@ public:
 
     bool OnDossierChanged(const MapSessionIdentity& identity, const TargetObservation& dossier);
 
-    // Re-evaluates the current dossier when the asynchronous body index becomes ready.
-    bool RefreshBodyResolution(const MapSessionIdentity& identity, const TargetObservation& dossier);
-
     bool OnCurrentSystemResolved(const MapSessionIdentity& identity, FormID systemId);
 
     ActionDecision CurrentMapAction(const MapActionEnvironment& environment) const;

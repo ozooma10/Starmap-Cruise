@@ -40,15 +40,6 @@ bool CruiseController::OnDossierChanged(const MapSessionIdentity& identity, cons
         return true;
     }
 
-    return RefreshBodyResolution(identity, dossier);
-}
-
-bool CruiseController::RefreshBodyResolution(const MapSessionIdentity& identity, const TargetObservation& dossier)
-{
-    if (dossier.id == 0) {
-        return false;
-    }
-
     return runtime_.OnBodyResolved(identity, bodyResolver_.Resolve(dossier));
 }
 

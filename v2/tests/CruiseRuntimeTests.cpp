@@ -88,9 +88,8 @@ namespace
                 {
                     .dossierId = 0x10,
                     .dossierIsLiveBody = true,
-                    .bodyIndexReady = true,
-                    .indexedBody =
-                        ::IndexedBodyObservation {
+                    .resolvedBody =
+                        ::ResolvedBody {
                             .id = 0x10,
                             .systemId = 0x100,
                         },
