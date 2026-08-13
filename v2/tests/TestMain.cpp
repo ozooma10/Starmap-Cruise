@@ -28,6 +28,7 @@ namespace
         {"PluginFormId", &RunPluginFormIdTests},
         {"SubrecordReader", &RunSubrecordReaderTests},
         {"RecordBodyDecoder", &RunRecordBodyDecoderTests},
+        {"PlanetDataParser", &RunPlanetDataParserTests},
     };
 
     bool RunSuite(const TestSuite& suite)

@@ -75,6 +75,7 @@ target("CruiseFromStarmapV2Tests", function()
         "v2/src/Bodies/PluginFormId.cpp",
         "v2/src/Bodies/SubrecordReader.cpp",
         "v2/src/Bodies/RecordBodyDecoder.cpp",
+        "v2/src/Bodies/PlanetDataParser.cpp",
         "v2/src/Map/MapSessionState.cpp",
         "v2/src/Application/CruiseRuntime.cpp",
         "v2/src/Application/EffectDispatcher.cpp",
