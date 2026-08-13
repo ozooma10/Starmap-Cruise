@@ -1,5 +1,4 @@
-#include "Bridge.h"
-#include "Settings.h"
+#include "Starfield/StarfieldCruiseAdapter.h"
 
 #include "SFSE/SFSE.h"
 
@@ -13,8 +12,9 @@ namespace
         if (a_message->type != SFSE::MessagingInterface::kPostDataLoad ||
             !g_runtimeSupported.load(std::memory_order_acquire))
             return;
-        CFS::Settings::Load();
-        CFS::Bridge::Initialize();
+        if (!StarfieldCruiseAdapter::GetSingleton().Initialize()) {
+            REX::ERROR("Cruise From Starmap v2 initialization failed; plugin remains disabled");
+        }
     }
 }
 

@@ -9,6 +9,8 @@ class StarfieldCruiseAdapter final
 public:
     static StarfieldCruiseAdapter& GetSingleton();
 
+    [[nodiscard]] bool Initialize();
+
     StarfieldCruiseAdapter(const StarfieldCruiseAdapter&) = delete;
     StarfieldCruiseAdapter(StarfieldCruiseAdapter&&) = delete;
     StarfieldCruiseAdapter& operator=(const StarfieldCruiseAdapter&) = delete;
@@ -31,10 +33,13 @@ private:
 
     StarfieldCruiseAdapter();
 
+    static void OnUiSafeFrame();
+
     // Dependency order is intentional: CruiseRuntime retains references to the body source and commands for the adapter's process lifetime.
     StarfieldBodyResolutionSource bodySource_;
     Commands commands_;
     CruiseRuntime runtime_;
     ActionPresenter presenter_;
     ActionView actionView_;
+    bool initialized_ {false};
 };
