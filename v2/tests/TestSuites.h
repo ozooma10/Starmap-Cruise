@@ -15,3 +15,4 @@ void RunPluginFormIdTests();
 void RunSubrecordReaderTests();
 void RunRecordBodyDecoderTests();
 void RunPlanetDataParserTests();
+void RunPluginMasterParserTests();

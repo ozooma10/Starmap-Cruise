@@ -29,6 +29,7 @@ namespace
         {"SubrecordReader", &RunSubrecordReaderTests},
         {"RecordBodyDecoder", &RunRecordBodyDecoderTests},
         {"PlanetDataParser", &RunPlanetDataParserTests},
+        {"PluginMasterParser", &RunPluginMasterParserTests},
     };
 
     bool RunSuite(const TestSuite& suite)
