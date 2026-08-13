@@ -12,3 +12,4 @@ void RunActionPresenterTests();
 void RunBodyCatalogTests();
 void RunCatalogBodyResolutionSourceTests();
 void RunPluginFormIdTests();
+void RunSubrecordReaderTests();

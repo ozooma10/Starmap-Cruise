@@ -26,6 +26,7 @@ namespace
         { "BodyCatalog", &RunBodyCatalogTests },
         { "CatalogBodyResolutionSource", &RunCatalogBodyResolutionSourceTests },
         { "PluginFormId", &RunPluginFormIdTests },
+        { "SubrecordReader", &RunSubrecordReaderTests },
     };
 
     bool RunSuite(const TestSuite& suite)
