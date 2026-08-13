@@ -1,7 +1,7 @@
 #include "Map/MapSessionState.h"
 #include "Selection/SelectionPolicy.h"
+#include "TestSuites.h"
 
-#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -321,20 +321,7 @@ namespace
     }
 }
 
-int main()
+void RunMapSessionStateTests()
 {
-    try {
-        RunTests();
-
-        std::cout
-            << "Cruise From Starmap v2 map session tests passed\n";
-
-        return 0;
-    } catch (const std::exception& error) {
-        std::cerr
-            << "Cruise From Starmap v2 map session tests failed: "
-            << error.what() << '\n';
-
-        return 1;
-    }
+    RunTests();
 }

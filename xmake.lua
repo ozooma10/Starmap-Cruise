@@ -53,59 +53,25 @@ target("RecordReaderTests", function()
     add_tests("record-reader")
 end)
 
-target("CruiseFromStarmapV2CoreTests", function()
+target("CruiseFromStarmapV2Tests", function()
     set_kind("binary")
     set_default(false)
 
     add_files(
-        "v2/tests/NavigationRuntimeTests.cpp",
-        "v2/src/Navigation/NavigationRuntime.cpp"
+        "v2/tests/**.cpp",
+        "v2/src/Navigation/NavigationRuntime.cpp",
+        "v2/src/Selection/SelectionPolicy.cpp",
+        "v2/src/Presentation/ActionPolicy.cpp",
+        "v2/src/Map/MapSessionState.cpp"
     )
-    add_headerfiles("v2/src/**.h")
-    add_includedirs("v2/src")
-
-    add_tests("v2-core")
-end)
-
-target("CruiseFromStarmapV2SelectionTests", function()
-    set_kind("binary")
-    set_default(false)
-
-    add_files(
-        "v2/tests/SelectionPolicyTests.cpp",
-        "v2/src/Selection/SelectionPolicy.cpp"
+    add_headerfiles(
+        "v2/src/**.h",
+        "v2/tests/TestSuites.h"
     )
-    add_headerfiles("v2/src/**.h")
-    add_includedirs("v2/src")
-
-    add_tests("v2-selection")
-end)
-
-target("CruiseFromStarmapV2ActionTests", function()
-    set_kind("binary")
-    set_default(false)
-
-    add_files(
-        "v2/tests/ActionPolicyTests.cpp",
-        "v2/src/Presentation/ActionPolicy.cpp"
+    add_includedirs(
+        "v2/src",
+        "v2/tests"
     )
-    add_headerfiles("v2/src/**.h")
-    add_includedirs("v2/src")
 
-    add_tests("v2-action")
-end)
-
-target("CruiseFromStarmapV2MapSessionTests", function()
-    set_kind("binary")
-    set_default(false)
-
-    add_files(
-        "v2/tests/MapSessionStateTests.cpp",
-        "v2/src/Map/MapSessionState.cpp",
-        "v2/src/Selection/SelectionPolicy.cpp"
-    )
-    add_headerfiles("v2/src/**.h")
-    add_includedirs("v2/src")
-
-    add_tests("v2-map-session")
+    add_tests("v2")
 end)

@@ -1,0 +1,6 @@
+#pragma once
+
+void RunNavigationRuntimeTests();
+void RunSelectionPolicyTests();
+void RunActionPolicyTests();
+void RunMapSessionStateTests();

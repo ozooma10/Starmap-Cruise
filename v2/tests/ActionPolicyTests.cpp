@@ -1,6 +1,6 @@
 #include "Presentation/ActionPolicy.h"
+#include "TestSuites.h"
 
-#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -220,20 +220,7 @@ namespace
     }
 }
 
-int main()
+void RunActionPolicyTests()
 {
-    try {
-        RunTests();
-
-        std::cout
-            << "Cruise From Starmap v2 action tests passed\n";
-
-        return 0;
-    } catch (const std::exception& error) {
-        std::cerr
-            << "Cruise From Starmap v2 action tests failed: "
-            << error.what() << '\n';
-
-        return 1;
-    }
+    RunTests();
 }

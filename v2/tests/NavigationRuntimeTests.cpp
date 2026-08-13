@@ -1,7 +1,7 @@
 #include "Navigation/NavigationRuntime.h"
+#include "TestSuites.h"
 
 #include <algorithm>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -247,15 +247,7 @@ namespace
     }
 }
 
-int main()
+void RunNavigationRuntimeTests()
 {
-    try {
-        RunTests();
-        std::cout << "Cruise From Starmap v2 core tests passed\n";
-        return 0;
-    } catch (const std::exception& error) {
-        std::cerr << "Cruise From Starmap v2 core tests failed: "
-                  << error.what() << '\n';
-        return 1;
-    }
+    RunTests();
 }
