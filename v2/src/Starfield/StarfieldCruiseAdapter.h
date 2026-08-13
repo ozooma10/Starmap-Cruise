@@ -4,8 +4,12 @@
 #include "Presentation/ActionPresenter.h"
 #include "Starfield/StarfieldBodyResolutionSource.h"
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <mutex>
 
 namespace RE
 {
@@ -25,6 +29,14 @@ public:
     StarfieldCruiseAdapter& operator=(StarfieldCruiseAdapter&&) = delete;
 
 private:
+    struct MapLifecycleObservation
+    {
+        bool opening {false};
+        MapSessionIdentity identity;
+    };
+
+    class MapLifecycleSink;
+
     class Commands final : public CruiseCommands
     {
     public:
@@ -40,13 +52,15 @@ private:
     };
 
     StarfieldCruiseAdapter();
+    ~StarfieldCruiseAdapter();
 
     static void OnMovieCreated(RE::IMenu* menu);
     static void OnUiSafeFrame();
 
+    void RecordMapLifecycleObservation(bool opening);
     void DrainMapMovieObservation();
+    void DrainMapLifecycleObservations();
 
-    // Dependency order is intentional: CruiseRuntime retains references to the body source and commands for the adapter's process lifetime.
     StarfieldBodyResolutionSource bodySource_;
     Commands commands_;
     CruiseRuntime runtime_;
@@ -54,5 +68,13 @@ private:
     ActionView actionView_;
     std::atomic<std::uint64_t> mapMovieSequence_ {0};
     std::uint64_t consumedMapMovieSequence_ {0};
+    std::mutex mapLifecycleMutex_;
+    static constexpr std::size_t MaxPendingMapLifecycleObservations = 16;
+    std::array<MapLifecycleObservation, MaxPendingMapLifecycleObservations> pendingMapLifecycle_;
+    std::size_t pendingMapLifecycleCount_ {0};
+    bool mapLifecycleOverflow_ {false};
+    std::uint64_t mapSessionSequence_ {0};
+    MapSessionIdentity publishedMapIdentity_;
+    std::unique_ptr<MapLifecycleSink> mapLifecycleSink_;
     bool initialized_ {false};
 };
