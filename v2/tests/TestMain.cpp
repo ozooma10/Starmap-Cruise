@@ -19,6 +19,7 @@ namespace
         { "ActionPolicy", &RunActionPolicyTests },
         { "MapSessionState", &RunMapSessionStateTests },
         { "CruiseRuntime", &RunCruiseRuntimeTests },
+        { "EffectDispatcher", &RunEffectDispatcherTests },
     };
 
     bool RunSuite(const TestSuite& suite)

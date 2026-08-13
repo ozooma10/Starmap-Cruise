@@ -5,3 +5,4 @@ void RunSelectionPolicyTests();
 void RunActionPolicyTests();
 void RunMapSessionStateTests();
 void RunCruiseRuntimeTests();
+void RunEffectDispatcherTests();
