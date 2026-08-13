@@ -80,3 +80,17 @@ target("CruiseFromStarmapV2SelectionTests", function()
 
     add_tests("v2-selection")
 end)
+
+target("CruiseFromStarmapV2ActionTests", function()
+    set_kind("binary")
+    set_default(false)
+
+    add_files(
+        "v2/tests/ActionPolicyTests.cpp",
+        "v2/src/Presentation/ActionPolicy.cpp"
+    )
+    add_headerfiles("v2/src/**.h")
+    add_includedirs("v2/src")
+
+    add_tests("v2-action")
+end)
