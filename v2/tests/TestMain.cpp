@@ -25,6 +25,7 @@ namespace
         { "ActionPresenter", &RunActionPresenterTests },
         { "BodyCatalog", &RunBodyCatalogTests },
         { "CatalogBodyResolutionSource", &RunCatalogBodyResolutionSourceTests },
+        { "PluginFormId", &RunPluginFormIdTests },
     };
 
     bool RunSuite(const TestSuite& suite)
