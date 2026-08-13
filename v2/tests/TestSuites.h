@@ -20,3 +20,4 @@ void RunPluginResolverBuilderTests();
 void RunPluginEntryReaderTests();
 void RunPluginPlanetScannerTests();
 void RunPluginHeaderParserTests();
+void RunPluginPlanetIndexerTests();

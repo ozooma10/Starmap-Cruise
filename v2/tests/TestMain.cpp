@@ -34,6 +34,7 @@ namespace
         {"PluginEntryReader", &RunPluginEntryReaderTests},
         {"PluginPlanetScanner", &RunPluginPlanetScannerTests},
         {"PluginHeaderParser", &RunPluginHeaderParserTests},
+        {"PluginPlanetIndexer", &RunPluginPlanetIndexerTests},
     };
 
     bool RunSuite(const TestSuite& suite)
