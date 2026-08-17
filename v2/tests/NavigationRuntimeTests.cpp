@@ -94,6 +94,58 @@ namespace
         Require(runtime.CurrentState().phase == ::NavigationPhase::Marked, "replacement was not marked after map close");
     }
 
+    void TestMapSelectionInvalidationCancelsIncompleteClose()
+    {
+        ::NavigationRuntime runtime;
+
+        runtime.SelectDestination(Jemison(), ::SelectionIntent::Mark, false);
+
+        Require(runtime.InvalidateMapSelection(), "pending map selection was not invalidated");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "map invalidation left navigation waiting for close");
+        Require(!runtime.CurrentState().destination, "map invalidation retained an incomplete destination");
+        Require(!runtime.MapClosed().handled, "stale map close advanced an invalidated selection");
+        Require(!runtime.InvalidateMapSelection(), "repeated map invalidation changed stable state");
+    }
+
+    void TestMapSelectionInvalidationPreservesPostMapWork()
+    {
+        {
+            ::NavigationRuntime runtime;
+            runtime.SelectDestination(Jemison(), ::SelectionIntent::Mark, false);
+            runtime.MapClosed();
+
+            Require(!runtime.InvalidateMapSelection(), "map invalidation claimed a stable mark");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Marked, "map invalidation discarded a stable mark");
+            Require(runtime.CurrentState().destination.has_value(), "map invalidation lost a marked destination");
+        }
+
+        {
+            ::NavigationRuntime runtime;
+            runtime.SelectDestination(Jemison(), ::SelectionIntent::StartCruise, false);
+            runtime.MapClosed();
+
+            Require(!runtime.InvalidateMapSelection(), "map invalidation claimed an issued Cruise request");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::CruiseRequested, "map invalidation discarded an issued Cruise request");
+            Require(runtime.CurrentState().destination.has_value(), "map invalidation lost the Cruise destination");
+        }
+
+        {
+            ::NavigationRuntime runtime;
+            runtime.SelectDestination(Jemison(), ::SelectionIntent::Mark, true);
+            runtime.MapClosed();
+
+            Require(!runtime.InvalidateMapSelection(), "map invalidation claimed an issued course request");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::AwaitingCourseLock, "map invalidation discarded an issued course request");
+            Require(runtime.CurrentState().destination.has_value(), "map invalidation lost the pending course destination");
+
+            runtime.CourseLockChanged(Jemison().courseId);
+
+            Require(!runtime.InvalidateMapSelection(), "map invalidation claimed a confirmed course lock");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::CourseLocked, "map invalidation discarded a confirmed course lock");
+            Require(runtime.CurrentState().destination.has_value(), "map invalidation lost the locked destination");
+        }
+    }
+
     void TestCompletedHoldUsesExactCourseLock()
     {
         ::NavigationRuntime runtime;
@@ -237,6 +289,8 @@ namespace
         TestTapMarksDestination();
         TestSameDestinationTogglesOff();
         TestDestinationReplacement();
+        TestMapSelectionInvalidationCancelsIncompleteClose();
+        TestMapSelectionInvalidationPreservesPostMapWork();
         TestCompletedHoldUsesExactCourseLock();
         TestAlreadyCruisingSkipsCruisePress();
         TestInvalidDestinationFailsClosed();

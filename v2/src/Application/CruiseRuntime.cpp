@@ -35,6 +35,7 @@ CruiseRuntime::CruiseRuntime(const BodyResolutionSource& bodySource, CruiseComma
 
 void CruiseRuntime::OnMapMovieCreated(std::uint32_t generation)
 {
+    navigation_.InvalidateMapSelection();
     map_.BeginMovie(generation);
 }
 

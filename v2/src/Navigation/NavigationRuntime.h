@@ -54,14 +54,15 @@ public:
     TransitionResult CruiseChanged(bool active);
     TransitionResult CourseLockChanged(FormID lockedCourseId);
 
+    bool InvalidateMapSelection();
     bool RecoverFromEffectFailure(const Effect& effect);
 
     void Reset();
     const NavigationState& CurrentState() const;
 
 private:
-    NavigationState state_;
+    NavigationState m_state;
 
-    std::optional<SelectionIntent> pendingIntent_;
-    bool cruiseWasActiveWhenSelected_ {false};
+    std::optional<SelectionIntent> m_pendingIntent;
+    bool m_cruiseWasActiveWhenSelected {false};
 };

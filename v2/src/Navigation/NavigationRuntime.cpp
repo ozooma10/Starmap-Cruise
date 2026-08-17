@@ -13,17 +13,17 @@ TransitionResult NavigationRuntime::SelectDestination(Destination destination, S
     result.handled = true;
 
     // Selecting the currently marked destination acts as a toggle.
-    if (state_.destination && state_.destination->SameIdentityAs(destination)) {
+    if (m_state.destination && m_state.destination->SameIdentityAs(destination)) {
         Reset();
         result.effect = CloseMap {};
         return result;
     }
 
-    state_.destination = std::move(destination);
-    state_.phase = NavigationPhase::ClosingMap;
+    m_state.destination = std::move(destination);
+    m_state.phase = NavigationPhase::ClosingMap;
 
-    pendingIntent_ = intent;
-    cruiseWasActiveWhenSelected_ = cruiseAlreadyActive;
+    m_pendingIntent = intent;
+    m_cruiseWasActiveWhenSelected = cruiseAlreadyActive;
 
     result.effect = CloseMap {};
     return result;
@@ -33,30 +33,30 @@ TransitionResult NavigationRuntime::MapClosed()
 {
     TransitionResult result;
 
-    if (state_.phase != NavigationPhase::ClosingMap || !state_.destination || !pendingIntent_) {
+    if (m_state.phase != NavigationPhase::ClosingMap || !m_state.destination || !m_pendingIntent) {
         return result;
     }
 
     result.handled = true;
 
-    const auto intent = *pendingIntent_;
-    const bool cruiseWasActive = cruiseWasActiveWhenSelected_;
+    const auto intent = *m_pendingIntent;
+    const bool cruiseWasActive = m_cruiseWasActiveWhenSelected;
 
-    pendingIntent_.reset();
-    cruiseWasActiveWhenSelected_ = false;
+    m_pendingIntent.reset();
+    m_cruiseWasActiveWhenSelected = false;
 
     if (cruiseWasActive) {
-        state_.phase = NavigationPhase::AwaitingCourseLock;
-        result.effect = RequestCourse {state_.destination->courseId};
+        m_state.phase = NavigationPhase::AwaitingCourseLock;
+        result.effect = RequestCourse {m_state.destination->courseId};
         return result;
     }
 
     if (intent == SelectionIntent::Mark) {
-        state_.phase = NavigationPhase::Marked;
+        m_state.phase = NavigationPhase::Marked;
         return result;
     }
 
-    state_.phase = NavigationPhase::CruiseRequested;
+    m_state.phase = NavigationPhase::CruiseRequested;
     result.effect = PressCruise {};
     return result;
 }
@@ -65,21 +65,21 @@ TransitionResult NavigationRuntime::CruiseChanged(bool active)
 {
     TransitionResult result;
 
-    if (!state_.destination) {
+    if (!m_state.destination) {
         return result;
     }
 
-    if (active && (state_.phase == NavigationPhase::Marked || state_.phase == NavigationPhase::CruiseRequested)) {
-        state_.phase = NavigationPhase::AwaitingCourseLock;
+    if (active && (m_state.phase == NavigationPhase::Marked || m_state.phase == NavigationPhase::CruiseRequested)) {
+        m_state.phase = NavigationPhase::AwaitingCourseLock;
 
         result.handled = true;
-        result.effect = RequestCourse {state_.destination->courseId};
+        result.effect = RequestCourse {m_state.destination->courseId};
         return result;
     }
 
-    if (!active && (state_.phase == NavigationPhase::AwaitingCourseLock || state_.phase == NavigationPhase::CourseLocked)) {
+    if (!active && (m_state.phase == NavigationPhase::AwaitingCourseLock || m_state.phase == NavigationPhase::CourseLocked)) {
         // Cruise ending does not discard the players mark.
-        state_.phase = NavigationPhase::Marked;
+        m_state.phase = NavigationPhase::Marked;
         result.handled = true;
     }
 
@@ -90,32 +90,42 @@ TransitionResult NavigationRuntime::CourseLockChanged(FormID lockedCourseId)
 {
     TransitionResult result;
 
-    if (!state_.destination) {
+    if (!m_state.destination) {
         return result;
     }
 
-    const auto expectedCourseId = state_.destination->courseId;
+    const auto expectedCourseId = m_state.destination->courseId;
 
-    if (lockedCourseId == expectedCourseId && (state_.phase == NavigationPhase::Marked || state_.phase == NavigationPhase::AwaitingCourseLock || state_.phase == NavigationPhase::CourseLocked)) {
-        state_.phase = NavigationPhase::CourseLocked;
+    if (lockedCourseId == expectedCourseId && (m_state.phase == NavigationPhase::Marked || m_state.phase == NavigationPhase::AwaitingCourseLock || m_state.phase == NavigationPhase::CourseLocked)) {
+        m_state.phase = NavigationPhase::CourseLocked;
         result.handled = true;
         return result;
     }
 
-    if (state_.phase == NavigationPhase::CourseLocked && lockedCourseId != expectedCourseId) {
+    if (m_state.phase == NavigationPhase::CourseLocked && lockedCourseId != expectedCourseId) {
         // The exact course disappeared or another course replaced it.
         // Keep the destination marked. Arrival handling comes later.
-        state_.phase = NavigationPhase::Marked;
+        m_state.phase = NavigationPhase::Marked;
         result.handled = true;
     }
 
     return result;
 }
 
+bool NavigationRuntime::InvalidateMapSelection()
+{
+    if (m_state.phase != NavigationPhase::ClosingMap) {
+        return false;
+    }
+
+    Reset();
+    return true;
+}
+
 bool NavigationRuntime::RecoverFromEffectFailure(const Effect& effect)
 {
     if (std::holds_alternative<CloseMap>(effect)) {
-        if (state_.phase != NavigationPhase::ClosingMap) {
+        if (m_state.phase != NavigationPhase::ClosingMap) {
             return false;
         }
 
@@ -124,31 +134,31 @@ bool NavigationRuntime::RecoverFromEffectFailure(const Effect& effect)
     }
 
     if (std::holds_alternative<PressCruise>(effect)) {
-        if (state_.phase != NavigationPhase::CruiseRequested || !state_.destination) {
+        if (m_state.phase != NavigationPhase::CruiseRequested || !m_state.destination) {
             return false;
         }
 
-        state_.phase = NavigationPhase::Marked;
+        m_state.phase = NavigationPhase::Marked;
         return true;
     }
 
     const auto* request = std::get_if<RequestCourse>(&effect);
-    if (!request || state_.phase != NavigationPhase::AwaitingCourseLock || !state_.destination || request->courseId != state_.destination->courseId) {
+    if (!request || m_state.phase != NavigationPhase::AwaitingCourseLock || !m_state.destination || request->courseId != m_state.destination->courseId) {
         return false;
     }
 
-    state_.phase = NavigationPhase::Marked;
+    m_state.phase = NavigationPhase::Marked;
     return true;
 }
 
 void NavigationRuntime::Reset()
 {
-    state_ = {};
-    pendingIntent_.reset();
-    cruiseWasActiveWhenSelected_ = false;
+    m_state = {};
+    m_pendingIntent.reset();
+    m_cruiseWasActiveWhenSelected = false;
 }
 
 const NavigationState& NavigationRuntime::CurrentState() const
 {
-    return state_;
+    return m_state;
 }

@@ -177,6 +177,34 @@ namespace
         Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "tap did not finish as a retained mark");
     }
 
+    void TestMovieReplacementCancelsOnlyPendingMapSelection()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "replacement setup did not dispatch CloseMap");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::ClosingMap, "replacement setup did not wait for map close");
+
+        runtime.OnMapMovieCreated(CurrentIdentity.generation + 1);
+
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "movie replacement retained an incomplete selection");
+        Require(!runtime.CurrentNavigationState().destination, "movie replacement retained an incomplete destination");
+        Require(!runtime.OnMapClosed(CurrentIdentity).handled, "old movie close advanced an invalidated selection");
+
+        FakeCruiseCommands stableCommands;
+        ::CruiseRuntime stableRuntime {bodySource, stableCommands};
+        OpenMap(stableRuntime);
+        Require(stableRuntime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "stable-state setup did not dispatch CloseMap");
+        Require(stableRuntime.OnMapClosed(CurrentIdentity).Succeeded(), "stable-state setup did not finish the mark");
+
+        stableRuntime.OnMapMovieCreated(CurrentIdentity.generation + 1);
+
+        Require(stableRuntime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "movie replacement discarded a stable mark");
+        Require(stableRuntime.CurrentNavigationState().destination.has_value(), "movie replacement lost the marked destination");
+    }
+
     void TestCurrentSelectionReportsAndInvalidatesReadOnlyState()
     {
         FakeBodyResolutionSource bodySource;
@@ -526,6 +554,7 @@ namespace
     void RunTests()
     {
         TestFullTapFlow();
+        TestMovieReplacementCancelsOnlyPendingMapSelection();
         TestCurrentSelectionReportsAndInvalidatesReadOnlyState();
         TestFullHoldFlow();
         TestTapOnlyRejectsHold();
