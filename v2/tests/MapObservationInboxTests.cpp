@@ -39,32 +39,48 @@ namespace
         Require(observations.lifecycleCount == 1, "close was not recorded");
         Require(!observations.lifecycle[0].opening, "close was recorded as an open");
         Require(observations.lifecycle[0].identity == identity, "close lost the open identity");
+        Require(!observations.mapData, "close retained stale map data");
     }
 
-    void TestViewsCoalesceFailClosed()
+    void TestMapDataCarriesCurrentBody()
     {
         MapObservationInbox inbox;
         const auto identity = OpenMap(inbox);
 
-        inbox.RecordView(identity, MapView::System);
-        inbox.RecordView(identity, MapView::Galaxy);
+        inbox.RecordMapData(identity, MapView::System, 0x1234);
 
         const auto observations = inbox.Drain();
-        Require(observations.view.has_value(), "view was not recorded");
-        Require(observations.view->view == MapView::Unknown, "conflicting views did not become unknown");
+        Require(observations.mapData.has_value(), "map data was not recorded");
+        Require(observations.mapData->identity == identity, "map data retained the wrong identity");
+        Require(observations.mapData->view == MapView::System, "map data retained the wrong view");
+        Require(observations.mapData->currentBodyId == 0x1234, "map data retained the wrong current body");
     }
 
-    void TestOldMovieViewIsRejected()
+    void TestMapDataCoalescesFailClosed()
+    {
+        MapObservationInbox inbox;
+        const auto identity = OpenMap(inbox);
+
+        inbox.RecordMapData(identity, MapView::System, 0x1234);
+        inbox.RecordMapData(identity, MapView::Galaxy, 0x5678);
+
+        const auto observations = inbox.Drain();
+        Require(observations.mapData.has_value(), "map data was not recorded");
+        Require(observations.mapData->view == MapView::Unknown, "conflicting views did not become unknown");
+        Require(observations.mapData->currentBodyId == 0, "conflicting current bodies did not become unavailable");
+    }
+
+    void TestOldMovieMapDataIsRejected()
     {
         MapObservationInbox inbox;
         const auto oldIdentity = OpenMap(inbox);
 
         inbox.RecordMovieCreated(200);
-        inbox.RecordView(oldIdentity, MapView::System);
+        inbox.RecordMapData(oldIdentity, MapView::System, 0x1234);
 
         const auto observations = inbox.Drain();
         Require(observations.movieGeneration == 2, "replacement movie retained the wrong generation");
-        Require(!observations.view, "old movie published a view into the replacement");
+        Require(!observations.mapData, "old movie published map data into the replacement");
     }
 
     void TestOverflowDropsPartialHistory()
@@ -78,13 +94,15 @@ namespace
         const auto observations = inbox.Drain();
         Require(observations.lifecycleOverflowed, "full lifecycle queue did not report overflow");
         Require(observations.lifecycleCount == 0, "overflow retained partial lifecycle history");
+        Require(!observations.mapData, "overflow retained stale map data");
     }
 
     void RunTests()
     {
         TestCloseKeepsOpenIdentity();
-        TestViewsCoalesceFailClosed();
-        TestOldMovieViewIsRejected();
+        TestMapDataCarriesCurrentBody();
+        TestMapDataCoalescesFailClosed();
+        TestOldMovieMapDataIsRejected();
         TestOverflowDropsPartialHistory();
     }
 }

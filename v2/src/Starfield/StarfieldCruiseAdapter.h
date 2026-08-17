@@ -43,7 +43,7 @@ private:
     static void OnUiSafeFrame();
 
     void DrainMapObservations();
-    void TrySubscribeMapView();
+    void TrySubscribeMapData();
 
     bool IsCurrentMapMovie(const void* root, const MapSessionIdentity& identity);
 
@@ -54,7 +54,7 @@ private:
 
     std::int64_t m_mapMovieBornTicks {0};
     MapSessionIdentity m_activeMapIdentity;
-    MapSessionIdentity m_mapViewSubscriptionIdentity;
+    MapSessionIdentity m_mapDataSubscriptionIdentity;
     std::unique_ptr<MapLifecycleSink> m_mapLifecycleSink;
     std::unique_ptr<MapDataHandler> m_mapDataHandler;
     bool m_initialized {false};

@@ -13,7 +13,7 @@ void MapObservationInbox::RecordMovieCreated(std::int64_t bornTicks)
     m_movieBornTicks = bornTicks;
     m_session = 0;
     m_currentIdentity = {};
-    m_view.reset();
+    m_mapData.reset();
 }
 
 void MapObservationInbox::RecordLifecycle(bool opening)
@@ -28,7 +28,7 @@ void MapObservationInbox::RecordLifecycle(bool opening)
         m_lifecycleCount = 0;
         m_lifecycleOverflowed = true;
         m_currentIdentity = {};
-        m_view.reset();
+        m_mapData.reset();
         return;
     }
 
@@ -49,14 +49,14 @@ void MapObservationInbox::RecordLifecycle(bool opening)
         m_currentIdentity = {};
     }
 
-    m_view.reset();
+    m_mapData.reset();
     m_lifecycle[m_lifecycleCount++] = {
         .opening = opening,
         .identity = identity,
     };
 }
 
-void MapObservationInbox::RecordView(const MapSessionIdentity& identity, MapView view)
+void MapObservationInbox::RecordMapData(const MapSessionIdentity& identity, MapView view, FormID currentBodyId)
 {
     std::lock_guard lock {m_mutex};
 
@@ -64,13 +64,20 @@ void MapObservationInbox::RecordView(const MapSessionIdentity& identity, MapView
         return;
     }
 
-    if (!m_view) {
-        m_view = ViewObservation {
+    if (!m_mapData) {
+        m_mapData = MapDataObservation {
             .identity = identity,
             .view = view,
+            .currentBodyId = currentBodyId,
         };
-    } else if (m_view->view != view) {
-        m_view->view = MapView::Unknown;
+        return;
+    }
+
+    if (m_mapData->view != view) {
+        m_mapData->view = MapView::Unknown;
+    }
+    if (m_mapData->currentBodyId != currentBodyId) {
+        m_mapData->currentBodyId = 0;
     }
 }
 
@@ -84,7 +91,7 @@ MapObservationInbox::Observations MapObservationInbox::Drain()
         .movieBornTicks = m_movieBornTicks,
         .lifecycleCount = m_lifecycleCount,
         .lifecycleOverflowed = m_lifecycleOverflowed,
-        .view = m_view,
+        .mapData = m_mapData,
     };
 
     for (std::size_t index = 0; index < m_lifecycleCount; ++index) {
@@ -94,7 +101,7 @@ MapObservationInbox::Observations MapObservationInbox::Drain()
     m_movieCreated = false;
     m_lifecycleCount = 0;
     m_lifecycleOverflowed = false;
-    m_view.reset();
+    m_mapData.reset();
 
     return observations;
 }

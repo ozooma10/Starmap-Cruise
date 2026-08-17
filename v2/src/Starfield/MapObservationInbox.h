@@ -19,10 +19,11 @@ public:
         MapSessionIdentity identity;
     };
 
-    struct ViewObservation
+    struct MapDataObservation
     {
         MapSessionIdentity identity;
         MapView view {MapView::Unknown};
+        FormID currentBodyId {0};
     };
 
     struct Observations
@@ -35,12 +36,12 @@ public:
         std::size_t lifecycleCount {0};
         bool lifecycleOverflowed {false};
 
-        std::optional<ViewObservation> view;
+        std::optional<MapDataObservation> mapData;
     };
 
     void RecordMovieCreated(std::int64_t bornTicks);
     void RecordLifecycle(bool opening);
-    void RecordView(const MapSessionIdentity& identity, MapView view);
+    void RecordMapData(const MapSessionIdentity& identity, MapView view, FormID currentBodyId);
     Observations Drain();
 
 private:
@@ -57,5 +58,5 @@ private:
     std::size_t m_lifecycleCount {0};
     bool m_lifecycleOverflowed {false};
 
-    std::optional<ViewObservation> m_view;
+    std::optional<MapDataObservation> m_mapData;
 };

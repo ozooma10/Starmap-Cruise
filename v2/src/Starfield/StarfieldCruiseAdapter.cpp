@@ -93,9 +93,16 @@ public:
             return;
         }
 
+        MapView view = MapView::Unknown;
+        FormID currentBodyId = 0;
+
         RE::Scaleform::GFx::Value data;
-        const auto view = CFS::ScaleformValue::Payload(params, data) ? ReadMapView(data) : MapView::Unknown;
-        m_owner.m_mapObservations.RecordView(identity, view);
+        if (CFS::ScaleformValue::Payload(params, data)) {
+            view = ReadMapView(data);
+            currentBodyId = CFS::ScaleformValue::UIntMember(data, "uBodyLocationID");
+        }
+
+        m_owner.m_mapObservations.RecordMapData(identity, view, currentBodyId);
     }
 
 private:
@@ -137,7 +144,7 @@ bool StarfieldCruiseAdapter::Initialize()
     menus->Register(&OnMovieCreated);
     ui->RegisterSink<RE::MenuOpenCloseEvent>(m_mapLifecycleSink.get());
     m_initialized = true;
-    REX::INFO("StarfieldCruiseAdapter: initialized with copied map movie, lifecycle, and view observations");
+    REX::INFO("StarfieldCruiseAdapter: initialized with copied map movie, lifecycle, and map data observations");
     return true;
 }
 
@@ -160,7 +167,7 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
 {
     auto& adapter = GetSingleton();
     adapter.DrainMapObservations();
-    adapter.TrySubscribeMapView();
+    adapter.TrySubscribeMapData();
 }
 
 void StarfieldCruiseAdapter::DrainMapObservations()
@@ -171,7 +178,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         m_runtime.OnMapMovieCreated(observations.movieGeneration);
         m_mapMovieBornTicks = observations.movieBornTicks;
         m_activeMapIdentity = {};
-        m_mapViewSubscriptionIdentity = {};
+        m_mapDataSubscriptionIdentity = {};
     }
 
     if (observations.lifecycleOverflowed) {
@@ -179,7 +186,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
             m_runtime.OnMapMovieCreated(observations.movieGeneration);
         }
         m_activeMapIdentity = {};
-        m_mapViewSubscriptionIdentity = {};
+        m_mapDataSubscriptionIdentity = {};
         REX::ERROR("StarfieldCruiseAdapter: map lifecycle observation queue overflowed; active map session invalidated");
         return;
     }
@@ -206,10 +213,18 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         }
     }
 
-    if (observations.view) {
-        m_runtime.OnMapViewChanged(
-            observations.view->identity,
-            observations.view->view);
+    if (observations.mapData &&
+        observations.mapData->identity == m_activeMapIdentity) {
+        const auto& mapData = *observations.mapData;
+
+        if (mapData.currentBodyId != 0) {
+            const auto currentBody = m_bodySource.ResolveBody(mapData.currentBodyId);
+            if (currentBody && currentBody->id == mapData.currentBodyId) {
+                m_runtime.OnCurrentSystemResolved(mapData.identity, currentBody->systemId);
+            }
+        }
+
+        m_runtime.OnMapViewChanged(mapData.identity, mapData.view);
     }
 }
 
@@ -231,10 +246,10 @@ bool StarfieldCruiseAdapter::IsCurrentMapMovie(
         static_cast<const void*>(menu->uiMovie->asMovieRoot.get()) == root;
 }
 
-void StarfieldCruiseAdapter::TrySubscribeMapView()
+void StarfieldCruiseAdapter::TrySubscribeMapData()
 {
     const auto identity = m_activeMapIdentity;
-    if (!identity.IsValid() || m_mapViewSubscriptionIdentity == identity) {
+    if (!identity.IsValid() || m_mapDataSubscriptionIdentity == identity) {
         return;
     }
 
@@ -284,7 +299,7 @@ void StarfieldCruiseAdapter::TrySubscribeMapView()
         return;
     }
 
-    m_mapViewSubscriptionIdentity = identity;
+    m_mapDataSubscriptionIdentity = identity;
     REX::INFO("StarfieldCruiseAdapter: subscribed {} -> {} session={} generation={}", MapMenuName, MapDataFeed, identity.session, identity.generation);
 }
 
