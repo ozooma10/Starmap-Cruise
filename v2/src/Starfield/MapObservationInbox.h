@@ -26,6 +26,18 @@ public:
         FormID currentBodyId {0};
     };
 
+    struct MarkersObservation
+    {
+        MapSessionIdentity identity;
+        MarkerUpdate update;
+    };
+
+    struct DossierObservation
+    {
+        MapSessionIdentity identity;
+        TargetObservation target;
+    };
+
     struct Observations
     {
         bool movieCreated {false};
@@ -37,11 +49,15 @@ public:
         bool lifecycleOverflowed {false};
 
         std::optional<MapDataObservation> mapData;
+        std::optional<MarkersObservation> markers;
+        std::optional<DossierObservation> dossier;
     };
 
     void RecordMovieCreated(std::int64_t bornTicks);
     void RecordLifecycle(bool opening);
     void RecordMapData(const MapSessionIdentity& identity, MapView view, FormID currentBodyId);
+    void RecordMarkers(const MapSessionIdentity& identity, MarkerUpdate update);
+    void RecordDossier(const MapSessionIdentity& identity, TargetObservation target);
     Observations Drain();
 
 private:
@@ -59,4 +75,6 @@ private:
     bool m_lifecycleOverflowed {false};
 
     std::optional<MapDataObservation> m_mapData;
+    std::optional<MarkersObservation> m_markers;
+    std::optional<DossierObservation> m_dossier;
 };

@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <utility>
 
 namespace
 {
@@ -16,7 +17,12 @@ namespace
 
     constexpr const char* MapMenuName = "GalaxyStarMapMenu";
     constexpr const char* MapDataFeed = "StarMapMenuData";
+    constexpr const char* MarkersFeed = "StarMapMenuMarkersData";
+    constexpr const char* DossierFeed = "StarmapSystemBodyInfoProvider";
     constexpr auto MapMovieSettleTime = std::chrono::milliseconds(250);
+
+    constexpr std::uint32_t PlanetType = 2;
+    constexpr std::uint32_t MoonType = 3;
 
     std::uintptr_t PackIdentity(const MapSessionIdentity& identity)
     {
@@ -60,6 +66,40 @@ namespace
         }
         return MapView::Other;
     }
+
+    ObservedTargetKind ReadTargetKind(std::uint32_t raw)
+    {
+        if (raw == PlanetType) {
+            return ObservedTargetKind::Planet;
+        }
+        if (raw == MoonType) {
+            return ObservedTargetKind::Moon;
+        }
+        return ObservedTargetKind::Unsupported;
+    }
+
+    class MarkerCollector final : public RE::Scaleform::GFx::Value::ArrayVisitor
+    {
+    public:
+        void Visit(std::uint32_t, const RE::Scaleform::GFx::Value& value) override
+        {
+            auto entry = value;
+            bool highlighted = false;
+            if (!CFS::ScaleformValue::BooleanMember(entry, "bIsInHighlightRadius", highlighted) || !highlighted) {
+                return;
+            }
+
+            highlightedCount++;
+            highlightedTarget = {
+                .id = CFS::ScaleformValue::UIntMember(entry, "uBodyID"),
+                .kind = ReadTargetKind(CFS::ScaleformValue::UIntMember(entry, "uBodyType")),
+                .displayName = CFS::ScaleformValue::StringMember(entry, "sMarkerText"),
+            };
+        }
+
+        std::size_t highlightedCount {0};
+        TargetObservation highlightedTarget;
+    };
 }
 
 class StarfieldCruiseAdapter::MapLifecycleSink final : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
@@ -109,6 +149,77 @@ private:
     StarfieldCruiseAdapter& m_owner;
 };
 
+class StarfieldCruiseAdapter::MarkersHandler final : public RE::Scaleform::GFx::FunctionHandler
+{
+public:
+    explicit MarkersHandler(StarfieldCruiseAdapter& owner) : m_owner(owner) {}
+
+    void Call(const Params& params) override
+    {
+        const auto identity = UnpackIdentity(params.userData);
+        if (!identity.IsValid()) {
+            return;
+        }
+
+        MarkerUpdate update;
+        RE::Scaleform::GFx::Value data;
+        if (CFS::ScaleformValue::Payload(params, data)) {
+            RE::Scaleform::GFx::Value markers;
+            if (data.GetMember("aMarkersData", &markers)) {
+                RE::Scaleform::GFx::Value inner;
+                if (markers.GetMember("dataA", &inner) && inner.IsArray()) {
+                    markers = inner;
+                }
+
+                if (markers.IsArray()) {
+                    MarkerCollector collector;
+                    markers.VisitElements(&collector);
+                    update.highlightedCount = collector.highlightedCount;
+                    if (collector.highlightedCount == 1) {
+                        update.highlighted = std::move(collector.highlightedTarget);
+                    }
+                }
+            }
+        }
+
+        m_owner.m_mapObservations.RecordMarkers(identity, std::move(update));
+    }
+
+private:
+    StarfieldCruiseAdapter& m_owner;
+};
+
+class StarfieldCruiseAdapter::DossierHandler final : public RE::Scaleform::GFx::FunctionHandler
+{
+public:
+    explicit DossierHandler(StarfieldCruiseAdapter& owner) : m_owner(owner) {}
+
+    void Call(const Params& params) override
+    {
+        const auto identity = UnpackIdentity(params.userData);
+        if (!identity.IsValid()) {
+            return;
+        }
+
+        TargetObservation target;
+        RE::Scaleform::GFx::Value data;
+        if (CFS::ScaleformValue::Payload(params, data)) {
+            target = {
+                .id = CFS::ScaleformValue::UIntMember(data, "uBodyID"),
+                .kind = ReadTargetKind(
+                    CFS::ScaleformValue::UIntMember(data, "iType")),
+                .displayName = CFS::ScaleformValue::StringMember(
+                    data, "sBodyName"),
+            };
+        }
+
+        m_owner.m_mapObservations.RecordDossier(identity, std::move(target));
+    }
+
+private:
+    StarfieldCruiseAdapter& m_owner;
+};
+
 StarfieldCruiseAdapter& StarfieldCruiseAdapter::GetSingleton()
 {
     static StarfieldCruiseAdapter singleton;
@@ -118,7 +229,9 @@ StarfieldCruiseAdapter& StarfieldCruiseAdapter::GetSingleton()
 StarfieldCruiseAdapter::StarfieldCruiseAdapter() :
     m_runtime(m_bodySource, m_commands),
     m_mapLifecycleSink(std::make_unique<MapLifecycleSink>(*this)),
-    m_mapDataHandler(std::make_unique<MapDataHandler>(*this))
+    m_mapDataHandler(std::make_unique<MapDataHandler>(*this)),
+    m_markersHandler(std::make_unique<MarkersHandler>(*this)),
+    m_dossierHandler(std::make_unique<DossierHandler>(*this))
 {}
 
 StarfieldCruiseAdapter::~StarfieldCruiseAdapter() = default;
@@ -144,7 +257,7 @@ bool StarfieldCruiseAdapter::Initialize()
     menus->Register(&OnMovieCreated);
     ui->RegisterSink<RE::MenuOpenCloseEvent>(m_mapLifecycleSink.get());
     m_initialized = true;
-    REX::INFO("StarfieldCruiseAdapter: initialized with copied map movie, lifecycle, and map data observations");
+    REX::INFO("StarfieldCruiseAdapter: initialized with copied map lifecycle, location, marker, and dossier observations");
     return true;
 }
 
@@ -167,7 +280,7 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
 {
     auto& adapter = GetSingleton();
     adapter.DrainMapObservations();
-    adapter.TrySubscribeMapData();
+    adapter.TrySubscribeMapFeeds();
 }
 
 void StarfieldCruiseAdapter::DrainMapObservations()
@@ -179,6 +292,8 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         m_mapMovieBornTicks = observations.movieBornTicks;
         m_activeMapIdentity = {};
         m_mapDataSubscriptionIdentity = {};
+        m_markersSubscriptionIdentity = {};
+        m_dossierSubscriptionIdentity = {};
     }
 
     if (observations.lifecycleOverflowed) {
@@ -187,6 +302,8 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         }
         m_activeMapIdentity = {};
         m_mapDataSubscriptionIdentity = {};
+        m_markersSubscriptionIdentity = {};
+        m_dossierSubscriptionIdentity = {};
         REX::ERROR("StarfieldCruiseAdapter: map lifecycle observation queue overflowed; active map session invalidated");
         return;
     }
@@ -226,6 +343,16 @@ void StarfieldCruiseAdapter::DrainMapObservations()
 
         m_runtime.OnMapViewChanged(mapData.identity, mapData.view);
     }
+
+    if (observations.markers &&
+        observations.markers->identity == m_activeMapIdentity) {
+        m_runtime.OnMarkersChanged(observations.markers->identity, std::move(observations.markers->update));
+    }
+
+    if (observations.dossier &&
+        observations.dossier->identity == m_activeMapIdentity) {
+        m_runtime.OnDossierChanged(observations.dossier->identity, observations.dossier->target);
+    }
 }
 
 bool StarfieldCruiseAdapter::IsCurrentMapMovie(
@@ -246,16 +373,34 @@ bool StarfieldCruiseAdapter::IsCurrentMapMovie(
         static_cast<const void*>(menu->uiMovie->asMovieRoot.get()) == root;
 }
 
-void StarfieldCruiseAdapter::TrySubscribeMapData()
+void StarfieldCruiseAdapter::TrySubscribeMapFeeds()
 {
     const auto identity = m_activeMapIdentity;
-    if (!identity.IsValid() || m_mapDataSubscriptionIdentity == identity) {
+    if (!identity.IsValid()) {
         return;
     }
 
-    if (m_mapMovieBornTicks == 0 ||
-        Clock::now() - Clock::time_point {Clock::duration {m_mapMovieBornTicks}} <
-            MapMovieSettleTime) {
+    const char* feed = nullptr;
+    RE::Scaleform::GFx::FunctionHandler* handler = nullptr;
+    MapSessionIdentity* subscriptionIdentity = nullptr;
+
+    if (m_mapDataSubscriptionIdentity != identity) {
+        feed = MapDataFeed;
+        handler = m_mapDataHandler.get();
+        subscriptionIdentity = &m_mapDataSubscriptionIdentity;
+    } else if (m_markersSubscriptionIdentity != identity) {
+        feed = MarkersFeed;
+        handler = m_markersHandler.get();
+        subscriptionIdentity = &m_markersSubscriptionIdentity;
+    } else if (m_dossierSubscriptionIdentity != identity) {
+        feed = DossierFeed;
+        handler = m_dossierHandler.get();
+        subscriptionIdentity = &m_dossierSubscriptionIdentity;
+    } else {
+        return;
+    }
+
+    if (m_mapMovieBornTicks == 0 || Clock::now() - Clock::time_point {Clock::duration {m_mapMovieBornTicks}} < MapMovieSettleTime) {
         return;
     }
 
@@ -277,15 +422,13 @@ void StarfieldCruiseAdapter::TrySubscribeMapData()
     }
 
     RE::Scaleform::GFx::Value manager;
-    if (!root->GetVariable(&manager, "Shared.AS3.Data.BSUIDataManager") ||
-        !(manager.IsObject() || manager.IsDisplayObject()) ||
-        !IsCurrentMapMovie(rootIdentity, identity)) {
+    if (!root->GetVariable(&manager, "Shared.AS3.Data.BSUIDataManager") || !(manager.IsObject() || manager.IsDisplayObject()) || !IsCurrentMapMovie(rootIdentity, identity)) {
         return;
     }
 
     RE::Scaleform::GFx::Value args[2];
-    root->CreateString(&args[0], MapDataFeed);
-    root->CreateFunction(&args[1], m_mapDataHandler.get(), reinterpret_cast<void*>(PackIdentity(identity)));
+    root->CreateString(&args[0], feed);
+    root->CreateFunction(&args[1], handler, reinterpret_cast<void*>(PackIdentity(identity)));
 
     if (!IsCurrentMapMovie(rootIdentity, identity)) {
         return;
@@ -299,8 +442,8 @@ void StarfieldCruiseAdapter::TrySubscribeMapData()
         return;
     }
 
-    m_mapDataSubscriptionIdentity = identity;
-    REX::INFO("StarfieldCruiseAdapter: subscribed {} -> {} session={} generation={}", MapMenuName, MapDataFeed, identity.session, identity.generation);
+    *subscriptionIdentity = identity;
+    REX::INFO("StarfieldCruiseAdapter: subscribed {} -> {} session={} generation={}", MapMenuName, feed, identity.session, identity.generation);
 }
 
 bool StarfieldCruiseAdapter::Commands::CloseMap()

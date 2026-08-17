@@ -27,6 +27,8 @@ public:
 private:
     class MapLifecycleSink;
     class MapDataHandler;
+    class MarkersHandler;
+    class DossierHandler;
 
     class Commands final : public CruiseCommands
     {
@@ -43,7 +45,7 @@ private:
     static void OnUiSafeFrame();
 
     void DrainMapObservations();
-    void TrySubscribeMapData();
+    void TrySubscribeMapFeeds();
 
     bool IsCurrentMapMovie(const void* root, const MapSessionIdentity& identity);
 
@@ -55,7 +57,11 @@ private:
     std::int64_t m_mapMovieBornTicks {0};
     MapSessionIdentity m_activeMapIdentity;
     MapSessionIdentity m_mapDataSubscriptionIdentity;
+    MapSessionIdentity m_markersSubscriptionIdentity;
+    MapSessionIdentity m_dossierSubscriptionIdentity;
     std::unique_ptr<MapLifecycleSink> m_mapLifecycleSink;
     std::unique_ptr<MapDataHandler> m_mapDataHandler;
+    std::unique_ptr<MarkersHandler> m_markersHandler;
+    std::unique_ptr<DossierHandler> m_dossierHandler;
     bool m_initialized {false};
 };
