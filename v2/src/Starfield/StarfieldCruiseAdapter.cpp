@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <string>
 #include <utility>
 
 namespace
@@ -16,6 +17,7 @@ namespace
     using Clock = std::chrono::steady_clock;
 
     constexpr const char* MapMenuName = "GalaxyStarMapMenu";
+    constexpr const char* HudMenuName = "SpaceshipHudMenu";
     constexpr const char* MapDataFeed = "StarMapMenuData";
     constexpr const char* MarkersFeed = "StarMapMenuMarkersData";
     constexpr const char* DossierFeed = "StarmapSystemBodyInfoProvider";
@@ -47,6 +49,39 @@ namespace
         const auto player = RE::PlayerCharacter::GetSingleton();
         const auto ship = player ? player->GetSpaceship() : nullptr;
         return ship && ship->IsInSpace(false);
+    }
+
+    ObservedCruiseState ReadCruiseState()
+    {
+        const auto ui = RE::UI::GetSingleton();
+        const RE::BSFixedString hudName {HudMenuName};
+        if (!ui || !ui->IsMenuOpen(hudName)) {
+            return ObservedCruiseState::Unknown;
+        }
+
+        const auto menu = ui->GetMenu(hudName);
+        if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot) {
+            return ObservedCruiseState::Unknown;
+        }
+
+        auto* root = menu->uiMovie->asMovieRoot.get();
+        const char* rootPath = menu->GetRootPath();
+        const std::string reticlePath = std::string {rootPath ? rootPath : "root"} + ".Reticle_mc";
+
+        RE::Scaleform::GFx::Value reticle;
+        RE::Scaleform::GFx::Value cruiseActive;
+        if (!root->GetVariable(&reticle, reticlePath.c_str()) || !reticle.IsObject() || !reticle.GetMember("CruiseModeHUDActive", &cruiseActive) || !cruiseActive.IsBoolean()) {
+            return ObservedCruiseState::Unknown;
+        }
+
+        const bool active = cruiseActive.GetBoolean();
+
+        const auto currentMenu = ui->GetMenu(hudName);
+        if (!ui->IsMenuOpen(hudName) || !currentMenu || !currentMenu->uiMovie || !currentMenu->uiMovie->asMovieRoot || currentMenu->uiMovie->asMovieRoot.get() != root) {
+            return ObservedCruiseState::Unknown;
+        }
+
+        return active ? ObservedCruiseState::Active : ObservedCruiseState::Inactive;
     }
 
     MapView ReadMapView(RE::Scaleform::GFx::Value& data)
@@ -87,6 +122,20 @@ namespace
             return "disabled";
         case SelectionAvailability::Eligible:
             return "eligible";
+        }
+
+        return "unknown";
+    }
+
+    const char* CruiseStateName(ObservedCruiseState state)
+    {
+        switch (state) {
+        case ObservedCruiseState::Unknown:
+            return "unknown";
+        case ObservedCruiseState::Inactive:
+            return "inactive";
+        case ObservedCruiseState::Active:
+            return "active";
         }
 
         return "unknown";
@@ -353,12 +402,17 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         const auto& observation = observations.lifecycle[index];
 
         if (observation.opening) {
+            const bool flying = IsPlayerFlying();
+            const auto cruiseState = ReadCruiseState();
             const bool accepted = m_runtime.OnMapOpened({
                 .identity = observation.identity,
-                .flying = IsPlayerFlying(),
-                .cruiseState = ObservedCruiseState::Unknown,
+                .flying = flying,
+                .cruiseState = cruiseState,
                 .currentSystemId = std::nullopt,
             });
+
+            REX::INFO("StarfieldCruiseAdapter: map open session={} generation={} flying={} cruise-state={} accepted={}",
+                observation.identity.session, observation.identity.generation, flying, CruiseStateName(cruiseState), accepted);
 
             if (accepted) {
                 m_activeMapIdentity = observation.identity;
