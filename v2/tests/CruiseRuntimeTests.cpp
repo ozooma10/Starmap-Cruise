@@ -177,6 +177,88 @@ namespace
         Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "tap did not finish as a retained mark");
     }
 
+    void TestCurrentSelectionReportsAndInvalidatesReadOnlyState()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+
+        const auto initial = runtime.CurrentSelection();
+        Require(initial.availability == ::SelectionAvailability::Hidden, "unopened runtime exposed a selection");
+        Require(initial.reason == ::SelectionReason::InactiveContext, "unopened runtime reported the wrong selection reason");
+
+        runtime.OnMapMovieCreated(CurrentIdentity.generation);
+        Require(
+            runtime.OnMapOpened({
+                .identity = CurrentIdentity,
+                .flying = true,
+                .cruiseState = ::ObservedCruiseState::Unknown,
+                .currentSystemId = AlphaCentauriId,
+            }),
+            "selection-proof session did not open"
+        );
+        Require(runtime.OnMapViewChanged(CurrentIdentity, ::MapView::System), "selection-proof system view was rejected");
+
+        const auto empty = runtime.CurrentSelection();
+        Require(empty.availability == ::SelectionAvailability::Disabled, "empty system view did not disable selection");
+        Require(empty.reason == ::SelectionReason::SelectDestination, "empty system view reported the wrong reason");
+
+        Require(
+            runtime.OnMarkersChanged(
+                CurrentIdentity,
+                {
+                    .highlightedCount = 1,
+                    .highlighted = {
+                        .id = JemisonId,
+                        .kind = ::ObservedTargetKind::Planet,
+                        .displayName = "Jemison Marker",
+                    },
+                }
+            ),
+            "selection-proof marker was rejected"
+        );
+
+        const auto markerOnly = runtime.CurrentSelection();
+        Require(markerOnly.availability == ::SelectionAvailability::Disabled, "marker-only evidence became actionable");
+        Require(markerOnly.reason == ::SelectionReason::TargetDataUpdating, "marker-only evidence reported the wrong reason");
+
+        Require(runtime.OnDossierChanged(CurrentIdentity, JemisonDossier()), "selection-proof dossier was rejected");
+
+        const auto eligible = runtime.CurrentSelection();
+        Require(eligible.IsEligible(), "coherent runtime observations did not become eligible");
+        Require(eligible.destination->targetId == JemisonId, "selection proof retained the wrong target");
+        Require(eligible.destination->systemId == ::FormID {AlphaCentauriId}, "selection proof retained the wrong system");
+        Require(eligible.destination->displayName == "Jemison", "selection proof retained the wrong display name");
+        Require(commands.calls.empty(), "read-only selection proof dispatched a command");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "read-only selection proof changed navigation state");
+
+        const auto bodyCalls = bodySource.calls;
+        Require(runtime.CurrentSelection().IsEligible(), "repeated selection read lost eligibility");
+        Require(bodySource.calls == bodyCalls, "reading current selection queried the engine again");
+
+        Require(runtime.OnMapViewChanged(CurrentIdentity, ::MapView::Galaxy), "selection-proof galaxy view was rejected");
+        const auto hidden = runtime.CurrentSelection();
+        Require(hidden.availability == ::SelectionAvailability::Hidden, "galaxy view retained a visible selection");
+        Require(hidden.reason == ::SelectionReason::InactiveContext, "galaxy view reported the wrong selection reason");
+        Require(!hidden.destination, "galaxy view retained a destination");
+
+        Require(runtime.OnMapClosed(CurrentIdentity).handled == false, "read-only map close unexpectedly advanced navigation");
+        Require(runtime.CurrentSelection().reason == ::SelectionReason::InactiveContext, "closed map retained selection state");
+
+        runtime.OnMapMovieCreated(CurrentIdentity.generation + 1);
+        Require(
+            !runtime.OnMarkersChanged(
+                CurrentIdentity,
+                {
+                    .highlightedCount = 1,
+                    .highlighted = JemisonDossier(),
+                }
+            ),
+            "old movie identity restored stale target evidence"
+        );
+        Require(runtime.CurrentSelection().reason == ::SelectionReason::InactiveContext, "movie replacement restored stale selection state");
+    }
+
     void TestFullHoldFlow()
     {
         FakeBodyResolutionSource bodySource;
@@ -444,6 +526,7 @@ namespace
     void RunTests()
     {
         TestFullTapFlow();
+        TestCurrentSelectionReportsAndInvalidatesReadOnlyState();
         TestFullHoldFlow();
         TestTapOnlyRejectsHold();
         TestAlreadyCruisingRequestsCourseAfterClose();

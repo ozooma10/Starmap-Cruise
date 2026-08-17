@@ -78,6 +78,46 @@ namespace
         return ObservedTargetKind::Unsupported;
     }
 
+    const char* SelectionAvailabilityName(SelectionAvailability availability)
+    {
+        switch (availability) {
+        case SelectionAvailability::Hidden:
+            return "hidden";
+        case SelectionAvailability::Disabled:
+            return "disabled";
+        case SelectionAvailability::Eligible:
+            return "eligible";
+        }
+
+        return "unknown";
+    }
+
+    const char* SelectionReasonName(SelectionReason reason)
+    {
+        switch (reason) {
+        case SelectionReason::InactiveContext:
+            return "inactive-context";
+        case SelectionReason::CurrentSystemUnavailable:
+            return "current-system-unavailable";
+        case SelectionReason::SelectDestination:
+            return "select-destination";
+        case SelectionReason::AmbiguousTarget:
+            return "ambiguous-target";
+        case SelectionReason::UnsupportedTarget:
+            return "unsupported-target";
+        case SelectionReason::TargetDataUpdating:
+            return "target-data-updating";
+        case SelectionReason::TargetSystemUnavailable:
+            return "target-system-unavailable";
+        case SelectionReason::RemoteSystem:
+            return "remote-system";
+        case SelectionReason::Eligible:
+            return "eligible";
+        }
+
+        return "unknown";
+    }
+
     class MarkerCollector final : public RE::Scaleform::GFx::Value::ArrayVisitor
     {
     public:
@@ -305,6 +345,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         m_markersSubscriptionIdentity = {};
         m_dossierSubscriptionIdentity = {};
         REX::ERROR("StarfieldCruiseAdapter: map lifecycle observation queue overflowed; active map session invalidated");
+        TraceCurrentSelection();
         return;
     }
 
@@ -353,6 +394,40 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         observations.dossier->identity == m_activeMapIdentity) {
         m_runtime.OnDossierChanged(observations.dossier->identity, observations.dossier->target);
     }
+
+    TraceCurrentSelection();
+}
+
+void StarfieldCruiseAdapter::TraceCurrentSelection()
+{
+    const auto selection = m_runtime.CurrentSelection();
+
+    SelectionTrace trace {
+        .identity = m_activeMapIdentity,
+        .availability = selection.availability,
+        .reason = selection.reason,
+    };
+
+    if (selection.destination) {
+        trace.targetId = selection.destination->targetId;
+        trace.systemId = selection.destination->systemId;
+        trace.displayName = selection.destination->displayName;
+    }
+
+    if (m_lastSelectionTrace && *m_lastSelectionTrace == trace) {
+        return;
+    }
+
+    m_lastSelectionTrace = trace;
+
+    if (trace.targetId != 0 && trace.systemId) {
+        REX::INFO("StarfieldCruiseAdapter: selection session={} generation={} availability={} reason={} target={:08X} system={:08X} name='{}'", 
+            trace.identity.session, trace.identity.generation, SelectionAvailabilityName(trace.availability), SelectionReasonName(trace.reason), trace.targetId, *trace.systemId, trace.displayName);
+        return;
+    }
+
+    REX::INFO( "StarfieldCruiseAdapter: selection session={} generation={} availability={} reason={} target=none system=none name=''", 
+        trace.identity.session, trace.identity.generation, SelectionAvailabilityName(trace.availability), SelectionReasonName(trace.reason));
 }
 
 bool StarfieldCruiseAdapter::IsCurrentMapMovie(

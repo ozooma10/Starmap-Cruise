@@ -91,10 +91,13 @@ bool CruiseRuntime::OnCurrentSystemResolved(const MapSessionIdentity& identity, 
     return map_.CaptureCurrentSystem(identity, systemId);
 }
 
+SelectionDecision CruiseRuntime::CurrentSelection() const
+{
+    return EvaluateSelection(map_.Snapshot());
+}
+
 ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& environment) const
 {
-    const auto selection = EvaluateSelection(map_.Snapshot());
-
     const ActionContext context {
         .cruiseControlBound = environment.cruiseControlBound,
         .cruiseStateWhenMapOpened = map_.CruiseStateWhenOpened(),
@@ -102,7 +105,7 @@ ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& envir
         .vanillaActionEnabled = environment.vanillaActionEnabled,
     };
 
-    return EvaluateAction(selection, context);
+    return EvaluateAction(CurrentSelection(), context);
 }
 
 EffectDispatchResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment)

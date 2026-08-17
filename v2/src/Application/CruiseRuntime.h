@@ -61,6 +61,7 @@ public:
 
     bool OnCurrentSystemResolved(const MapSessionIdentity& identity, FormID systemId);
 
+    SelectionDecision CurrentSelection() const;
     ActionDecision CurrentMapAction(const MapActionEnvironment& environment) const;
 
     EffectDispatchResult ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment);

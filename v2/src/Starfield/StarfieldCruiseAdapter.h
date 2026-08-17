@@ -6,6 +6,8 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
 
 namespace RE
 {
@@ -30,6 +32,18 @@ private:
     class MarkersHandler;
     class DossierHandler;
 
+    struct SelectionTrace
+    {
+        MapSessionIdentity identity;
+        SelectionAvailability availability {SelectionAvailability::Hidden};
+        SelectionReason reason {SelectionReason::InactiveContext};
+        FormID targetId {0};
+        std::optional<FormID> systemId;
+        std::string displayName;
+
+        friend bool operator==(const SelectionTrace&, const SelectionTrace&) = default;
+    };
+
     class Commands final : public CruiseCommands
     {
     public:
@@ -45,6 +59,7 @@ private:
     static void OnUiSafeFrame();
 
     void DrainMapObservations();
+    void TraceCurrentSelection();
     void TrySubscribeMapFeeds();
 
     bool IsCurrentMapMovie(const void* root, const MapSessionIdentity& identity);
@@ -53,6 +68,7 @@ private:
     Commands m_commands;
     CruiseRuntime m_runtime;
     MapObservationInbox m_mapObservations;
+    std::optional<SelectionTrace> m_lastSelectionTrace;
 
     std::int64_t m_mapMovieBornTicks {0};
     MapSessionIdentity m_activeMapIdentity;
