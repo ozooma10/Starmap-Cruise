@@ -7,3 +7,4 @@ void RunMapSessionStateTests();
 void RunCruiseRuntimeTests();
 void RunActionPresenterTests();
 void RunMapObservationInboxTests();
+void RunCurrentSystemResolverTests();

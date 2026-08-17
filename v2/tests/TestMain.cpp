@@ -21,6 +21,7 @@ namespace
         {"CruiseRuntime", &RunCruiseRuntimeTests},
         {"ActionPresenter", &RunActionPresenterTests},
         {"MapObservationInbox", &RunMapObservationInboxTests},
+        {"CurrentSystemResolver", &RunCurrentSystemResolverTests},
     };
 
     bool RunSuite(const TestSuite& suite)
