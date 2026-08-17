@@ -27,7 +27,7 @@ namespace
         const bool opened = state.Open({
             .identity = CurrentIdentity,
             .flying = true,
-            .cruiseWasActive = false,
+            .cruiseState = ::ObservedCruiseState::Inactive,
             .currentSystemId = currentSystemId,
         });
 
@@ -253,6 +253,26 @@ namespace
         );
     }
 
+    void TestCruiseStateIsCapturedAndReset()
+    {
+        ::MapSessionState state;
+        state.BeginMovie(CurrentIdentity.generation);
+
+        Require(
+            state.Open({
+                .identity = CurrentIdentity,
+                .flying = true,
+                .cruiseState = ::ObservedCruiseState::Active,
+                .currentSystemId = 0x100,
+            }),
+            "active-Cruise session was not opened"
+        );
+
+        Require(state.CruiseStateWhenOpened() == ::ObservedCruiseState::Active, "map session lost the observed Cruise state");
+        Require(state.Close(CurrentIdentity), "active-Cruise session was not closed");
+        Require(state.CruiseStateWhenOpened() == ::ObservedCruiseState::Unknown, "closed session retained its Cruise state");
+    }
+
     void RunTests()
     {
         TestExactFeedsProduceEligibleSelection();
@@ -264,6 +284,7 @@ namespace
         TestLateCurrentSystemIsCapturedOnce();
         TestSolSystemZeroIsCapturedOnce();
         TestMovieReplacementInvalidatesSession();
+        TestCruiseStateIsCapturedAndReset();
     }
 }
 

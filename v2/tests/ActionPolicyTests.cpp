@@ -45,7 +45,7 @@ namespace
     {
         return {
             .cruiseControlBound = true,
-            .cruiseWasActiveWhenMapOpened = false,
+            .cruiseStateWhenMapOpened = ::ObservedCruiseState::Inactive,
             .cruiseEngageAvailable = true,
             .vanillaActionEnabled = true,
         };
@@ -112,7 +112,7 @@ namespace
     void TestAlreadyCruisingUsesTapOnly()
     {
         auto context = ReadyContext();
-        context.cruiseWasActiveWhenMapOpened = true;
+        context.cruiseStateWhenMapOpened = ::ObservedCruiseState::Active;
 
         const auto action = ::EvaluateAction(EligibleSelection(), context);
 
@@ -121,6 +121,18 @@ namespace
         Require(action.CanHandleInput(), "active-Cruise tap was not actionable");
 
         Require(action.holdLabel.empty(), "active-Cruise tap exposed a hold label");
+    }
+
+    void TestUnknownCruiseStateUsesTapOnly()
+    {
+        auto context = ReadyContext();
+        context.cruiseStateWhenMapOpened = ::ObservedCruiseState::Unknown;
+
+        const auto action = ::EvaluateAction(EligibleSelection(), context);
+
+        Require(action.control == ::ActionControl::TapOnly, "unknown Cruise state exposed a hold action");
+        Require(action.CanHandleInput(), "unknown Cruise state prevented safe marking");
+        Require(action.holdLabel.empty(), "unknown Cruise state exposed a hold label");
     }
 
     void TestCruiseCooldownUsesTapOnly()
@@ -171,6 +183,7 @@ namespace
         TestUnboundControlFailsClosed();
         TestReadyTargetUsesTapAndHold();
         TestAlreadyCruisingUsesTapOnly();
+        TestUnknownCruiseStateUsesTapOnly();
         TestCruiseCooldownUsesTapOnly();
         TestVanillaActionStateCanDisableInput();
         TestRemoteTargetIsDisabledForMvp();

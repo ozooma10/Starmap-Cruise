@@ -114,7 +114,10 @@ namespace
         };
     }
 
-    void OpenMap(::CruiseRuntime& runtime, bool cruiseWasActive = false, std::optional<::FormID> currentSystemId = AlphaCentauriId)
+    void OpenMap(
+        ::CruiseRuntime& runtime,
+        ::ObservedCruiseState cruiseState = ::ObservedCruiseState::Inactive,
+        std::optional<::FormID> currentSystemId = AlphaCentauriId)
     {
         runtime.OnMapMovieCreated(CurrentIdentity.generation);
 
@@ -122,7 +125,7 @@ namespace
             runtime.OnMapOpened({
                 .identity = CurrentIdentity,
                 .flying = true,
-                .cruiseWasActive = cruiseWasActive,
+                .cruiseState = cruiseState,
                 .currentSystemId = currentSystemId,
             }),
             "runtime rejected the map session"
@@ -221,7 +224,7 @@ namespace
         FakeBodyResolutionSource bodySource;
         FakeCruiseCommands commands;
         ::CruiseRuntime runtime {bodySource, commands};
-        OpenMap(runtime, true);
+        OpenMap(runtime, ::ObservedCruiseState::Active);
 
         Require(runtime.CurrentMapAction(ReadyEnvironment()).control == ::ActionControl::TapOnly, "active Cruise did not reduce the action to tap-only");
         Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "active-Cruise tap did not close the map");
@@ -231,6 +234,25 @@ namespace
         Require(commands.calls[0].command == RecordedCommand::CloseMap, "active-Cruise flow did not close the map first");
         Require(commands.calls[1].command == RecordedCommand::RequestCourse, "active-Cruise flow did not request the course second");
         Require(commands.calls[1].courseId == JemisonId, "active-Cruise flow requested the wrong course");
+    }
+
+    void TestUnknownCruiseStateCanOnlyMark()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime, ::ObservedCruiseState::Unknown);
+
+        const auto action = runtime.CurrentMapAction(ReadyEnvironment());
+        Require(action.control == ::ActionControl::TapOnly, "unknown Cruise state exposed a hold action");
+        Require(!runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, ReadyEnvironment()).handled, "unknown Cruise state accepted a hold");
+        Require(commands.calls.empty(), "rejected unknown-state hold dispatched a command");
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "unknown Cruise state rejected safe marking");
+        Require(runtime.OnMapClosed(CurrentIdentity).Succeeded(), "unknown Cruise state did not finish marking");
+        Require(commands.calls.size() == 1, "unknown Cruise state dispatched a Cruise command");
+        Require(commands.calls[0].command == RecordedCommand::CloseMap, "unknown Cruise state dispatched the wrong command");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "unknown Cruise state did not finish as a mark");
     }
 
     void TestMissingBodySystemFailsClosed()
@@ -286,7 +308,7 @@ namespace
         bodySource.result->systemId = 0;
         FakeCruiseCommands commands;
         ::CruiseRuntime runtime {bodySource, commands};
-        OpenMap(runtime, false, ::FormID {0});
+        OpenMap(runtime, ::ObservedCruiseState::Inactive, ::FormID {0});
 
         Require(runtime.CurrentMapAction(ReadyEnvironment()).CanHandleInput(), "valid Sol system zero was rejected by the runtime");
     }
@@ -330,7 +352,7 @@ namespace
         FakeBodyResolutionSource bodySource;
         FakeCruiseCommands commands;
         ::CruiseRuntime runtime {bodySource, commands};
-        OpenMap(runtime, true);
+        OpenMap(runtime, ::ObservedCruiseState::Active);
 
         Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "active-Cruise tap did not close the map");
 
@@ -397,7 +419,7 @@ namespace
         FakeBodyResolutionSource bodySource;
         FakeCruiseCommands commands;
         ::CruiseRuntime runtime {bodySource, commands};
-        OpenMap(runtime, true);
+        OpenMap(runtime, ::ObservedCruiseState::Active);
 
         Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "active-Cruise tap did not dispatch CloseMap");
         Require(runtime.OnMapClosed(CurrentIdentity).Succeeded(), "map close did not dispatch RequestCourse");
@@ -425,6 +447,7 @@ namespace
         TestFullHoldFlow();
         TestTapOnlyRejectsHold();
         TestAlreadyCruisingRequestsCourseAfterClose();
+        TestUnknownCruiseStateCanOnlyMark();
         TestMissingBodySystemFailsClosed();
         TestUnsupportedAndStaleDossiersDoNotQueryEngine();
         TestSolSystemIsEligible();

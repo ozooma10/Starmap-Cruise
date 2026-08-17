@@ -97,7 +97,7 @@ ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& envir
 
     const ActionContext context {
         .cruiseControlBound = environment.cruiseControlBound,
-        .cruiseWasActiveWhenMapOpened = map_.CruiseWasActiveWhenOpened(),
+        .cruiseStateWhenMapOpened = map_.CruiseStateWhenOpened(),
         .cruiseEngageAvailable = environment.cruiseEngageAvailable,
         .vanillaActionEnabled = environment.vanillaActionEnabled,
     };
@@ -127,7 +127,8 @@ EffectDispatchResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& 
         intent = SelectionIntent::StartCruise;
     }
 
-    return Execute(navigation_.SelectDestination(*action.destination, intent, map_.CruiseWasActiveWhenOpened()));
+    const bool cruiseWasActive = map_.CruiseStateWhenOpened() == ObservedCruiseState::Active;
+    return Execute(navigation_.SelectDestination(*action.destination, intent, cruiseWasActive));
 }
 
 EffectDispatchResult CruiseRuntime::OnCruiseChanged(bool active)

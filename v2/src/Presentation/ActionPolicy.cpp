@@ -43,8 +43,7 @@ namespace
             return ActionControl::TapOnly;
         }
 
-        // Cruise is already active, so another Cruise press is unnecessary.
-        if (context.cruiseWasActiveWhenMapOpened) {
+        if (context.cruiseStateWhenMapOpened != ObservedCruiseState::Inactive) {
             return ActionControl::TapOnly;
         }
 

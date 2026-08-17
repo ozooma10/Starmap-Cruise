@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Map/MapSessionState.h"
 #include "Selection/SelectionPolicy.h"
 
 #include <optional>
@@ -17,8 +18,7 @@ struct ActionContext
     // The Cruise action has a binding for the active input device.
     bool cruiseControlBound {false};
 
-    // Captured when this Starmap session opened.
-    bool cruiseWasActiveWhenMapOpened {false};
+    ObservedCruiseState cruiseStateWhenMapOpened {ObservedCruiseState::Unknown};
 
     // The stock cockpit Cruise control can currently activate Cruise.
     // False includes cooldown and other temporarily unavailable states.

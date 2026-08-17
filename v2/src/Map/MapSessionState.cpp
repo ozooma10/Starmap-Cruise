@@ -20,7 +20,7 @@ bool MapSessionState::Open(const MapOpenContext& context)
     identity_ = context.identity;
 
     flyingAtOpen_ = context.flying;
-    cruiseWasActiveAtOpen_ = context.cruiseWasActive;
+    m_cruiseStateWhenOpened = context.cruiseState;
     currentSystemId_ = context.currentSystemId;
 
     return true;
@@ -110,9 +110,9 @@ SelectionSnapshot MapSessionState::Snapshot() const
     };
 }
 
-bool MapSessionState::CruiseWasActiveWhenOpened() const
+ObservedCruiseState MapSessionState::CruiseStateWhenOpened() const
 {
-    return open_ && cruiseWasActiveAtOpen_;
+    return open_ ? m_cruiseStateWhenOpened : ObservedCruiseState::Unknown;
 }
 
 bool MapSessionState::IsActive(const MapSessionIdentity& identity) const
@@ -139,7 +139,7 @@ void MapSessionState::ResetSession()
     identity_ = {};
 
     flyingAtOpen_ = false;
-    cruiseWasActiveAtOpen_ = false;
+    m_cruiseStateWhenOpened = ObservedCruiseState::Unknown;
     currentSystemId_.reset();
 
     view_ = MapView::Unknown;

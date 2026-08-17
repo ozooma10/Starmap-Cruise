@@ -191,7 +191,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
             const bool accepted = m_runtime.OnMapOpened({
                 .identity = observation.identity,
                 .flying = IsPlayerFlying(),
-                .cruiseWasActive = true,
+                .cruiseState = ObservedCruiseState::Unknown,
                 .currentSystemId = std::nullopt,
             });
 

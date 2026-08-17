@@ -27,12 +27,19 @@ enum class MapView : std::uint8_t
     Other,
 };
 
+enum class ObservedCruiseState : std::uint8_t
+{
+    Unknown,
+    Inactive,
+    Active,
+};
+
 struct MapOpenContext
 {
     MapSessionIdentity identity;
 
     bool flying {false};
-    bool cruiseWasActive {false};
+    ObservedCruiseState cruiseState {ObservedCruiseState::Unknown};
 
     std::optional<FormID> currentSystemId;
 };
@@ -63,7 +70,7 @@ public:
 
     SelectionSnapshot Snapshot() const;
 
-    bool CruiseWasActiveWhenOpened() const;
+    ObservedCruiseState CruiseStateWhenOpened() const;
     bool IsActive(const MapSessionIdentity& identity) const;
 
 private:
@@ -78,7 +85,7 @@ private:
     MapSessionIdentity identity_;
 
     bool flyingAtOpen_ {false};
-    bool cruiseWasActiveAtOpen_ {false};
+    ObservedCruiseState m_cruiseStateWhenOpened {ObservedCruiseState::Unknown};
     std::optional<FormID> currentSystemId_;
 
     MapView view_ {MapView::Unknown};
