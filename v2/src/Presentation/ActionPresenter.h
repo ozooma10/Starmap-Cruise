@@ -40,5 +40,5 @@ public:
     void Invalidate();
 
 private:
-    std::optional<MapActionPresentation> presented_;
+    std::optional<MapActionPresentation> m_presented;
 };

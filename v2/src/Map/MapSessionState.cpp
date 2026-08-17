@@ -4,24 +4,24 @@
 
 void MapSessionState::BeginMovie(std::uint32_t generation)
 {
-    movieGeneration_ = generation;
+    m_movieGeneration = generation;
     ResetSession();
 }
 
 bool MapSessionState::Open(const MapOpenContext& context)
 {
-    if (!context.identity.IsValid() || context.identity.generation != movieGeneration_) {
+    if (!context.identity.IsValid() || context.identity.generation != m_movieGeneration) {
         return false;
     }
 
     ResetSession();
 
-    open_ = true;
-    identity_ = context.identity;
+    m_open = true;
+    m_identity = context.identity;
 
-    flyingAtOpen_ = context.flying;
+    m_flyingAtOpen = context.flying;
     m_cruiseStateWhenOpened = context.cruiseState;
-    currentSystemId_ = context.currentSystemId;
+    m_currentSystemId = context.currentSystemId;
 
     return true;
 }
@@ -42,8 +42,8 @@ bool MapSessionState::SetView(const MapSessionIdentity& identity, MapView view)
         return false;
     }
 
-    if (view_ != view) {
-        view_ = view;
+    if (m_view != view) {
+        m_view = view;
         ClearTargetObservations();
     }
 
@@ -56,12 +56,12 @@ bool MapSessionState::SetMarkers(const MapSessionIdentity& identity, MarkerUpdat
         return false;
     }
 
-    highlightedMarkerCount_ = update.highlightedCount;
+    m_highlightedMarkerCount = update.highlightedCount;
 
     if (update.highlightedCount == 1) {
-        marker_ = std::move(update.highlighted);
+        m_marker = std::move(update.highlighted);
     } else {
-        marker_ = {};
+        m_marker = {};
     }
 
     return true;
@@ -73,8 +73,8 @@ bool MapSessionState::SetDossier(const MapSessionIdentity& identity, TargetObser
         return false;
     }
 
-    dossier_ = std::move(dossier);
-    resolvedBody_ = std::move(resolvedBody);
+    m_dossier = std::move(dossier);
+    m_resolvedBody = std::move(resolvedBody);
 
     return true;
 }
@@ -85,34 +85,34 @@ bool MapSessionState::CaptureCurrentSystem(const MapSessionIdentity& identity, F
         return false;
     }
 
-    if (!currentSystemId_) {
-        currentSystemId_ = systemId;
+    if (!m_currentSystemId) {
+        m_currentSystemId = systemId;
         return true;
     }
 
     // Repeating the same resolution is harmless. A different value cannot rewrite the system captured by this map session.
-    return currentSystemId_ == systemId;
+    return m_currentSystemId == systemId;
 }
 
 SelectionSnapshot MapSessionState::Snapshot() const
 {
-    const bool sessionValid = open_ && identity_.IsValid() && identity_.generation == movieGeneration_;
+    const bool sessionValid = m_open && m_identity.IsValid() && m_identity.generation == m_movieGeneration;
 
     return {
         .sessionValid = sessionValid,
-        .flying = flyingAtOpen_,
-        .systemView = view_ == MapView::System,
-        .currentSystemId = currentSystemId_,
-        .highlightedMarkerCount = highlightedMarkerCount_,
-        .marker = marker_,
-        .dossier = dossier_,
-        .resolvedBody = resolvedBody_,
+        .flying = m_flyingAtOpen,
+        .systemView = m_view == MapView::System,
+        .currentSystemId = m_currentSystemId,
+        .highlightedMarkerCount = m_highlightedMarkerCount,
+        .marker = m_marker,
+        .dossier = m_dossier,
+        .resolvedBody = m_resolvedBody,
     };
 }
 
 ObservedCruiseState MapSessionState::CruiseStateWhenOpened() const
 {
-    return open_ ? m_cruiseStateWhenOpened : ObservedCruiseState::Unknown;
+    return m_open ? m_cruiseStateWhenOpened : ObservedCruiseState::Unknown;
 }
 
 bool MapSessionState::IsActive(const MapSessionIdentity& identity) const
@@ -122,27 +122,27 @@ bool MapSessionState::IsActive(const MapSessionIdentity& identity) const
 
 bool MapSessionState::Accepts(const MapSessionIdentity& identity) const
 {
-    return open_ && identity.IsValid() && identity == identity_ && identity.generation == movieGeneration_;
+    return m_open && identity.IsValid() && identity == m_identity && identity.generation == m_movieGeneration;
 }
 
 void MapSessionState::ClearTargetObservations()
 {
-    highlightedMarkerCount_ = 0;
-    marker_ = {};
-    dossier_ = {};
-    resolvedBody_.reset();
+    m_highlightedMarkerCount = 0;
+    m_marker = {};
+    m_dossier = {};
+    m_resolvedBody.reset();
 }
 
 void MapSessionState::ResetSession()
 {
-    open_ = false;
-    identity_ = {};
+    m_open = false;
+    m_identity = {};
 
-    flyingAtOpen_ = false;
+    m_flyingAtOpen = false;
     m_cruiseStateWhenOpened = ObservedCruiseState::Unknown;
-    currentSystemId_.reset();
+    m_currentSystemId.reset();
 
-    view_ = MapView::Unknown;
+    m_view = MapView::Unknown;
 
     ClearTargetObservations();
 }

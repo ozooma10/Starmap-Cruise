@@ -77,8 +77,8 @@ public:
 private:
     EffectDispatchResult Execute(TransitionResult transition);
 
-    MapSessionState map_;
-    NavigationRuntime navigation_;
-    const BodyResolutionSource& bodySource_;
-    CruiseCommands& commands_;
+    MapSessionState m_map;
+    NavigationRuntime m_navigation;
+    const BodyResolutionSource& m_bodySource;
+    CruiseCommands& m_commands;
 };

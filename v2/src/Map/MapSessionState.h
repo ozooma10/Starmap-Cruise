@@ -79,20 +79,20 @@ private:
     void ClearTargetObservations();
     void ResetSession();
 
-    std::uint32_t movieGeneration_ {0};
+    std::uint32_t m_movieGeneration {0};
 
-    bool open_ {false};
-    MapSessionIdentity identity_;
+    bool m_open {false};
+    MapSessionIdentity m_identity;
 
-    bool flyingAtOpen_ {false};
+    bool m_flyingAtOpen {false};
     ObservedCruiseState m_cruiseStateWhenOpened {ObservedCruiseState::Unknown};
-    std::optional<FormID> currentSystemId_;
+    std::optional<FormID> m_currentSystemId;
 
-    MapView view_ {MapView::Unknown};
+    MapView m_view {MapView::Unknown};
 
-    std::size_t highlightedMarkerCount_ {0};
-    TargetObservation marker_;
-    TargetObservation dossier_;
+    std::size_t m_highlightedMarkerCount {0};
+    TargetObservation m_marker;
+    TargetObservation m_dossier;
 
-    std::optional<ResolvedBody> resolvedBody_;
+    std::optional<ResolvedBody> m_resolvedBody;
 };

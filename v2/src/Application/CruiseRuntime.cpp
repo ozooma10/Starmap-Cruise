@@ -31,77 +31,77 @@ namespace
     };
 }
 
-CruiseRuntime::CruiseRuntime(const BodyResolutionSource& bodySource, CruiseCommands& commands) : bodySource_(bodySource), commands_(commands) {}
+CruiseRuntime::CruiseRuntime(const BodyResolutionSource& bodySource, CruiseCommands& commands) : m_bodySource(bodySource), m_commands(commands) {}
 
 void CruiseRuntime::OnMapMovieCreated(std::uint32_t generation)
 {
-    navigation_.InvalidateMapSelection();
-    map_.BeginMovie(generation);
+    m_navigation.InvalidateMapSelection();
+    m_map.BeginMovie(generation);
 }
 
 bool CruiseRuntime::OnMapOpened(const MapOpenContext& context)
 {
-    return map_.Open(context);
+    return m_map.Open(context);
 }
 
 EffectDispatchResult CruiseRuntime::OnMapClosed(const MapSessionIdentity& identity)
 {
-    if (!map_.Close(identity)) {
+    if (!m_map.Close(identity)) {
         return {};
     }
 
-    return Execute(navigation_.MapClosed());
+    return Execute(m_navigation.MapClosed());
 }
 
 bool CruiseRuntime::OnMapCloseTimedOut(const MapSessionIdentity& identity)
 {
-    if (!map_.IsActive(identity)) {
+    if (!m_map.IsActive(identity)) {
         return false;
     }
 
-    return navigation_.RecoverFromEffectFailure(CloseMap {});
+    return m_navigation.RecoverFromEffectFailure(CloseMap {});
 }
 
 bool CruiseRuntime::OnMapViewChanged(const MapSessionIdentity& identity, MapView view)
 {
-    return map_.SetView(identity, view);
+    return m_map.SetView(identity, view);
 }
 
 bool CruiseRuntime::OnMarkersChanged(const MapSessionIdentity& identity, MarkerUpdate update)
 {
-    return map_.SetMarkers(identity, std::move(update));
+    return m_map.SetMarkers(identity, std::move(update));
 }
 
 bool CruiseRuntime::OnDossierChanged(const MapSessionIdentity& identity, const TargetObservation& dossier)
 {
-    if (!map_.IsActive(identity)) {
+    if (!m_map.IsActive(identity)) {
         return false;
     }
 
     std::optional<ResolvedBody> resolvedBody;
 
     if (dossier.id != 0 && IsSupported(dossier.kind)) {
-        resolvedBody = bodySource_.ResolveBody(dossier.id);
+        resolvedBody = m_bodySource.ResolveBody(dossier.id);
     }
 
-    return map_.SetDossier(identity, dossier, std::move(resolvedBody));
+    return m_map.SetDossier(identity, dossier, std::move(resolvedBody));
 }
 
 bool CruiseRuntime::OnCurrentSystemResolved(const MapSessionIdentity& identity, FormID systemId)
 {
-    return map_.CaptureCurrentSystem(identity, systemId);
+    return m_map.CaptureCurrentSystem(identity, systemId);
 }
 
 SelectionDecision CruiseRuntime::CurrentSelection() const
 {
-    return EvaluateSelection(map_.Snapshot());
+    return EvaluateSelection(m_map.Snapshot());
 }
 
 ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& environment) const
 {
     const ActionContext context {
         .cruiseControlBound = environment.cruiseControlBound,
-        .cruiseStateWhenMapOpened = map_.CruiseStateWhenOpened(),
+        .cruiseStateWhenMapOpened = m_map.CruiseStateWhenOpened(),
         .cruiseEngageAvailable = environment.cruiseEngageAvailable,
         .vanillaActionEnabled = environment.vanillaActionEnabled,
     };
@@ -111,7 +111,7 @@ ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& envir
 
 EffectDispatchResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment)
 {
-    if (!map_.IsActive(identity)) {
+    if (!m_map.IsActive(identity)) {
         return {};
     }
 
@@ -131,33 +131,33 @@ EffectDispatchResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& 
         intent = SelectionIntent::StartCruise;
     }
 
-    const bool cruiseWasActive = map_.CruiseStateWhenOpened() == ObservedCruiseState::Active;
-    return Execute(navigation_.SelectDestination(*action.destination, intent, cruiseWasActive));
+    const bool cruiseWasActive = m_map.CruiseStateWhenOpened() == ObservedCruiseState::Active;
+    return Execute(m_navigation.SelectDestination(*action.destination, intent, cruiseWasActive));
 }
 
 EffectDispatchResult CruiseRuntime::OnCruiseChanged(bool active)
 {
-    return Execute(navigation_.CruiseChanged(active));
+    return Execute(m_navigation.CruiseChanged(active));
 }
 
 bool CruiseRuntime::OnCruiseActivationTimedOut()
 {
-    return navigation_.RecoverFromEffectFailure(PressCruise {});
+    return m_navigation.RecoverFromEffectFailure(PressCruise {});
 }
 
 EffectDispatchResult CruiseRuntime::OnCourseLockChanged(FormID lockedCourseId)
 {
-    return Execute(navigation_.CourseLockChanged(lockedCourseId));
+    return Execute(m_navigation.CourseLockChanged(lockedCourseId));
 }
 
 bool CruiseRuntime::OnCourseLockTimedOut(FormID courseId)
 {
-    return navigation_.RecoverFromEffectFailure(RequestCourse {courseId});
+    return m_navigation.RecoverFromEffectFailure(RequestCourse {courseId});
 }
 
 const NavigationState& CruiseRuntime::CurrentNavigationState() const
 {
-    return navigation_.CurrentState();
+    return m_navigation.CurrentState();
 }
 
 EffectDispatchResult CruiseRuntime::Execute(TransitionResult transition)
@@ -170,9 +170,9 @@ EffectDispatchResult CruiseRuntime::Execute(TransitionResult transition)
         return result;
     }
 
-    if (!std::visit(DispatchVisitor {commands_}, *transition.effect)) {
+    if (!std::visit(DispatchVisitor {m_commands}, *transition.effect)) {
         result.failedEffect = transition.effect;
-        navigation_.RecoverFromEffectFailure(*transition.effect);
+        m_navigation.RecoverFromEffectFailure(*transition.effect);
     }
 
     return result;

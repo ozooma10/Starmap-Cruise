@@ -19,7 +19,7 @@ PresentationResult ActionPresenter::Present(const ActionDecision& decision, MapA
 {
     auto presentation = BuildPresentation(decision);
 
-    if (presented_ && *presented_ == presentation) {
+    if (m_presented && *m_presented == presentation) {
         return {
             .changed = false,
             .applied = true,
@@ -33,7 +33,7 @@ PresentationResult ActionPresenter::Present(const ActionDecision& decision, MapA
         };
     }
 
-    presented_ = std::move(presentation);
+    m_presented = std::move(presentation);
 
     return {
         .changed = true,
@@ -43,5 +43,5 @@ PresentationResult ActionPresenter::Present(const ActionDecision& decision, MapA
 
 void ActionPresenter::Invalidate()
 {
-    presented_.reset();
+    m_presented.reset();
 }
