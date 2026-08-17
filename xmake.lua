@@ -32,14 +32,7 @@ target("CruiseFromStarmap", function()
 
     add_files(
         "src/**.cpp",
-        "v2/src/Navigation/NavigationRuntime.cpp",
-        "v2/src/Selection/SelectionPolicy.cpp",
-        "v2/src/Presentation/ActionPolicy.cpp",
-        "v2/src/Presentation/ActionPresenter.cpp",
-        "v2/src/Map/MapSessionState.cpp",
-        "v2/src/Application/CruiseRuntime.cpp",
-        "v2/src/Starfield/StarfieldBodyResolutionSource.cpp",
-        "v2/src/Starfield/StarfieldCruiseAdapter.cpp"
+        "v2/src/**.cpp"
     )
     add_headerfiles(
         "src/**.h",
@@ -78,7 +71,8 @@ target("CruiseFromStarmapV2Tests", function()
         "v2/src/Presentation/ActionPolicy.cpp",
         "v2/src/Presentation/ActionPresenter.cpp",
         "v2/src/Map/MapSessionState.cpp",
-        "v2/src/Application/CruiseRuntime.cpp"
+        "v2/src/Application/CruiseRuntime.cpp",
+        "v2/src/Starfield/MapObservationInbox.cpp"
     )
     add_headerfiles(
         "v2/src/**.h",

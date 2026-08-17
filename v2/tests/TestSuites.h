@@ -6,3 +6,4 @@ void RunActionPolicyTests();
 void RunMapSessionStateTests();
 void RunCruiseRuntimeTests();
 void RunActionPresenterTests();
+void RunMapObservationInboxTests();

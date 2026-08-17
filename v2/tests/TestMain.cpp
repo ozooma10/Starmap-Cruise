@@ -20,6 +20,7 @@ namespace
         {"MapSessionState", &RunMapSessionStateTests},
         {"CruiseRuntime", &RunCruiseRuntimeTests},
         {"ActionPresenter", &RunActionPresenterTests},
+        {"MapObservationInbox", &RunMapObservationInboxTests},
     };
 
     bool RunSuite(const TestSuite& suite)
