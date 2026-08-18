@@ -21,6 +21,7 @@ namespace
     constexpr ::FormID AlphaCentauriId = 0x100;
     constexpr ::FormID TheEyeMapId = 0x1285A;
     constexpr ::FormID TheEyeTargetId = 0x12894;
+    constexpr ::FormID TheEyeCourseId = 0x12895;
 
     constexpr ::MapSessionIdentity CurrentIdentity {
         .session = 7,
@@ -186,6 +187,7 @@ namespace
                             .kind = ::ObservedTargetKind::Station,
                             .displayName = "The Eye",
                             .resolvedTargetId = TheEyeTargetId,
+                            .resolvedCourseId = TheEyeCourseId,
                             .resolvedSystemId = AlphaCentauriId,
                         },
                 }
@@ -236,7 +238,7 @@ namespace
         Require(commands.calls.size() == 3, "station map close issued the wrong command count");
         Require(commands.calls[0].command == RecordedCommand::CloseMap, "station selection did not close the map first");
         Require(commands.calls[1].command == RecordedCommand::AssignStationTarget && commands.calls[1].courseId == TheEyeTargetId, "station target was not assigned before course dispatch");
-        Require(commands.calls[2].command == RecordedCommand::RequestCourse && commands.calls[2].courseId == TheEyeTargetId, "station course request used the wrong target");
+        Require(commands.calls[2].command == RecordedCommand::RequestCourse && commands.calls[2].courseId == TheEyeCourseId, "station course request did not use the distinct course marker");
         Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::AwaitingCourseLock, "station course request entered the wrong phase");
     }
 

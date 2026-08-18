@@ -55,6 +55,7 @@ namespace
                     .kind = ::ObservedTargetKind::Station,
                     .displayName = "The Eye",
                     .resolvedTargetId = 0x12894,
+                    .resolvedCourseId = 0x12895,
                     .resolvedSystemId = 0x11720,
                 },
         };
@@ -110,7 +111,7 @@ namespace
         Require(decision.IsEligible(), "resolved station was not eligible");
         Require(decision.destination->kind == ::DestinationKind::Station, "station observation produced the wrong destination kind");
         Require(decision.destination->targetId == 0x12894, "station destination retained the map CELL instead of the target REFR");
-        Require(decision.destination->courseId == 0x12894, "same-system station course did not use the target REFR");
+        Require(decision.destination->courseId == 0x12895, "station destination did not retain its distinct course marker");
         Require(decision.destination->systemId == ::FormID {0x11720}, "station destination retained the wrong system");
         Require(decision.destination->displayName == "The Eye", "station destination lost the marker name");
     }
@@ -132,6 +133,17 @@ namespace
 
         RequireDecision(missingSystem, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
         Require(!missingSystem.destination, "station without a valid system produced a destination");
+    }
+
+    void TestStationWithoutCourseMarkerUsesTargetReference()
+    {
+        auto snapshot = ValidStation();
+        snapshot.marker.resolvedCourseId = 0;
+
+        const auto decision = ::EvaluateSelection(snapshot);
+
+        Require(decision.IsEligible(), "station without a distinct course marker was not eligible");
+        Require(decision.destination->courseId == snapshot.marker.resolvedTargetId, "station course did not fall back to its target reference");
     }
 
     void TestRemoteStationIsRejected()
@@ -259,6 +271,7 @@ namespace
         TestExactMoonIsEligible();
         TestExactStationIsEligibleWithoutDossier();
         TestUnresolvedStationIsUnavailable();
+        TestStationWithoutCourseMarkerUsesTargetReference();
         TestRemoteStationIsRejected();
         TestMissingHighlightIsDisabled();
         TestAmbiguousHighlightIsDisabled();

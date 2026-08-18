@@ -72,7 +72,7 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
             .destination = Destination {
                 .kind = DestinationKind::Station,
                 .targetId = snapshot.marker.resolvedTargetId,
-                .courseId = snapshot.marker.resolvedTargetId,
+                .courseId = snapshot.marker.resolvedCourseId != 0 ? snapshot.marker.resolvedCourseId : snapshot.marker.resolvedTargetId,
                 .systemId = snapshot.marker.resolvedSystemId,
                 .displayName = snapshot.marker.displayName,
             },

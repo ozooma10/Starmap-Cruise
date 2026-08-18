@@ -1,5 +1,7 @@
 includes("lib/commonlibsf")
 
+add_requires("zlib")
+
 set_project("Starmap Cruise")
 set_version("0.5.0")
 set_license("GPL-3.0")
@@ -16,9 +18,19 @@ target("Starmap Cruise")
         description = "Select a planet, moon, or station and set it as your Cruise target directly from the system map."
     })
 
-    add_files("v2/src/**.cpp")
-    add_headerfiles("v2/src/**.h")
-    add_includedirs("v2/src")
+    add_files(
+        "v2/src/**.cpp",
+        "src/BodyIndex.cpp",
+        "src/BodyIndex/RecordReader.cpp"
+    )
+    add_headerfiles(
+        "v2/src/**.h",
+        "src/BodyIndex.h",
+        "src/BodyIndex/RecordReader.h",
+        "src/Types.h"
+    )
+    add_includedirs("v2/src", "src")
+    add_packages("zlib")
 
 target("CruiseFromStarmapV2Tests")
     set_kind("binary")

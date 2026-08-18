@@ -21,6 +21,7 @@ struct TargetObservation
     std::string displayName;
 
     FormID resolvedTargetId {0};
+    FormID resolvedCourseId {0};
     std::optional<FormID> resolvedSystemId;
 };
 
