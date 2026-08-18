@@ -62,6 +62,7 @@ public:
     bool OnDossierChanged(const MapSessionIdentity& identity, const TargetObservation& dossier);
 
     bool OnCurrentSystemResolved(const MapSessionIdentity& identity, FormID systemId);
+    bool OnCurrentSystemFormObserved(const MapSessionIdentity& identity, FormID systemFormId);
 
     SelectionDecision CurrentSelection() const;
     ActionDecision CurrentMapAction(const MapActionEnvironment& environment) const;

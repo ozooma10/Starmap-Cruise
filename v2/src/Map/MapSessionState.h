@@ -67,6 +67,8 @@ public:
 
     // Allows the first late cockpit-system resolution to complete an already-open session. Once captured, it cannot be rewritten.
     bool CaptureCurrentSystem(const MapSessionIdentity& identity, FormID systemId);
+    // Captures the current/player STDT identity separately from the numeric galaxy-system ID.
+    bool CaptureCurrentSystemForm(const MapSessionIdentity& identity, FormID systemFormId);
 
     SelectionSnapshot Snapshot() const;
 
@@ -87,6 +89,7 @@ private:
     bool m_flyingAtOpen {false};
     ObservedCruiseState m_cruiseStateWhenOpened {ObservedCruiseState::Unknown};
     std::optional<FormID> m_currentSystemId;
+    std::optional<FormID> m_currentSystemFormId;
 
     MapView m_view {MapView::Unknown};
 

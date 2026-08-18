@@ -19,6 +19,7 @@ namespace
     constexpr ::FormID JemisonId = 0x10;
     constexpr ::FormID MarsId = 0x20;
     constexpr ::FormID AlphaCentauriId = 0x100;
+    constexpr ::FormID AlphaCentauriFormId = 0x5E60A;
     constexpr ::FormID TheEyeMapId = 0x1285A;
     constexpr ::FormID TheEyeTargetId = 0x12894;
     constexpr ::FormID TheEyeCourseId = 0x12895;
@@ -175,6 +176,7 @@ namespace
             }),
             "runtime rejected the station map session"
         );
+        Require(runtime.OnCurrentSystemFormObserved(CurrentIdentity, AlphaCentauriFormId), "runtime rejected the current-system form");
         Require(runtime.OnMapViewChanged(CurrentIdentity, ::MapView::System), "runtime rejected station system view");
         Require(
             runtime.OnMarkersChanged(
@@ -188,7 +190,7 @@ namespace
                             .displayName = "The Eye",
                             .resolvedTargetId = TheEyeTargetId,
                             .resolvedCourseId = TheEyeCourseId,
-                            .resolvedSystemId = AlphaCentauriId,
+                            .displayedSystemFormId = AlphaCentauriFormId,
                         },
                 }
             ),

@@ -22,7 +22,8 @@ struct TargetObservation
 
     FormID resolvedTargetId {0};
     FormID resolvedCourseId {0};
-    std::optional<FormID> resolvedSystemId;
+    // Native StarMap SystemState identity (STDT FormID), not a numeric galaxy-system ID.
+    std::optional<FormID> displayedSystemFormId;
 };
 
 struct ResolvedBody
@@ -40,6 +41,8 @@ struct SelectionSnapshot
     bool systemView {false};
 
     std::optional<FormID> currentSystemId;
+    // Scaleform's current/player system identity (STDT FormID).
+    std::optional<FormID> currentSystemFormId;
 
     std::size_t highlightedMarkerCount {0};
     TargetObservation marker;

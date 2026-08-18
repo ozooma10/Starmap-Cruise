@@ -101,6 +101,11 @@ bool CruiseRuntime::OnCurrentSystemResolved(const MapSessionIdentity& identity, 
     return m_map.CaptureCurrentSystem(identity, systemId);
 }
 
+bool CruiseRuntime::OnCurrentSystemFormObserved(const MapSessionIdentity& identity, FormID systemFormId)
+{
+    return m_map.CaptureCurrentSystemForm(identity, systemFormId);
+}
+
 SelectionDecision CruiseRuntime::CurrentSelection() const
 {
     return EvaluateSelection(m_map.Snapshot());

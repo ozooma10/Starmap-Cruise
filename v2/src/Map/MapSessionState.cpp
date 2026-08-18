@@ -94,6 +94,20 @@ bool MapSessionState::CaptureCurrentSystem(const MapSessionIdentity& identity, F
     return m_currentSystemId == systemId;
 }
 
+bool MapSessionState::CaptureCurrentSystemForm(const MapSessionIdentity& identity, FormID systemFormId)
+{
+    if (!Accepts(identity) || systemFormId == 0) {
+        return false;
+    }
+
+    if (!m_currentSystemFormId) {
+        m_currentSystemFormId = systemFormId;
+        return true;
+    }
+
+    return m_currentSystemFormId == systemFormId;
+}
+
 SelectionSnapshot MapSessionState::Snapshot() const
 {
     const bool sessionValid = m_open && m_identity.IsValid() && m_identity.generation == m_movieGeneration;
@@ -103,6 +117,7 @@ SelectionSnapshot MapSessionState::Snapshot() const
         .flying = m_flyingAtOpen,
         .systemView = m_view == MapView::System,
         .currentSystemId = m_currentSystemId,
+        .currentSystemFormId = m_currentSystemFormId,
         .highlightedMarkerCount = m_highlightedMarkerCount,
         .marker = m_marker,
         .dossier = m_dossier,
@@ -141,6 +156,7 @@ void MapSessionState::ResetSession()
     m_flyingAtOpen = false;
     m_cruiseStateWhenOpened = ObservedCruiseState::Unknown;
     m_currentSystemId.reset();
+    m_currentSystemFormId.reset();
 
     m_view = MapView::Unknown;
 

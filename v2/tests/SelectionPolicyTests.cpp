@@ -48,6 +48,7 @@ namespace
             .flying = true,
             .systemView = true,
             .currentSystemId = 0x11720,
+            .currentSystemFormId = 0x5E60A,
             .highlightedMarkerCount = 1,
             .marker =
                 {
@@ -56,7 +57,7 @@ namespace
                     .displayName = "The Eye",
                     .resolvedTargetId = 0x12894,
                     .resolvedCourseId = 0x12895,
-                    .resolvedSystemId = 0x11720,
+                    .displayedSystemFormId = 0x5E60A,
                 },
         };
     }
@@ -127,34 +128,57 @@ namespace
         Require(!missingTarget.destination, "station without a target REFR produced a destination");
 
         snapshot = ValidStation();
-        snapshot.marker.resolvedSystemId = 0;
+        snapshot.marker.displayedSystemFormId.reset();
 
         const auto missingSystem = ::EvaluateSelection(snapshot);
 
         RequireDecision(missingSystem, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
-        Require(!missingSystem.destination, "station without a valid system produced a destination");
+        Require(!missingSystem.destination, "station without a displayed-system form produced a destination");
+
+        snapshot = ValidStation();
+        snapshot.currentSystemFormId.reset();
+
+        const auto missingCurrentSystemForm = ::EvaluateSelection(snapshot);
+
+        RequireDecision(missingCurrentSystemForm, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+        Require(!missingCurrentSystemForm.destination, "station without a current-system form produced a destination");
     }
 
-    void TestStationWithoutCourseMarkerUsesTargetReference()
+    void TestStationWithoutCourseMarkerIsUnavailable()
     {
         auto snapshot = ValidStation();
         snapshot.marker.resolvedCourseId = 0;
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        Require(decision.IsEligible(), "station without a distinct course marker was not eligible");
-        Require(decision.destination->courseId == snapshot.marker.resolvedTargetId, "station course did not fall back to its target reference");
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+        Require(!decision.destination, "station without a distinct course marker produced a destination");
     }
 
     void TestRemoteStationIsRejected()
     {
         auto snapshot = ValidStation();
-        snapshot.marker.resolvedSystemId = 0xDEAD;
+        snapshot.marker.displayedSystemFormId = 0x5E5CB;
 
         const auto decision = ::EvaluateSelection(snapshot);
 
         RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::RemoteSystem);
         Require(!decision.destination, "remote station produced a current-system destination");
+    }
+
+    void TestSolStationIsEligible()
+    {
+        auto snapshot = ValidStation();
+        snapshot.currentSystemId = 0;
+        snapshot.currentSystemFormId = 0x5E5CB;
+        snapshot.marker.displayedSystemFormId = 0x5E5CB;
+
+        const auto decision = ::EvaluateSelection(snapshot);
+
+        Require(decision.IsEligible(), "valid Sol station was rejected");
+        Require(decision.destination->systemId.has_value(), "Sol station lost numeric-system presence");
+        Require(*decision.destination->systemId == 0, "Sol station changed numeric system identity");
+        Require(decision.destination->IsValid(), "Sol station destination was treated as invalid");
     }
 
     void TestMissingHighlightIsDisabled()
@@ -271,8 +295,9 @@ namespace
         TestExactMoonIsEligible();
         TestExactStationIsEligibleWithoutDossier();
         TestUnresolvedStationIsUnavailable();
-        TestStationWithoutCourseMarkerUsesTargetReference();
+        TestStationWithoutCourseMarkerIsUnavailable();
         TestRemoteStationIsRejected();
+        TestSolStationIsEligible();
         TestMissingHighlightIsDisabled();
         TestAmbiguousHighlightIsDisabled();
         TestMarkerAndDossierMustAgree();

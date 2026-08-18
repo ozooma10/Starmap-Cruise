@@ -231,6 +231,24 @@ namespace
         Require(*snapshot.currentSystemId == 0, "captured Sol system changed identity");
     }
 
+    void TestCurrentSystemFormIsCapturedOnce()
+    {
+        ::MapSessionState state;
+        OpenSession(state);
+
+        Require(!state.Snapshot().currentSystemFormId, "session invented a current-system form");
+        Require(!state.CaptureCurrentSystemForm(CurrentIdentity, 0), "zero STDT FormID was accepted");
+        Require(state.CaptureCurrentSystemForm(CurrentIdentity, 0x5E60A), "first current-system form was rejected");
+        Require(state.CaptureCurrentSystemForm(CurrentIdentity, 0x5E60A), "repeated current-system form was rejected");
+        Require(!state.CaptureCurrentSystemForm(CurrentIdentity, 0x5E5CB), "captured current-system form was rewritten");
+
+        Require(state.SetView(CurrentIdentity, ::MapView::Galaxy), "view change was rejected");
+        Require(state.Snapshot().currentSystemFormId == ::FormID {0x5E60A}, "view change cleared the session system form");
+
+        Require(state.Close(CurrentIdentity), "session close was rejected");
+        Require(!state.Snapshot().currentSystemFormId, "closed session retained its current-system form");
+    }
+
     void TestMovieReplacementInvalidatesSession()
     {
         ::MapSessionState state;
@@ -283,6 +301,7 @@ namespace
         TestAmbiguousMarkersClearStoredTarget();
         TestLateCurrentSystemIsCapturedOnce();
         TestSolSystemZeroIsCapturedOnce();
+        TestCurrentSystemFormIsCapturedOnce();
         TestMovieReplacementInvalidatesSession();
         TestCruiseStateIsCapturedAndReset();
     }

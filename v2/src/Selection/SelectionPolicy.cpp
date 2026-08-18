@@ -58,11 +58,12 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
     }
 
     if (snapshot.marker.kind == ObservedTargetKind::Station) {
-        if (snapshot.marker.resolvedTargetId == 0 || !snapshot.marker.resolvedSystemId || *snapshot.marker.resolvedSystemId == 0) {
+        if (snapshot.marker.resolvedTargetId == 0 || snapshot.marker.resolvedCourseId == 0 || !snapshot.marker.displayedSystemFormId || *snapshot.marker.displayedSystemFormId == 0 ||
+            !snapshot.currentSystemFormId || *snapshot.currentSystemFormId == 0) {
             return Disabled(SelectionReason::TargetSystemUnavailable);
         }
 
-        if (snapshot.marker.resolvedSystemId != snapshot.currentSystemId) {
+        if (snapshot.marker.displayedSystemFormId != snapshot.currentSystemFormId) {
             return Disabled(SelectionReason::RemoteSystem);
         }
 
@@ -72,8 +73,8 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
             .destination = Destination {
                 .kind = DestinationKind::Station,
                 .targetId = snapshot.marker.resolvedTargetId,
-                .courseId = snapshot.marker.resolvedCourseId != 0 ? snapshot.marker.resolvedCourseId : snapshot.marker.resolvedTargetId,
-                .systemId = snapshot.marker.resolvedSystemId,
+                .courseId = snapshot.marker.resolvedCourseId,
+                .systemId = snapshot.currentSystemId,
                 .displayName = snapshot.marker.displayName,
             },
         };

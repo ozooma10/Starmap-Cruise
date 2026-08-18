@@ -30,6 +30,7 @@ public:
         MapSessionIdentity identity;
         MapView view {MapView::Unknown};
         FormID currentBodyId {0};
+        FormID currentSystemFormId {0};
     };
 
     struct MarkersObservation
@@ -69,7 +70,7 @@ public:
 
     void RecordMovieCreated(std::int64_t bornTicks);
     void RecordLifecycle(bool opening);
-    void RecordMapData(const MapSessionIdentity& identity, MapView view, FormID currentBodyId);
+    void RecordMapData(const MapSessionIdentity& identity, MapView view, FormID currentBodyId, FormID currentSystemFormId);
     void RecordMarkers(const MapSessionIdentity& identity, MarkerUpdate update);
     void RecordDossier(const MapSessionIdentity& identity, TargetObservation target);
     void RecordAction(const MapSessionIdentity& identity, Action action);

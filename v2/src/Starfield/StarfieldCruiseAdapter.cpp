@@ -264,14 +264,17 @@ public:
 
         MapView view = MapView::Unknown;
         FormID currentBodyId = 0;
+        FormID currentSystemFormId = 0;
 
         RE::Scaleform::GFx::Value data;
         if (CFS::ScaleformValue::Payload(params, data)) {
+            m_owner.m_stationIdentityProbe.CaptureMapData(identity, data);
             view = ReadMapView(data);
             currentBodyId = CFS::ScaleformValue::UIntMember(data, "uBodyLocationID");
+            currentSystemFormId = CFS::ScaleformValue::UIntMember(data, "uSystemLocationID");
         }
 
-        m_owner.m_mapObservations.RecordMapData(identity, view, currentBodyId);
+        m_owner.m_mapObservations.RecordMapData(identity, view, currentBodyId, currentSystemFormId);
     }
 
 private:
@@ -301,6 +304,7 @@ public:
                 }
 
                 if (markers.IsArray()) {
+                    m_owner.m_stationIdentityProbe.CaptureMarkers(identity, markers);
                     MarkerCollector collector;
                     markers.VisitElements(&collector);
                     update.highlightedCount = collector.highlightedCount;
@@ -333,6 +337,7 @@ public:
         TargetObservation target;
         RE::Scaleform::GFx::Value data;
         if (CFS::ScaleformValue::Payload(params, data)) {
+            m_owner.m_stationIdentityProbe.CaptureDossier(identity, data);
             target = {
                 .id = CFS::ScaleformValue::UIntMember(data, "uBodyID"),
                 .kind = ReadTargetKind(
@@ -696,9 +701,9 @@ bool StarfieldCruiseAdapter::Initialize()
         return false;
     }
 
-    if (!m_stationTargets.Initialize()) {
-        REX::WARN("StarfieldCruiseAdapter: station target binding unavailable; station actions remain disabled");
-    }
+#ifdef CFS_STATION_IDENTITY_PROBE
+    REX::WARN("StarfieldCruiseAdapter: station identity/native-route probe enabled");
+#endif
 
     if (!CFS::UiPostAdvanceHook::Install(&OnUiSafeFrame)) {
         REX::ERROR("StarfieldCruiseAdapter: Scaleform post-advance pump unavailable; v2 disabled");
@@ -791,6 +796,8 @@ void StarfieldCruiseAdapter::DrainMapObservations()
     auto observations = m_mapObservations.Drain();
 
     if (observations.movieCreated) {
+        m_stationIdentityProbe.Invalidate();
+        m_stationTargets.Invalidate();
         m_runtime.OnMapMovieCreated(observations.movieGeneration);
         m_mapActionSurface->InvalidateMovie();
         ResetMapActionInput();
@@ -802,6 +809,8 @@ void StarfieldCruiseAdapter::DrainMapObservations()
     }
 
     if (observations.lifecycleOverflowed) {
+        m_stationIdentityProbe.Invalidate();
+        m_stationTargets.Invalidate();
         if (!observations.movieCreated && observations.movieGeneration != 0) {
             m_runtime.OnMapMovieCreated(observations.movieGeneration);
         }
@@ -836,10 +845,12 @@ void StarfieldCruiseAdapter::DrainMapObservations()
                 m_mapActionSurface->InvalidatePresentation();
             }
         } else {
+            m_stationIdentityProbe.OnMapClosed(observation.identity);
             m_pendingMapCloseIdentity = {};
             m_mapCloseStarted = {};
             const bool activeSession = m_activeMapIdentity == observation.identity;
             const auto closed = m_runtime.OnMapClosed(observation.identity);
+            m_stationTargets.Invalidate();
             if (closed.targetAssignmentFailed) {
                 REX::ERROR("StarfieldCruiseAdapter: station target assignment failed after map close; selection discarded");
             } else if (closed.failedEffect) {
@@ -856,6 +867,10 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         observations.mapData->identity == m_activeMapIdentity) {
         const auto& mapData = *observations.mapData;
 
+        if (mapData.currentSystemFormId != 0) {
+            m_runtime.OnCurrentSystemFormObserved(mapData.identity, mapData.currentSystemFormId);
+        }
+
         if (mapData.currentBodyId != 0) {
             const auto currentBody = m_bodySource.ResolveBody(mapData.currentBodyId);
             if (currentBody && currentBody->id == mapData.currentBodyId) {
@@ -868,9 +883,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
 
     if (observations.markers &&
         observations.markers->identity == m_activeMapIdentity) {
-        if (observations.markers->update.highlightedCount == 1) {
-            m_stationTargets.Resolve(observations.markers->update.highlighted);
-        }
+        m_stationTargets.Resolve(observations.markers->update.highlighted);
         m_runtime.OnMarkersChanged(observations.markers->identity, std::move(observations.markers->update));
     }
 
@@ -883,6 +896,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         REX::ERROR("StarfieldCruiseAdapter: multiple map actions arrived in one UI frame; all were rejected");
     } else if (observations.action &&
         observations.action->identity == m_activeMapIdentity) {
+        m_stationIdentityProbe.CancelRouteAttempt();
         auto gesture = MapActionGesture::Tap;
         const auto environment = ReadMapActionEnvironment();
         const auto selection = m_runtime.CurrentSelection();
@@ -920,6 +934,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         }
     }
 
+    m_stationIdentityProbe.Drain(m_activeMapIdentity);
     TraceCurrentSelection();
 }
 
@@ -1051,6 +1066,7 @@ void StarfieldCruiseAdapter::DrainHudObservations()
     const auto observations = m_hudObservations.Drain();
 
     if (observations.movie) {
+        m_stationIdentityProbe.OnHudMovieCreated(observations.movie->generation);
         m_hudMovieGeneration = observations.movie->generation;
         m_hudMovieBornTicks = observations.movie->bornTicks;
         m_hudSubscriptionGeneration = 0;
@@ -1091,6 +1107,7 @@ void StarfieldCruiseAdapter::DrainHudObservations()
     }
 
     const auto courseId = observations.course->courseId;
+    m_stationIdentityProbe.CaptureHudCourse(generation, courseId, observations.course->publication);
     m_runtime.OnCourseLockChanged(courseId);
     if (courseId != 0 && courseId == m_pendingCourseId) {
         m_pendingCourseId = 0;
@@ -1306,6 +1323,7 @@ void StarfieldCruiseAdapter::UpdateTimeouts()
         const auto identity = std::exchange(m_pendingMapCloseIdentity, {});
         m_mapCloseStarted = {};
         ResetMapActionInput();
+        m_stationTargets.CancelAssignment();
         if (m_runtime.OnMapCloseTimedOut(identity)) {
             REX::WARN("StarfieldCruiseAdapter: map close timed out; incomplete selection discarded");
             m_mapActionSurface->InvalidatePresentation();
@@ -1414,6 +1432,13 @@ void StarfieldCruiseAdapter::ProcessInputEvents(RE::BSInputEventReceiver* receiv
         if (first && (button->deviceType == RE::InputEvent::DeviceType::kKeyboard || button->deviceType == RE::InputEvent::DeviceType::kMouse || button->deviceType == RE::InputEvent::DeviceType::kGamepad)) {
             const bool gamepad = button->deviceType == RE::InputEvent::DeviceType::kGamepad;
             m_lastInputWasGamepad.store(gamepad, std::memory_order_relaxed);
+        }
+
+        if (m_stationIdentityProbe.Enabled() &&
+            m_stationIdentityProbe.ObserveStockRouteInput(*button, m_hudObservations.LatestCoursePublication())) {
+            previous = const_cast<RE::InputEvent*>(event);
+            event = next;
+            continue;
         }
 
         drop = m_mapActionInput.Filter(device, button->idCode, down);
@@ -1590,7 +1615,22 @@ StarfieldCruiseAdapter::Commands::Commands(StarfieldCruiseAdapter& owner) :
 
 bool StarfieldCruiseAdapter::Commands::CloseMap()
 {
-    return m_owner.DispatchMapClose();
+    const auto& navigation = m_owner.m_runtime.CurrentNavigationState();
+    const bool stationAssignment = navigation.destination && navigation.destination->kind == DestinationKind::Station;
+    if (stationAssignment &&
+        !m_owner.m_stationTargets.PrepareAssignment(navigation.destination->targetId)) {
+        REX::ERROR("StarfieldCruiseAdapter: selected station REFR was not retained for map-close assignment");
+        return false;
+    }
+
+    if (m_owner.DispatchMapClose()) {
+        return true;
+    }
+
+    if (stationAssignment) {
+        m_owner.m_stationTargets.Invalidate();
+    }
+    return false;
 }
 
 bool StarfieldCruiseAdapter::Commands::AssignStationTarget(FormID targetId)
