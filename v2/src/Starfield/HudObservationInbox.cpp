@@ -25,15 +25,9 @@ void HudObservationInbox::RecordCourse(std::uint32_t generation, FormID courseId
         return;
     }
 
-    m_coursePublication++;
-    if (m_coursePublication == 0) {
-        m_coursePublication++;
-    }
-
     m_course = CourseObservation {
         .generation = generation,
         .courseId = courseId,
-        .publication = m_coursePublication,
     };
 }
 
@@ -41,12 +35,6 @@ bool HudObservationInbox::IsCurrentGeneration(std::uint32_t generation)
 {
     std::lock_guard lock {m_mutex};
     return generation != 0 && generation == m_generation;
-}
-
-std::uint64_t HudObservationInbox::LatestCoursePublication()
-{
-    std::lock_guard lock {m_mutex};
-    return m_coursePublication;
 }
 
 HudObservationInbox::Observations HudObservationInbox::Drain()

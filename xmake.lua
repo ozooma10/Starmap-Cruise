@@ -9,12 +9,6 @@ set_warnings("allextra")
 add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
-option("station_identity_probe")
-    set_default(false)
-    set_showmenu(true)
-    set_description("Enable the disk-free station identity and native-route probe")
-option_end()
-
 target("Starmap Cruise")
     add_rules("commonlibsf.plugin", {
         name = "Starmap Cruise",
@@ -25,10 +19,6 @@ target("Starmap Cruise")
     add_files("v2/src/**.cpp")
     add_headerfiles("v2/src/**.h")
     add_includedirs("v2/src")
-
-    if has_config("station_identity_probe") then
-        add_defines("CFS_STATION_IDENTITY_PROBE")
-    end
 
 target("CruiseFromStarmapV2Tests")
     set_kind("binary")

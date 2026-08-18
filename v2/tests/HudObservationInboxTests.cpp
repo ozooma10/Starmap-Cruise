@@ -40,8 +40,6 @@ namespace
         Require(observations.course.has_value(), "course was not recorded");
         Require(observations.course->generation == generation, "course retained the wrong generation");
         Require(observations.course->courseId == 0x5678, "latest course did not replace the stale value");
-        Require(observations.course->publication == 2, "latest course retained the wrong publication order");
-        Require(inbox.LatestCoursePublication() == 2, "latest publication was not queryable after drain");
     }
 
     void TestReplacementRejectsOldGenerationBeforeDrain()
@@ -61,7 +59,6 @@ namespace
         Require(observations.movie->generation == 2, "replacement retained the wrong generation");
         Require(observations.movie->bornTicks == 200, "replacement retained the wrong creation time");
         Require(!observations.course, "replacement retained an old movie course");
-        Require(inbox.LatestCoursePublication() == 1, "rejected old-generation course advanced publication order");
     }
 
     void TestCurrentReplacementCourseSurvivesDrain()
@@ -77,7 +74,6 @@ namespace
         Require(observations.course.has_value(), "replacement course was not recorded");
         Require(observations.course->generation == observations.movie->generation, "movie and course generations disagreed");
         Require(observations.course->courseId == 0x5678, "replacement course retained the wrong body");
-        Require(observations.course->publication == 1, "replacement course retained the wrong publication order");
     }
 }
 

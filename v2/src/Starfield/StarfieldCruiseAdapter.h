@@ -4,7 +4,6 @@
 #include "Starfield/HudObservationInbox.h"
 #include "Starfield/MapActionInputState.h"
 #include "Starfield/MapObservationInbox.h"
-#include "Starfield/StationIdentityProbe.h"
 #include "Starfield/StationTargetBridge.h"
 #include "Starfield/StarfieldBodyResolutionSource.h"
 
@@ -117,7 +116,6 @@ private:
     bool IsCurrentHudMovie(const void* root, std::uint32_t generation);
 
     StarfieldBodyResolutionSource m_bodySource;
-    StationIdentityProbe m_stationIdentityProbe;
     StationTargetBridge m_stationTargets;
     Commands m_commands;
     CruiseRuntime m_runtime;
