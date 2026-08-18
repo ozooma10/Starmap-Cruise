@@ -1,6 +1,6 @@
-# Cruise From Starmap
+# Starmap Cruise
 
-Cruise From Starmap adds a Cruise action to Starfield's system map. Select a planet, moon, or station and set your cruise target straight from the system map.
+Starmap Cruise adds a Cruise action to Starfield's system map. Select a planet, moon, or station and set your cruise target straight from the system map.
 
 ## Requirements
 
