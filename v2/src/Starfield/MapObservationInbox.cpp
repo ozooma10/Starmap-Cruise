@@ -18,6 +18,8 @@ void MapObservationInbox::RecordMovieCreated(std::int64_t bornTicks)
     m_mapData.reset();
     m_markers.reset();
     m_dossier.reset();
+    m_action.reset();
+    m_actionOverflowed = false;
 }
 
 void MapObservationInbox::RecordLifecycle(bool opening)
@@ -35,6 +37,8 @@ void MapObservationInbox::RecordLifecycle(bool opening)
         m_mapData.reset();
         m_markers.reset();
         m_dossier.reset();
+        m_action.reset();
+        m_actionOverflowed = false;
         return;
     }
 
@@ -58,6 +62,8 @@ void MapObservationInbox::RecordLifecycle(bool opening)
     m_mapData.reset();
     m_markers.reset();
     m_dossier.reset();
+    m_action.reset();
+    m_actionOverflowed = false;
     m_lifecycle[m_lifecycleCount++] = {
         .opening = opening,
         .identity = identity,
@@ -117,6 +123,26 @@ void MapObservationInbox::RecordDossier(const MapSessionIdentity& identity, Targ
     };
 }
 
+void MapObservationInbox::RecordAction(const MapSessionIdentity& identity, Action action)
+{
+    std::lock_guard lock {m_mutex};
+
+    if (!identity.IsValid() || identity != m_currentIdentity || m_actionOverflowed) {
+        return;
+    }
+
+    if (m_action) {
+        m_action.reset();
+        m_actionOverflowed = true;
+        return;
+    }
+
+    m_action = ActionObservation {
+        .identity = identity,
+        .action = action,
+    };
+}
+
 MapObservationInbox::Observations MapObservationInbox::Drain()
 {
     std::lock_guard lock {m_mutex};
@@ -130,6 +156,8 @@ MapObservationInbox::Observations MapObservationInbox::Drain()
         .mapData = m_mapData,
         .markers = m_markers,
         .dossier = m_dossier,
+        .action = m_action,
+        .actionOverflowed = m_actionOverflowed,
     };
 
     for (std::size_t index = 0; index < m_lifecycleCount; ++index) {
@@ -142,6 +170,8 @@ MapObservationInbox::Observations MapObservationInbox::Drain()
     m_mapData.reset();
     m_markers.reset();
     m_dossier.reset();
+    m_action.reset();
+    m_actionOverflowed = false;
 
     return observations;
 }

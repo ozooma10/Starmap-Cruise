@@ -72,7 +72,9 @@ target("CruiseFromStarmapV2Tests", function()
         "v2/src/Presentation/ActionPresenter.cpp",
         "v2/src/Map/MapSessionState.cpp",
         "v2/src/Application/CruiseRuntime.cpp",
-        "v2/src/Starfield/MapObservationInbox.cpp"
+        "v2/src/Starfield/MapObservationInbox.cpp",
+        "v2/src/Starfield/HudObservationInbox.cpp",
+        "v2/src/Starfield/MapActionInputState.cpp"
     )
     add_headerfiles(
         "v2/src/**.h",

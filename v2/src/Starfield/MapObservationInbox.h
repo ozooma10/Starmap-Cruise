@@ -13,6 +13,12 @@ class MapObservationInbox final
 public:
     static constexpr std::size_t MaxLifecycleObservations = 16;
 
+    enum class Action : std::uint8_t
+    {
+        Tap,
+        HoldCompleted,
+    };
+
     struct LifecycleObservation
     {
         bool opening {false};
@@ -38,6 +44,12 @@ public:
         TargetObservation target;
     };
 
+    struct ActionObservation
+    {
+        MapSessionIdentity identity;
+        Action action {Action::Tap};
+    };
+
     struct Observations
     {
         bool movieCreated {false};
@@ -51,6 +63,8 @@ public:
         std::optional<MapDataObservation> mapData;
         std::optional<MarkersObservation> markers;
         std::optional<DossierObservation> dossier;
+        std::optional<ActionObservation> action;
+        bool actionOverflowed {false};
     };
 
     void RecordMovieCreated(std::int64_t bornTicks);
@@ -58,6 +72,7 @@ public:
     void RecordMapData(const MapSessionIdentity& identity, MapView view, FormID currentBodyId);
     void RecordMarkers(const MapSessionIdentity& identity, MarkerUpdate update);
     void RecordDossier(const MapSessionIdentity& identity, TargetObservation target);
+    void RecordAction(const MapSessionIdentity& identity, Action action);
     Observations Drain();
 
 private:
@@ -77,4 +92,6 @@ private:
     std::optional<MapDataObservation> m_mapData;
     std::optional<MarkersObservation> m_markers;
     std::optional<DossierObservation> m_dossier;
+    std::optional<ActionObservation> m_action;
+    bool m_actionOverflowed {false};
 };

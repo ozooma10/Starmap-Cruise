@@ -204,6 +204,51 @@ namespace
         Require(!stale.dossier, "old session published a dossier into the reopened map");
     }
 
+    void TestActionsCarryIdentityAndFailClosedOnConflict()
+    {
+        MapObservationInbox inbox;
+        const auto identity = OpenMap(inbox);
+
+        inbox.RecordAction(identity, MapObservationInbox::Action::Tap);
+        const auto tap = inbox.Drain();
+
+        Require(tap.action.has_value(), "map action was not recorded");
+        Require(tap.action->identity == identity, "map action retained the wrong identity");
+        Require(tap.action->action == MapObservationInbox::Action::Tap, "map action retained the wrong gesture");
+        Require(!tap.actionOverflowed, "single map action reported overflow");
+
+        inbox.RecordAction(identity, MapObservationInbox::Action::Tap);
+        inbox.RecordAction(identity, MapObservationInbox::Action::HoldCompleted);
+        const auto conflict = inbox.Drain();
+
+        Require(!conflict.action, "conflicting map actions retained an arbitrary gesture");
+        Require(conflict.actionOverflowed, "conflicting map actions did not fail closed");
+    }
+
+    void TestStaleActionsAreRejectedAndLifecycleClearsPendingAction()
+    {
+        MapObservationInbox inbox;
+        const auto oldIdentity = OpenMap(inbox);
+
+        inbox.RecordAction(oldIdentity, MapObservationInbox::Action::Tap);
+        inbox.RecordLifecycle(false);
+        inbox.RecordAction(oldIdentity, MapObservationInbox::Action::Tap);
+        const auto closed = inbox.Drain();
+        Require(!closed.action, "closed session accepted a map action");
+
+        inbox.RecordLifecycle(true);
+        const auto reopened = inbox.Drain();
+        const auto newIdentity = reopened.lifecycle[0].identity;
+        inbox.RecordAction(oldIdentity, MapObservationInbox::Action::Tap);
+        Require(!inbox.Drain().action, "old session published an action into the reopened map");
+
+        inbox.RecordAction(newIdentity, MapObservationInbox::Action::Tap);
+        inbox.RecordMovieCreated(200);
+        const auto replaced = inbox.Drain();
+        Require(!replaced.action, "movie replacement retained a pending map action");
+        Require(!replaced.actionOverflowed, "movie replacement retained action overflow state");
+    }
+
     void TestOverflowDropsPartialHistory()
     {
         MapObservationInbox inbox;
@@ -221,6 +266,7 @@ namespace
             .id = 0x5678,
             .kind = ObservedTargetKind::Planet,
         });
+        inbox.RecordAction(identity, MapObservationInbox::Action::Tap);
 
         for (std::size_t index = 0; index <= MapObservationInbox::MaxLifecycleObservations; ++index) {
             inbox.RecordLifecycle(true);
@@ -232,6 +278,8 @@ namespace
         Require(!observations.mapData, "overflow retained stale map data");
         Require(!observations.markers, "overflow retained stale markers");
         Require(!observations.dossier, "overflow retained a stale dossier");
+        Require(!observations.action, "overflow retained a stale map action");
+        Require(!observations.actionOverflowed, "lifecycle overflow retained action overflow state");
     }
 
     void RunTests()
@@ -243,6 +291,8 @@ namespace
         TestLatestTargetObservationsReplaceStaleValues();
         TestOldMovieMapDataIsRejected();
         TestOldSessionTargetObservationsAreRejected();
+        TestActionsCarryIdentityAndFailClosedOnConflict();
+        TestStaleActionsAreRejectedAndLifecycleClearsPendingAction();
         TestOverflowDropsPartialHistory();
     }
 }
