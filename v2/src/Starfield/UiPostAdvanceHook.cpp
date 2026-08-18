@@ -1,4 +1,4 @@
-#include "ScaleformPostAdvancePump.h"
+#include "Starfield/UiPostAdvanceHook.h"
 
 #include "REL/ID.h"
 #include "RE/IDs.h"
@@ -9,7 +9,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace CFS::ScaleformPostAdvancePump
+namespace CFS::UiPostAdvanceHook
 {
     namespace
     {
@@ -50,7 +50,7 @@ namespace CFS::ScaleformPostAdvancePump
 
         const auto target = DecodeCallTarget(base + kCallSiteOffsets[0]);
         if (!target || target != DecodeCallTarget(base + kCallSiteOffsets[1])) {
-            REX::ERROR("ScaleformPostAdvancePump: stale call-site offsets in UI_UpdateMenus; Scaleform bridge disabled");
+            REX::ERROR("UiPostAdvanceHook: stale call-site offsets in UI_UpdateMenus; post-advance callback disabled");
             return false;
         }
 
@@ -60,7 +60,7 @@ namespace CFS::ScaleformPostAdvancePump
             REL::GetTrampoline().write_call<5>(base + offset, &AdvanceThunk);
         }
         g_installed = true;
-        REX::INFO("ScaleformPostAdvancePump: armed both UI_AdvanceActiveMenus call sites in UI_UpdateMenus");
+        REX::INFO("UiPostAdvanceHook: armed both UI_AdvanceActiveMenus call sites in UI_UpdateMenus");
         return true;
     }
 }

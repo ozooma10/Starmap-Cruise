@@ -1,7 +1,7 @@
 #include "Starfield/StarfieldCruiseAdapter.h"
 
 #include "Input/CruiseBindingResolver.h"
-#include "ScaleformPostAdvancePump.h"
+#include "Starfield/UiPostAdvanceHook.h"
 #include "Presentation/ActionPresenter.h"
 #include "Scaleform/UiEventDispatch.h"
 #include "Scaleform/ValueAccess.h"
@@ -692,7 +692,7 @@ bool StarfieldCruiseAdapter::Initialize()
         return false;
     }
 
-    if (!CFS::ScaleformPostAdvancePump::Install(&OnUiSafeFrame)) {
+    if (!CFS::UiPostAdvanceHook::Install(&OnUiSafeFrame)) {
         REX::ERROR("StarfieldCruiseAdapter: Scaleform post-advance pump unavailable; v2 disabled");
         return false;
     }
