@@ -74,7 +74,6 @@ namespace CFS::ScaleformPostAdvancePump
 
         auto &trampoline = REL::GetTrampoline();
         constexpr auto gatewayBytes = kPrologueSize + sizeof(REL::ASM::JMP14);
-        constexpr auto branchIslandBytes = sizeof(REL::ASM::JMP14);
 
         auto *gateway = static_cast<std::byte *>(trampoline.allocate(gatewayBytes));
         std::memcpy(gateway, reinterpret_cast<const void *>(address), kPrologueSize);
