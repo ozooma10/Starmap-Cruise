@@ -6,7 +6,7 @@
 #include "Engine/RuntimeBindings.h"
 #include "Engine/RuntimeMemory.h"
 #include "Input/CruiseBindingResolver.h"
-#include "MainThreadUiPump.h"
+#include "ScaleformPostAdvancePump.h"
 #include "Scaleform/UiEventDispatch.h"
 #include "Scaleform/ValueAccess.h"
 #include "Settings.h"
@@ -147,16 +147,16 @@ namespace CFS::Bridge
             ReconcileHudUi();
         } catch (const std::exception& e) {
             const bool unresolvedPressedEdge = FailClosedPostAdvanceState(
-                "post-advance UI pump exception");
+                "Scaleform post-advance pump exception");
             faulted.store(true, std::memory_order_release);
-            REX::ERROR("post-advance UI pump threw '{}'; guarded navigation state cleared and further Scaleform work disabled{}",
+            REX::ERROR("Scaleform post-advance pump threw '{}'; guarded navigation state cleared and further Scaleform work disabled{}",
                 e.what(), unresolvedPressedEdge ?
                               "; a dispatched HUD Cruise press could not be safely released" : "");
         } catch (...) {
             const bool unresolvedPressedEdge = FailClosedPostAdvanceState(
-                "unknown post-advance UI pump exception");
+                "unknown Scaleform post-advance pump exception");
             faulted.store(true, std::memory_order_release);
-            REX::ERROR("post-advance UI pump threw an unknown exception; guarded navigation state cleared and further Scaleform work disabled{}",
+            REX::ERROR("Scaleform post-advance pump threw an unknown exception; guarded navigation state cleared and further Scaleform work disabled{}",
                 unresolvedPressedEdge ?
                     "; a dispatched HUD Cruise press could not be safely released" : "");
         }
@@ -177,8 +177,8 @@ namespace CFS::Bridge
             return;
         TryInstallLoadGameSink();
         TryInstallGravJumpSink();
-        if (!MainThreadUiPump::Install(&OnUiSafeFrame)) {
-            REX::ERROR("post-advance UI pump unavailable; bridge disabled to prevent off-thread Scaleform access");
+        if (!ScaleformPostAdvancePump::Install(&OnUiSafeFrame)) {
+            REX::ERROR("Scaleform post-advance pump unavailable; bridge disabled to prevent off-thread Scaleform access");
             return;
         }
 

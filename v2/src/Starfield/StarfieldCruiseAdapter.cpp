@@ -1,7 +1,7 @@
 #include "Starfield/StarfieldCruiseAdapter.h"
 
 #include "Input/CruiseBindingResolver.h"
-#include "MainThreadUiPump.h"
+#include "ScaleformPostAdvancePump.h"
 #include "Presentation/ActionPresenter.h"
 #include "Scaleform/UiEventDispatch.h"
 #include "Scaleform/ValueAccess.h"
@@ -692,8 +692,8 @@ bool StarfieldCruiseAdapter::Initialize()
         return false;
     }
 
-    if (!CFS::MainThreadUiPump::Install(&OnUiSafeFrame)) {
-        REX::ERROR("StarfieldCruiseAdapter: post-advance UI pump unavailable; v2 disabled");
+    if (!CFS::ScaleformPostAdvancePump::Install(&OnUiSafeFrame)) {
+        REX::ERROR("StarfieldCruiseAdapter: Scaleform post-advance pump unavailable; v2 disabled");
         return false;
     }
 
@@ -760,11 +760,7 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
             }
         }
         faulted = true;
-        REX::ERROR(
-            "StarfieldCruiseAdapter: post-advance action boundary threw '{}'; further v2 UI work disabled{}",
-            error.what(),
-            unresolvedPress && adapter.m_hudCruisePressed ?
-                "; a dispatched HUD Cruise press could not be safely released" : "");
+        REX::ERROR("StarfieldCruiseAdapter: post-advance action boundary threw '{}'; further v2 UI work disabled{}", error.what(), unresolvedPress && adapter.m_hudCruisePressed ? "; a dispatched HUD Cruise press could not be safely released" : "");
     } catch (...) {
         adapter.m_mapActionInteractive.store(false, std::memory_order_release);
         adapter.ResetMapActionInput();
@@ -1328,16 +1324,11 @@ void StarfieldCruiseAdapter::UpdateTimeouts()
 void StarfieldCruiseAdapter::ResolveInputBindings()
 {
     const auto bindings = CFS::Input::ResolveCruiseBindings();
-    if (!bindings) {
-        REX::WARN("StarfieldCruiseAdapter: live Cruise bindings unavailable");
-        return;
-    }
-
     m_inputBindings = {
-        .keyboard = bindings->keyboard.code,
-        .keyboardModifier = bindings->keyboard.modifier,
-        .mouse = bindings->mouse.modifier < 0 ? bindings->mouse.code : -1,
-        .gamepad = bindings->gamepad.modifier < 0 ? bindings->gamepad.code : -1,
+        .keyboard = bindings.keyboard.code,
+        .keyboardModifier = bindings.keyboard.modifier,
+        .mouse = bindings.mouse.modifier < 0 ? bindings.mouse.code : -1,
+        .gamepad = bindings.gamepad.modifier < 0 ? bindings.gamepad.code : -1,
     };
 
     REX::INFO("StarfieldCruiseAdapter: Cruise bindings keyboard={} modifier={} mouse={} gamepad={}", m_inputBindings.keyboard, m_inputBindings.keyboardModifier, m_inputBindings.mouse, m_inputBindings.gamepad);

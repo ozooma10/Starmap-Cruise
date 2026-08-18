@@ -55,9 +55,7 @@ namespace CFS::ScaleformValue
     std::uint32_t UIntMember(Value& a_object, const char* a_name)
     {
         Value member;
-        return a_object.GetMember(a_name, &member) ?
-                   static_cast<std::uint32_t>(AsNumber(member)) :
-                   0;
+        return a_object.GetMember(a_name, &member) ? static_cast<std::uint32_t>(AsNumber(member)) : 0;
     }
 
     std::string StringMember(Value& a_object, const char* a_name)
@@ -71,8 +69,7 @@ namespace CFS::ScaleformValue
 
     bool ObjectMember(Value& a_object, const char* a_name, Value& a_member)
     {
-        return a_object.GetMember(a_name, &a_member) &&
-               (a_member.IsObject() || a_member.IsDisplayObject());
+        return a_object.GetMember(a_name, &a_member) && (a_member.IsObject() || a_member.IsDisplayObject());
     }
 
     bool BooleanMember(Value& a_object, const char* a_name, bool& a_value)
@@ -108,8 +105,7 @@ namespace CFS::ScaleformValue
             joined += name;
         }
         if (collector.seen > collector.names.size())
-            joined += std::format(", ...(+{} more)",
-                collector.seen - collector.names.size());
+            joined += std::format(", ...(+{} more)", collector.seen - collector.names.size());
         return joined.empty() ? "<none>" : joined;
     }
 }

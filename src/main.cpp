@@ -20,8 +20,6 @@ namespace
 
 SFSE_PLUGIN_LOAD(const SFSE::LoadInterface* a_sfse)
 {
-    // MainThreadUiPump owns one byte-verified entry gateway plus the branch
-    // island used to reach its thunk.
     SFSE::Init(a_sfse, { .trampoline = true, .trampolineSize = 512 });
     const auto runtime = a_sfse->RuntimeVersion();
     REX::INFO("{} v{} loading; supported runtime {}, current runtime {}",
