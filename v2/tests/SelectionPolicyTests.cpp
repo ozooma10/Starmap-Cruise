@@ -41,6 +41,25 @@ namespace
         };
     }
 
+    ::SelectionSnapshot ValidStation()
+    {
+        return {
+            .sessionValid = true,
+            .flying = true,
+            .systemView = true,
+            .currentSystemId = 0x11720,
+            .highlightedMarkerCount = 1,
+            .marker =
+                {
+                    .id = 0x1285A,
+                    .kind = ::ObservedTargetKind::Station,
+                    .displayName = "The Eye",
+                    .resolvedTargetId = 0x12894,
+                    .resolvedSystemId = 0x11720,
+                },
+        };
+    }
+
     void RequireDecision(const ::SelectionDecision& decision, ::SelectionAvailability availability, ::SelectionReason reason)
     {
         Require(decision.availability == availability, "selection availability did not match");
@@ -82,6 +101,48 @@ namespace
         Require(decision.destination->kind == ::DestinationKind::Moon, "moon observation produced the wrong destination kind");
 
         Require(decision.destination->displayName == "Luna", "empty dossier name did not fall back to marker name");
+    }
+
+    void TestExactStationIsEligibleWithoutDossier()
+    {
+        const auto decision = ::EvaluateSelection(ValidStation());
+
+        Require(decision.IsEligible(), "resolved station was not eligible");
+        Require(decision.destination->kind == ::DestinationKind::Station, "station observation produced the wrong destination kind");
+        Require(decision.destination->targetId == 0x12894, "station destination retained the map CELL instead of the target REFR");
+        Require(decision.destination->courseId == 0x12894, "same-system station course did not use the target REFR");
+        Require(decision.destination->systemId == ::FormID {0x11720}, "station destination retained the wrong system");
+        Require(decision.destination->displayName == "The Eye", "station destination lost the marker name");
+    }
+
+    void TestUnresolvedStationIsUnavailable()
+    {
+        auto snapshot = ValidStation();
+        snapshot.marker.resolvedTargetId = 0;
+
+        const auto missingTarget = ::EvaluateSelection(snapshot);
+
+        RequireDecision(missingTarget, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+        Require(!missingTarget.destination, "station without a target REFR produced a destination");
+
+        snapshot = ValidStation();
+        snapshot.marker.resolvedSystemId = 0;
+
+        const auto missingSystem = ::EvaluateSelection(snapshot);
+
+        RequireDecision(missingSystem, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+        Require(!missingSystem.destination, "station without a valid system produced a destination");
+    }
+
+    void TestRemoteStationIsRejected()
+    {
+        auto snapshot = ValidStation();
+        snapshot.marker.resolvedSystemId = 0xDEAD;
+
+        const auto decision = ::EvaluateSelection(snapshot);
+
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::RemoteSystem);
+        Require(!decision.destination, "remote station produced a current-system destination");
     }
 
     void TestMissingHighlightIsDisabled()
@@ -196,6 +257,9 @@ namespace
     {
         TestExactPlanetIsEligible();
         TestExactMoonIsEligible();
+        TestExactStationIsEligibleWithoutDossier();
+        TestUnresolvedStationIsUnavailable();
+        TestRemoteStationIsRejected();
         TestMissingHighlightIsDisabled();
         TestAmbiguousHighlightIsDisabled();
         TestMarkerAndDossierMustAgree();

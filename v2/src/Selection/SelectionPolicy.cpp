@@ -53,7 +53,33 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
         return Disabled(SelectionReason::AmbiguousTarget);
     }
 
-    if (snapshot.marker.id == 0 || !IsPlanetary(snapshot.marker.kind)) {
+    if (snapshot.marker.id == 0) {
+        return Hidden(SelectionReason::UnsupportedTarget);
+    }
+
+    if (snapshot.marker.kind == ObservedTargetKind::Station) {
+        if (snapshot.marker.resolvedTargetId == 0 || !snapshot.marker.resolvedSystemId || *snapshot.marker.resolvedSystemId == 0) {
+            return Disabled(SelectionReason::TargetSystemUnavailable);
+        }
+
+        if (snapshot.marker.resolvedSystemId != snapshot.currentSystemId) {
+            return Disabled(SelectionReason::RemoteSystem);
+        }
+
+        return {
+            .availability = SelectionAvailability::Eligible,
+            .reason = SelectionReason::Eligible,
+            .destination = Destination {
+                .kind = DestinationKind::Station,
+                .targetId = snapshot.marker.resolvedTargetId,
+                .courseId = snapshot.marker.resolvedTargetId,
+                .systemId = snapshot.marker.resolvedSystemId,
+                .displayName = snapshot.marker.displayName,
+            },
+        };
+    }
+
+    if (!IsPlanetary(snapshot.marker.kind)) {
         return Hidden(SelectionReason::UnsupportedTarget);
     }
 

@@ -50,6 +50,15 @@ EffectDispatchResult CruiseRuntime::OnMapClosed(const MapSessionIdentity& identi
         return {};
     }
 
+    const auto& navigation = m_navigation.CurrentState();
+    if (navigation.phase == NavigationPhase::ClosingMap && navigation.destination && navigation.destination->kind == DestinationKind::Station && !m_commands.AssignStationTarget(navigation.destination->targetId)) { 
+        m_navigation.Reset();
+        return {
+            .handled = true,
+            .targetAssignmentFailed = true,
+        };
+    }
+
     return Execute(m_navigation.MapClosed());
 }
 

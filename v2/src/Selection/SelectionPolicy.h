@@ -11,6 +11,7 @@ enum class ObservedTargetKind : std::uint8_t
     Unsupported,
     Planet,
     Moon,
+    Station,
 };
 
 struct TargetObservation
@@ -18,6 +19,9 @@ struct TargetObservation
     FormID id {0};
     ObservedTargetKind kind {ObservedTargetKind::Unsupported};
     std::string displayName;
+
+    FormID resolvedTargetId {0};
+    std::optional<FormID> resolvedSystemId;
 };
 
 struct ResolvedBody

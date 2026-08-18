@@ -4,6 +4,7 @@
 #include "Starfield/HudObservationInbox.h"
 #include "Starfield/MapActionInputState.h"
 #include "Starfield/MapObservationInbox.h"
+#include "Starfield/StationTargetBridge.h"
 #include "Starfield/StarfieldBodyResolutionSource.h"
 
 #include <atomic>
@@ -58,6 +59,7 @@ private:
         explicit Commands(StarfieldCruiseAdapter& owner);
 
         bool CloseMap() override;
+        bool AssignStationTarget(FormID targetId) override;
         bool PressCruise() override;
         bool RequestCourse(FormID courseId) override;
 
@@ -114,6 +116,7 @@ private:
     bool IsCurrentHudMovie(const void* root, std::uint32_t generation);
 
     StarfieldBodyResolutionSource m_bodySource;
+    StationTargetBridge m_stationTargets;
     Commands m_commands;
     CruiseRuntime m_runtime;
     MapObservationInbox m_mapObservations;

@@ -19,6 +19,8 @@ namespace
     constexpr ::FormID JemisonId = 0x10;
     constexpr ::FormID MarsId = 0x20;
     constexpr ::FormID AlphaCentauriId = 0x100;
+    constexpr ::FormID TheEyeMapId = 0x1285A;
+    constexpr ::FormID TheEyeTargetId = 0x12894;
 
     constexpr ::MapSessionIdentity CurrentIdentity {
         .session = 7,
@@ -28,6 +30,7 @@ namespace
     enum class RecordedCommand
     {
         CloseMap,
+        AssignStationTarget,
         PressCruise,
         RequestCourse,
     };
@@ -68,6 +71,11 @@ namespace
         bool PressCruise() override
         {
             return Record(RecordedCommand::PressCruise);
+        }
+
+        bool AssignStationTarget(::FormID targetId) override
+        {
+            return Record(RecordedCommand::AssignStationTarget, targetId);
         }
 
         bool RequestCourse(::FormID courseId) override
@@ -152,6 +160,40 @@ namespace
         Require(runtime.OnDossierChanged(CurrentIdentity, JemisonDossier()), "runtime rejected dossier observation");
     }
 
+    void OpenStationMap(
+        ::CruiseRuntime& runtime,
+        ::ObservedCruiseState cruiseState = ::ObservedCruiseState::Inactive)
+    {
+        runtime.OnMapMovieCreated(CurrentIdentity.generation);
+        Require(
+            runtime.OnMapOpened({
+                .identity = CurrentIdentity,
+                .flying = true,
+                .cruiseState = cruiseState,
+                .currentSystemId = AlphaCentauriId,
+            }),
+            "runtime rejected the station map session"
+        );
+        Require(runtime.OnMapViewChanged(CurrentIdentity, ::MapView::System), "runtime rejected station system view");
+        Require(
+            runtime.OnMarkersChanged(
+                CurrentIdentity,
+                {
+                    .highlightedCount = 1,
+                    .highlighted =
+                        {
+                            .id = TheEyeMapId,
+                            .kind = ::ObservedTargetKind::Station,
+                            .displayName = "The Eye",
+                            .resolvedTargetId = TheEyeTargetId,
+                            .resolvedSystemId = AlphaCentauriId,
+                        },
+                }
+            ),
+            "runtime rejected station marker observation"
+        );
+    }
+
     void TestFullTapFlow()
     {
         FakeBodyResolutionSource bodySource;
@@ -175,6 +217,46 @@ namespace
         Require(closed.Succeeded(), "tap map-close observation was not handled");
         Require(commands.calls.size() == 1, "plain mark issued an unexpected command after map close");
         Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Marked, "tap did not finish as a retained mark");
+    }
+
+    void TestStationAssignmentPrecedesCourseRequest()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenStationMap(runtime, ::ObservedCruiseState::Active);
+
+        Require(runtime.CurrentMapAction(ReadyEnvironment()).CanHandleInput(), "resolved station did not produce an action");
+        Require(bodySource.calls == 0, "station selection queried the planetary body resolver");
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "station tap did not close the map");
+
+        const auto closed = runtime.OnMapClosed(CurrentIdentity);
+
+        Require(closed.Succeeded(), "station map close did not complete");
+        Require(commands.calls.size() == 3, "station map close issued the wrong command count");
+        Require(commands.calls[0].command == RecordedCommand::CloseMap, "station selection did not close the map first");
+        Require(commands.calls[1].command == RecordedCommand::AssignStationTarget && commands.calls[1].courseId == TheEyeTargetId, "station target was not assigned before course dispatch");
+        Require(commands.calls[2].command == RecordedCommand::RequestCourse && commands.calls[2].courseId == TheEyeTargetId, "station course request used the wrong target");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::AwaitingCourseLock, "station course request entered the wrong phase");
+    }
+
+    void TestFailedStationAssignmentDiscardsSelection()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        commands.failOn = RecordedCommand::AssignStationTarget;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenStationMap(runtime);
+
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, ReadyEnvironment()).Succeeded(), "station hold did not close the map");
+
+        const auto closed = runtime.OnMapClosed(CurrentIdentity);
+
+        Require(!closed.Succeeded() && closed.targetAssignmentFailed, "failed station assignment was reported as successful");
+        Require(commands.calls.size() == 2, "failed station assignment dispatched a later command");
+        Require(commands.calls[1].command == RecordedCommand::AssignStationTarget, "failed station assignment recorded the wrong command");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "failed station assignment left navigation active");
+        Require(!runtime.CurrentNavigationState().destination, "failed station assignment retained the destination");
     }
 
     void TestMovieReplacementCancelsOnlyPendingMapSelection()
@@ -554,6 +636,8 @@ namespace
     void RunTests()
     {
         TestFullTapFlow();
+        TestStationAssignmentPrecedesCourseRequest();
+        TestFailedStationAssignmentDiscardsSelection();
         TestMovieReplacementCancelsOnlyPendingMapSelection();
         TestCurrentSelectionReportsAndInvalidatesReadOnlyState();
         TestFullHoldFlow();

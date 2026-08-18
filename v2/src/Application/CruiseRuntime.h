@@ -14,6 +14,7 @@ public:
     virtual ~CruiseCommands() = default;
 
     virtual bool CloseMap() = 0;
+    virtual bool AssignStationTarget(FormID targetId) = 0;
     virtual bool PressCruise() = 0;
     virtual bool RequestCourse(FormID courseId) = 0;
 };
@@ -21,11 +22,12 @@ public:
 struct EffectDispatchResult
 {
     bool handled {false};
+    bool targetAssignmentFailed {false};
     std::optional<Effect> failedEffect;
 
     bool Succeeded() const
     {
-        return handled && !failedEffect.has_value();
+        return handled && !targetAssignmentFailed && !failedEffect.has_value();
     }
 };
 

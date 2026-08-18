@@ -42,6 +42,7 @@ namespace
 
     constexpr std::uint32_t PlanetType = 2;
     constexpr std::uint32_t MoonType = 3;
+    constexpr std::uint32_t StationType = 4;
 
     std::uintptr_t PackIdentity(const MapSessionIdentity& identity)
     {
@@ -126,6 +127,9 @@ namespace
         }
         if (raw == MoonType) {
             return ObservedTargetKind::Moon;
+        }
+        if (raw == StationType) {
+            return ObservedTargetKind::Station;
         }
         return ObservedTargetKind::Unsupported;
     }
@@ -692,6 +696,10 @@ bool StarfieldCruiseAdapter::Initialize()
         return false;
     }
 
+    if (!m_stationTargets.Initialize()) {
+        REX::WARN("StarfieldCruiseAdapter: station target binding unavailable; station actions remain disabled");
+    }
+
     if (!CFS::UiPostAdvanceHook::Install(&OnUiSafeFrame)) {
         REX::ERROR("StarfieldCruiseAdapter: Scaleform post-advance pump unavailable; v2 disabled");
         return false;
@@ -780,7 +788,7 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
 
 void StarfieldCruiseAdapter::DrainMapObservations()
 {
-    const auto observations = m_mapObservations.Drain();
+    auto observations = m_mapObservations.Drain();
 
     if (observations.movieCreated) {
         m_runtime.OnMapMovieCreated(observations.movieGeneration);
@@ -832,7 +840,9 @@ void StarfieldCruiseAdapter::DrainMapObservations()
             m_mapCloseStarted = {};
             const bool activeSession = m_activeMapIdentity == observation.identity;
             const auto closed = m_runtime.OnMapClosed(observation.identity);
-            if (closed.failedEffect) {
+            if (closed.targetAssignmentFailed) {
+                REX::ERROR("StarfieldCruiseAdapter: station target assignment failed after map close; selection discarded");
+            } else if (closed.failedEffect) {
                 REX::ERROR("StarfieldCruiseAdapter: map close transition failed to dispatch its next effect");
             }
             if (activeSession) {
@@ -858,6 +868,9 @@ void StarfieldCruiseAdapter::DrainMapObservations()
 
     if (observations.markers &&
         observations.markers->identity == m_activeMapIdentity) {
+        if (observations.markers->update.highlightedCount == 1) {
+            m_stationTargets.Resolve(observations.markers->update.highlighted);
+        }
         m_runtime.OnMarkersChanged(observations.markers->identity, std::move(observations.markers->update));
     }
 
@@ -1578,6 +1591,11 @@ StarfieldCruiseAdapter::Commands::Commands(StarfieldCruiseAdapter& owner) :
 bool StarfieldCruiseAdapter::Commands::CloseMap()
 {
     return m_owner.DispatchMapClose();
+}
+
+bool StarfieldCruiseAdapter::Commands::AssignStationTarget(FormID targetId)
+{
+    return m_owner.m_stationTargets.Assign(targetId);
 }
 
 bool StarfieldCruiseAdapter::Commands::PressCruise()
