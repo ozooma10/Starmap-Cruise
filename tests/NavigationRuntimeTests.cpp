@@ -81,6 +81,7 @@ namespace
             .settledFlight = true,
             .flying = true,
             .freshHudPublication = true,
+            .courseRowsComplete = true,
             .courseRows = std::move(rows),
         };
     }
@@ -506,6 +507,41 @@ namespace
         Require(runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313})).handled, "complete fresh travel proof was rejected");
     }
 
+    void TestIncompleteHudRowsFailOnlyAtProvenFinalArrival()
+    {
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+
+            auto premature = ReadyArrival(operationId, {0x0005E313});
+            premature.completedPlayerJump = false;
+            premature.courseRowsComplete = false;
+            Require(!runtime.ObserveRemoteArrival(std::move(premature)).handled, "pre-arrival HUD overflow cancelled remote travel");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "pre-arrival HUD overflow discarded remote ownership");
+
+            auto intermediate = ReadyArrival(operationId, {0x0005E313});
+            intermediate.currentSystem = {.starFormId = 0x0005E607, .numericId = 0x00011AF0};
+            intermediate.courseRowsComplete = false;
+            Require(!runtime.ObserveRemoteArrival(std::move(intermediate)).handled, "intermediate-system HUD overflow cancelled remote travel");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "intermediate-system HUD overflow discarded remote ownership");
+
+            Require(runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313})).handled, "complete final-system HUD rows were rejected after earlier overflow");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::PreparingRemoteTarget, "complete final-system HUD rows did not preserve the remote lifecycle after earlier overflow");
+        }
+
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+
+            auto finalArrival = ReadyArrival(operationId, {0x0005E313});
+            finalArrival.courseRowsComplete = false;
+            Require(runtime.ObserveRemoteArrival(std::move(finalArrival)).handled, "proven final-system HUD overflow was ignored");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "proven final-system HUD overflow did not fail closed");
+        }
+    }
+
     void TestRemoteWaypointEvidenceMustBeUniqueAndOrdered()
     {
         auto destination = Chawla();
@@ -680,6 +716,7 @@ namespace
         TestRemoteSelectionRejectsUnsafeContexts();
         TestRemoteFailureCancellationAndLoadResetAreCorrelated();
         TestRemoteArrivalRequiresEveryFreshTravelProof();
+        TestIncompleteHudRowsFailOnlyAtProvenFinalArrival();
         TestRemoteWaypointEvidenceMustBeUniqueAndOrdered();
         TestLocalCallbacksArePhaseSensitiveAndIdempotent();
         TestRemoteCruiseExitTimeoutIsPhaseAndOperationBound();

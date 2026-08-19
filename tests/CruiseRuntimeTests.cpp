@@ -692,6 +692,7 @@ namespace
             .settledFlight = true,
             .flying = true,
             .freshHudPublication = true,
+            .courseRowsComplete = true,
             .courseRows = {JemisonId},
         };
         Require(!runtime.OnRemoteArrival(std::move(intermediate)).handled, "an intermediate system was accepted as final arrival");
@@ -705,6 +706,7 @@ namespace
             .settledFlight = true,
             .flying = true,
             .freshHudPublication = true,
+            .courseRowsComplete = true,
             .courseRows = {JemisonId},
         };
         Require(runtime.OnRemoteArrival(std::move(finalArrival)).Succeeded(), "exact final arrival did not dispatch Cruise activation");
@@ -749,6 +751,7 @@ namespace
             .settledFlight = true,
             .flying = true,
             .freshHudPublication = true,
+            .courseRowsComplete = true,
             .courseRows = {JemisonId},
         };
     }

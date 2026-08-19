@@ -2,38 +2,12 @@
 
 namespace
 {
-    const char* LabelFor(SelectionReason reason)
+    ActionDecision HiddenAction(const SelectionDecision& selection)
     {
-        switch (reason) {
-        case SelectionReason::InactiveContext:
-            return "";
-
-        case SelectionReason::CurrentSystemUnavailable:
-            return "CURRENT SYSTEM UNAVAILABLE";
-
-        case SelectionReason::SelectDestination:
-            return "HIGHLIGHT A DESTINATION";
-
-        case SelectionReason::AmbiguousTarget:
-            return "TARGET IS AMBIGUOUS";
-
-        case SelectionReason::UnsupportedTarget:
-            return "";
-
-        case SelectionReason::TargetDataUpdating:
-            return "TARGET DATA IS UPDATING";
-
-        case SelectionReason::TargetSystemUnavailable:
-            return "TARGET DATA IS NOT AVAILABLE";
-
-        case SelectionReason::RemoteSystem:
-            return "CURRENT-SYSTEM TARGETS ONLY";
-
-        case SelectionReason::Eligible:
-            return "SET CRUISE TARGET";
-        }
-
-        return "";
+        return {
+            .selectionReason = selection.reason,
+            .requiresTravel = selection.requiresTravel,
+        };
     }
 
     ActionControl SelectControl(const SelectionDecision& selection, const ActionContext& context)
@@ -57,44 +31,25 @@ namespace
 
 ActionDecision EvaluateAction(const SelectionDecision& selection, const ActionContext& context)
 {
-    if (selection.availability == SelectionAvailability::Hidden) {
-        return {
-            .selectionReason = selection.reason,
-        };
-    }
-
-    ActionDecision decision {
-        .control = SelectControl(selection, context),
-        .selectionReason = selection.reason,
-        .label = LabelFor(selection.reason),
-        .requiresTravel = selection.requiresTravel,
-    };
-
-    if (!context.cruiseControlBound) {
-        decision.label = "CRUISE CONTROL IS NOT BOUND";
-        return decision;
-    }
-
-    if (!selection.IsEligible())
-        return decision;
+    if (!selection.IsEligible() || !context.cruiseControlBound)
+        return HiddenAction(selection);
 
     if (selection.requiresTravel) {
-        decision.label = "JUMP THEN CRUISE";
-        if (!context.remoteRoutingAvailable) {
-            decision.label = "REMOTE ROUTING UNAVAILABLE";
-            return decision;
-        }
-        if (context.cruiseStateWhenMapOpened != ObservedCruiseState::Inactive) {
-            decision.label = context.cruiseStateWhenMapOpened == ObservedCruiseState::Active ? "EXIT CRUISE FIRST" : "CRUISE STATE UNAVAILABLE";
-            return decision;
-        }
+        if (!context.remoteRoutingAvailable || context.cruiseStateWhenMapOpened != ObservedCruiseState::Inactive)
+            return HiddenAction(selection);
     }
 
     if (!context.vanillaActionEnabled)
-        return decision;
+        return HiddenAction(selection);
 
-    decision.enabled = true;
-    decision.destination = selection.destination;
+    ActionDecision decision {
+        .control = SelectControl(selection, context),
+        .enabled = true,
+        .selectionReason = selection.reason,
+        .label = selection.requiresTravel ? "JUMP THEN CRUISE" : "SET CRUISE TARGET",
+        .destination = selection.destination,
+        .requiresTravel = selection.requiresTravel,
+    };
 
     if (decision.control == ActionControl::TapAndHold)
         decision.holdLabel = "HOLD TO CRUISE";
