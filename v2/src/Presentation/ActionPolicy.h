@@ -26,6 +26,9 @@ struct ActionContext
 
     // Copied from the vanilla Starmap button state.
     bool vanillaActionEnabled {false};
+
+    // Same-system Cruise remains available when remote routing is disabled.
+    bool remoteRoutingAvailable {false};
 };
 
 struct ActionDecision
@@ -39,6 +42,7 @@ struct ActionDecision
     std::string holdLabel;
 
     std::optional<Destination> destination;
+    bool requiresTravel {false};
 
     bool IsVisible() const
     {

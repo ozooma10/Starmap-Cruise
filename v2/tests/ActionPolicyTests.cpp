@@ -19,7 +19,7 @@ namespace
             .kind = ::DestinationKind::Planet,
             .targetId = 0x10,
             .courseId = 0x10,
-            .systemId = 0x100,
+            .system = {.starFormId = 0x1000, .numericId = 0x100},
             .displayName = "Jemison",
         };
     }
@@ -48,6 +48,7 @@ namespace
             .cruiseStateWhenMapOpened = ::ObservedCruiseState::Inactive,
             .cruiseEngageAvailable = true,
             .vanillaActionEnabled = true,
+            .remoteRoutingAvailable = true,
         };
     }
 
@@ -163,17 +164,45 @@ namespace
         Require(!action.destination, "vanilla-disabled action retained a destination");
     }
 
-    void TestRemoteTargetIsDisabledForMvp()
+    void TestRemoteTargetUsesOneAction()
     {
-        const auto selection = DisabledSelection(::SelectionReason::RemoteSystem);
+        auto selection = EligibleSelection();
+        selection.requiresTravel = true;
+        selection.destination->system = {.starFormId = 0x2000, .numericId = 0x200};
 
         const auto action = ::EvaluateAction(selection, ReadyContext());
 
-        Require(action.control == ::ActionControl::TapOnly, "remote MVP rejection exposed a hold control");
+        Require(action.control == ::ActionControl::TapOnly, "remote action exposed a hold control");
+        Require(action.CanHandleInput(), "ready remote action rejected input");
+        Require(action.label == "JUMP THEN CRUISE", "remote action produced the wrong label");
+        Require(action.requiresTravel, "remote action lost its travel flag");
+    }
 
-        Require(!action.CanHandleInput(), "remote MVP rejection accepted input");
+    void TestRemoteTargetRejectsActiveCruiseAndMissingBindings()
+    {
+        auto selection = EligibleSelection();
+        selection.requiresTravel = true;
 
-        Require(action.label == "CURRENT-SYSTEM TARGETS ONLY", "remote MVP rejection produced the wrong label");
+        auto context = ReadyContext();
+        context.cruiseStateWhenMapOpened = ::ObservedCruiseState::Active;
+        auto action = ::EvaluateAction(selection, context);
+        Require(!action.CanHandleInput(), "remote action tried to exit active Cruise");
+        Require(action.label == "EXIT CRUISE FIRST", "active-Cruise remote rejection produced the wrong label");
+
+        context = ReadyContext();
+        context.remoteRoutingAvailable = false;
+        action = ::EvaluateAction(selection, context);
+        Require(!action.CanHandleInput(), "unavailable native route bridge accepted input");
+        Require(action.label == "REMOTE ROUTING UNAVAILABLE", "route guard rejection produced the wrong label");
+    }
+
+    void TestRemoteStationReasonRemainsDisabled()
+    {
+        const auto action = ::EvaluateAction(DisabledSelection(::SelectionReason::RemoteSystem), ReadyContext());
+
+        Require(action.control == ::ActionControl::TapOnly, "remote station rejection exposed a hold control");
+        Require(!action.CanHandleInput(), "remote station rejection accepted input");
+        Require(action.label == "CURRENT-SYSTEM TARGETS ONLY", "remote station rejection produced the wrong label");
     }
 
     void RunTests()
@@ -186,7 +215,9 @@ namespace
         TestUnknownCruiseStateUsesTapOnly();
         TestCruiseCooldownUsesTapOnly();
         TestVanillaActionStateCanDisableInput();
-        TestRemoteTargetIsDisabledForMvp();
+        TestRemoteTargetUsesOneAction();
+        TestRemoteTargetRejectsActiveCruiseAndMissingBindings();
+        TestRemoteStationReasonRemainsDisabled();
     }
 }
 

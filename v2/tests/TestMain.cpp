@@ -22,6 +22,8 @@ namespace
         {"ActionPresenter", &RunActionPresenterTests},
         {"MapObservationInbox", &RunMapObservationInboxTests},
         {"HudObservationInbox", &RunHudObservationInboxTests},
+        {"TravelObservationInbox", &RunTravelObservationInboxTests},
+        {"RemoteRouteProtocol", &RunRemoteRouteProtocolTests},
         {"MapActionInputState", &RunMapActionInputStateTests},
     };
 

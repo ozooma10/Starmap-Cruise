@@ -5,7 +5,12 @@
 class StarfieldBodyResolutionSource final : public BodyResolutionSource
 {
 public:
-    // Call from the game-thread adapter after Starfield has finished loading data.
-    // The result owns only copied IDs; no engine component pointer escapes.
+    //Installs a callsite thunk which copies SatelliteCSVData while Starfield owns its ComponentDB guard.
+    //Failure disabeled remote routing; numeric/STDT same-system lookup remains available through the public acquiring wrappers.
+    bool InitializeRemotePlanning();
+    bool RemotePlanningAvailable() const;
+
     std::optional<ResolvedBody> ResolveBody(FormID bodyId) const override;
+    std::optional<SystemIdentity> ResolveSystemIdentity(FormID formId) const;
+    std::optional<SystemIdentity> ResolveCurrentSystem() const;
 };

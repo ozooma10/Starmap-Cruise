@@ -19,14 +19,19 @@ namespace
             return commands.CloseMap();
         }
 
-        bool operator()(const ::PressCruise&) const
+        bool operator()(const ::BeginRemoteRoute& effect) const
         {
-            return commands.PressCruise();
+            return commands.BeginRemoteRoute(effect);
+        }
+
+        bool operator()(const ::PressCruise& effect) const
+        {
+            return commands.PressCruise(effect.operationId);
         }
 
         bool operator()(const ::RequestCourse& effect) const
         {
-            return commands.RequestCourse(effect.courseId);
+            return commands.RequestCourse(effect.courseId, effect.operationId);
         }
     };
 }
@@ -118,6 +123,7 @@ ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& envir
         .cruiseStateWhenMapOpened = m_map.CruiseStateWhenOpened(),
         .cruiseEngageAvailable = environment.cruiseEngageAvailable,
         .vanillaActionEnabled = environment.vanillaActionEnabled,
+        .remoteRoutingAvailable = environment.remoteRoutingAvailable,
     };
 
     return EvaluateAction(CurrentSelection(), context);
@@ -135,7 +141,7 @@ EffectDispatchResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& 
         return {};
     }
 
-    SelectionIntent intent = SelectionIntent::Mark;
+    SelectionIntent intent = action.requiresTravel ? SelectionIntent::StartRemoteCruise : SelectionIntent::Mark;
 
     if (gesture == MapActionGesture::HoldCompleted) {
         if (action.control != ActionControl::TapAndHold) {
@@ -146,7 +152,55 @@ EffectDispatchResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& 
     }
 
     const bool cruiseWasActive = m_map.CruiseStateWhenOpened() == ObservedCruiseState::Active;
-    return Execute(m_navigation.SelectDestination(*action.destination, intent, cruiseWasActive));
+    return Execute(m_navigation.SelectDestination(*action.destination, intent, cruiseWasActive,
+        RemoteSelectionContext {
+            .source = {
+                .session = identity.session,
+                .movieGeneration = identity.generation,
+            },
+            .inputDevice = environment.inputDevice,
+        }));
+}
+
+EffectDispatchResult CruiseRuntime::OnRemoteRouteCommitted(OperationId operationId, const MapSessionIdentity& identity)
+{
+    return Execute(m_navigation.RemoteRouteCommitted(operationId, {
+        .session = identity.session,
+        .movieGeneration = identity.generation,
+    }));
+}
+
+EffectDispatchResult CruiseRuntime::OnRemoteRouteFailed(OperationId operationId, const MapSessionIdentity& identity)
+{
+    return Execute(m_navigation.RemoteRouteFailed(operationId, {
+        .session = identity.session,
+        .movieGeneration = identity.generation,
+    }));
+}
+
+EffectDispatchResult CruiseRuntime::OnRemoteArrival(RemoteArrivalObservation observation)
+{
+    return Execute(m_navigation.ObserveRemoteArrival(std::move(observation)));
+}
+
+bool CruiseRuntime::OnRemoteOperationCancelled(OperationId operationId)
+{
+    return m_navigation.CancelRemoteOperation(operationId);
+}
+
+bool CruiseRuntime::OnRemoteFlightInvalidated()
+{
+    return m_navigation.InvalidateRemoteFlight();
+}
+
+bool CruiseRuntime::OnLoadGame()
+{
+    return m_navigation.ResetForLoad();
+}
+
+bool CruiseRuntime::OnRemoteCruiseExitTimedOut(OperationId operationId)
+{
+    return m_navigation.RemoteCruiseExitTimedOut(operationId);
 }
 
 EffectDispatchResult CruiseRuntime::OnCruiseChanged(bool active)
@@ -154,9 +208,9 @@ EffectDispatchResult CruiseRuntime::OnCruiseChanged(bool active)
     return Execute(m_navigation.CruiseChanged(active));
 }
 
-bool CruiseRuntime::OnCruiseActivationTimedOut()
+bool CruiseRuntime::OnCruiseActivationTimedOut(OperationId operationId)
 {
-    return m_navigation.RecoverFromEffectFailure(PressCruise {});
+    return m_navigation.RecoverFromEffectFailure(PressCruise {.operationId = operationId});
 }
 
 EffectDispatchResult CruiseRuntime::OnCourseLockChanged(FormID lockedCourseId)
@@ -164,9 +218,12 @@ EffectDispatchResult CruiseRuntime::OnCourseLockChanged(FormID lockedCourseId)
     return Execute(m_navigation.CourseLockChanged(lockedCourseId));
 }
 
-bool CruiseRuntime::OnCourseLockTimedOut(FormID courseId)
+bool CruiseRuntime::OnCourseLockTimedOut(FormID courseId, OperationId operationId)
 {
-    return m_navigation.RecoverFromEffectFailure(RequestCourse {courseId});
+    return m_navigation.RecoverFromEffectFailure(RequestCourse {
+        .courseId = courseId,
+        .operationId = operationId,
+    });
 }
 
 const NavigationState& CruiseRuntime::CurrentNavigationState() const

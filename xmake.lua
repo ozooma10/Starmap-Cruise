@@ -34,6 +34,8 @@ target("CruiseFromStarmapV2Tests")
         "v2/src/Application/CruiseRuntime.cpp",
         "v2/src/Starfield/MapObservationInbox.cpp",
         "v2/src/Starfield/HudObservationInbox.cpp",
+        "v2/src/Starfield/TravelObservationInbox.cpp",
+        "v2/src/Starfield/RemoteRouteProtocol.cpp",
         "v2/src/Starfield/MapActionInputState.cpp"
     )
     add_headerfiles(

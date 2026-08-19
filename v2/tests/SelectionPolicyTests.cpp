@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -21,6 +22,7 @@ namespace
             .flying = true,
             .systemView = true,
             .currentSystemId = 0x100,
+            .currentSystemFormId = 0x1000,
             .highlightedMarkerCount = 1,
             .marker =
                 {
@@ -36,7 +38,8 @@ namespace
                 },
             .resolvedBody = ::ResolvedBody {
                 .id = 0x10,
-                .systemId = 0x100,
+                .system = {.starFormId = 0x1000, .numericId = 0x100},
+                .remotePlan = ::RemoteTargetPlan {},
             },
         };
     }
@@ -82,7 +85,8 @@ namespace
 
         Require(decision.destination->courseId == 0x10, "planet course ID did not match its target ID");
 
-        Require(decision.destination->systemId == ::FormID {0x100}, "destination retained the wrong system ID");
+        Require(decision.destination->system == ::SystemIdentity {.starFormId = 0x1000, .numericId = 0x100}, "destination retained the wrong system identity");
+        Require(!decision.requiresTravel, "same-system planet unexpectedly required travel");
 
         Require(decision.destination->displayName == "Jemison", "dossier name was not preferred");
     }
@@ -113,7 +117,7 @@ namespace
         Require(decision.destination->kind == ::DestinationKind::Station, "station observation produced the wrong destination kind");
         Require(decision.destination->targetId == 0x12894, "station destination retained the map CELL instead of the target REFR");
         Require(decision.destination->courseId == 0x12895, "station destination did not retain its distinct course marker");
-        Require(decision.destination->systemId == ::FormID {0x11720}, "station destination retained the wrong system");
+        Require(decision.destination->system == ::SystemIdentity {.starFormId = 0x5E60A, .numericId = 0x11720}, "station destination retained the wrong system");
         Require(decision.destination->displayName == "The Eye", "station destination lost the marker name");
     }
 
@@ -176,8 +180,7 @@ namespace
         const auto decision = ::EvaluateSelection(snapshot);
 
         Require(decision.IsEligible(), "valid Sol station was rejected");
-        Require(decision.destination->systemId.has_value(), "Sol station lost numeric-system presence");
-        Require(*decision.destination->systemId == 0, "Sol station changed numeric system identity");
+        Require(decision.destination->system.numericId == 0, "Sol station changed numeric system identity");
         Require(decision.destination->IsValid(), "Sol station destination was treated as invalid");
     }
 
@@ -233,29 +236,46 @@ namespace
         RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
     }
 
-    void TestRemoteSystemIsNotPartOfMvp()
+    void TestRemotePlanetIsEligibleWithCopiedPlan()
     {
         auto snapshot = ValidPlanet();
-        snapshot.resolvedBody->systemId = 0x200;
+        snapshot.resolvedBody->system = {.starFormId = 0x2000, .numericId = 0x200};
+        snapshot.resolvedBody->remotePlan = ::RemoteTargetPlan {
+            .allowedWaypointIds = {0x77},
+        };
 
         const auto decision = ::EvaluateSelection(snapshot);
 
-        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::RemoteSystem);
+        RequireDecision(decision, ::SelectionAvailability::Eligible, ::SelectionReason::Eligible);
+        Require(decision.requiresTravel, "remote planet did not require travel");
+        Require(decision.destination.has_value(), "remote planet lost its destination");
+        Require(decision.destination->system.starFormId == 0x2000, "remote planet lost its STDT identity");
+        Require(decision.destination->remotePlan.allowedWaypointIds == std::vector<::FormID> {0x77}, "remote planet lost its copied plan");
+    }
 
-        Require(!decision.destination, "remote-system rejection produced a destination");
+    void TestRemotePlanetWithoutPlanIsUnavailable()
+    {
+        auto snapshot = ValidPlanet();
+        snapshot.resolvedBody->system = {.starFormId = 0x2000, .numericId = 0x200};
+        snapshot.resolvedBody->remotePlan.reset();
+
+        const auto decision = ::EvaluateSelection(snapshot);
+
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+        Require(!decision.destination, "remote target without a native plan produced a destination");
     }
 
     void TestSolSystemIsEligible()
     {
         auto snapshot = ValidPlanet();
         snapshot.currentSystemId = 0;
-        snapshot.resolvedBody->systemId = 0;
+        snapshot.currentSystemFormId = 0x5E5CB;
+        snapshot.resolvedBody->system = {.starFormId = 0x5E5CB, .numericId = 0};
 
         const auto decision = ::EvaluateSelection(snapshot);
 
         Require(decision.IsEligible(), "valid Sol system zero was rejected");
-        Require(decision.destination->systemId.has_value(), "Sol destination lost system presence");
-        Require(*decision.destination->systemId == 0, "Sol destination changed the system identity");
+        Require(decision.destination->system.numericId == 0, "Sol destination changed the system identity");
         Require(decision.destination->IsValid(), "Sol destination was treated as invalid");
     }
 
@@ -303,7 +323,8 @@ namespace
         TestMarkerAndDossierMustAgree();
         TestUnsupportedMarkerIsHidden();
         TestResolutionMustConfirmExactBody();
-        TestRemoteSystemIsNotPartOfMvp();
+        TestRemotePlanetIsEligibleWithCopiedPlan();
+        TestRemotePlanetWithoutPlanIsUnavailable();
         TestSolSystemIsEligible();
         TestMissingCurrentSystemIsUnavailable();
         TestMissingBodySystemIsUnavailable();

@@ -6,7 +6,9 @@
 #include "Scaleform/UiEventDispatch.h"
 #include "Scaleform/ValueAccess.h"
 
+
 #include "RE/Starfield.h"
+#include "REL/Pattern.h"
 #include "REX/REX.h"
 #include "SFSE/SFSE.h"
 
@@ -27,6 +29,7 @@ namespace
 
     constexpr const char* MapMenuName = "GalaxyStarMapMenu";
     constexpr const char* HudMenuName = "SpaceshipHudMenu";
+    constexpr const char* LoadingMenuName = "LoadingMenu";
     constexpr const char* MapDataFeed = "StarMapMenuData";
     constexpr const char* MarkersFeed = "StarMapMenuMarkersData";
     constexpr const char* DossierFeed = "StarmapSystemBodyInfoProvider";
@@ -39,6 +42,11 @@ namespace
     constexpr auto MapCloseTimeout = std::chrono::seconds(2);
     constexpr auto CruisePressTimeout = std::chrono::seconds(4);
     constexpr auto CourseLockTimeout = std::chrono::milliseconds(1500);
+    constexpr auto RemoteWorldSettleTime = std::chrono::milliseconds(2500);
+    constexpr auto RemoteCruiseExitTimeout = std::chrono::seconds(2);
+
+    constexpr auto GlobalEventGetterPattern = REL::Pattern<
+        "48 83 EC 28 65 48 8B 04 25 58 00 00 00 BA B8 00">();
 
     constexpr std::uint32_t PlanetType = 2;
     constexpr std::uint32_t MoonType = 3;
@@ -67,6 +75,18 @@ namespace
         const auto player = RE::PlayerCharacter::GetSingleton();
         const auto ship = player ? player->GetSpaceship() : nullptr;
         return ship && ship->IsInSpace(false);
+    }
+
+    template <class Event>
+    RE::BSTEventSource<Event>* ProveEventSource()
+    {
+        const auto& binding = Event::EVENT_SOURCE_BINDING;
+        if (!GlobalEventGetterPattern.match(binding.GetGetterID().address())) {
+            return nullptr;
+        }
+
+        auto* source = binding.Get();
+        return binding.Matches(source) ? source : nullptr;
     }
 
     ObservedCruiseState ReadCruiseState()
@@ -217,17 +237,29 @@ namespace
         void Visit(std::uint32_t, const RE::Scaleform::GFx::Value& value) override
         {
             auto entry = value;
+            const auto id = CFS::ScaleformValue::UIntMember(entry, "uniqueID");
+            if (id != 0) {
+                if (rowCount < rows.size()) {
+                    rows[rowCount++] = id;
+                } else {
+                    overflowed = true;
+                }
+            }
+
             bool locked = false;
             if (!CFS::ScaleformValue::BooleanMember(entry, "bIsCruiseTargetLock", locked) || !locked) {
                 return;
             }
 
             lockedCount++;
-            courseId = CFS::ScaleformValue::UIntMember(entry, "uniqueID");
+            courseId = id;
         }
 
         std::size_t lockedCount {0};
         FormID courseId {0};
+        std::array<FormID, HudObservationInbox::MaxCourseRows> rows;
+        std::size_t rowCount {0};
+        bool overflowed {false};
     };
 }
 
@@ -241,8 +273,47 @@ public:
         const char* name = event.menuName.c_str();
         if (name && std::strcmp(name, MapMenuName) == 0) {
             m_owner.m_mapObservations.RecordLifecycle(event.opening);
+        } else if (name && std::strcmp(name, LoadingMenuName) == 0) {
+            m_owner.m_travelObservations.RecordLoadingMenu(event.opening);
         }
 
+        return RE::BSEventNotifyControl::kContinue;
+    }
+
+private:
+    StarfieldCruiseAdapter& m_owner;
+};
+
+class StarfieldCruiseAdapter::GravJumpSink final : public RE::BSTEventSink<RE::Spaceship::GravJumpEvent>
+{
+public:
+    explicit GravJumpSink(StarfieldCruiseAdapter& owner) : m_owner(owner) {}
+
+    RE::BSEventNotifyControl ProcessEvent(const RE::Spaceship::GravJumpEvent& event, RE::BSTEventSource<RE::Spaceship::GravJumpEvent>*) override
+    {
+        try {
+            auto* player = RE::PlayerCharacter::GetSingleton();
+            if (player && event.ship && event.ship.get() == player->GetSpaceship()) {
+                m_owner.m_travelObservations.RecordGravJump(
+                    event.state, event.destination ? event.destination->GetFormID() : 0);
+            }
+        } catch (...) {
+        }
+        return RE::BSEventNotifyControl::kContinue;
+    }
+
+private:
+    StarfieldCruiseAdapter& m_owner;
+};
+
+class StarfieldCruiseAdapter::LoadGameSink final : public RE::BSTEventSink<RE::TESLoadGameEvent>
+{
+public:
+    explicit LoadGameSink(StarfieldCruiseAdapter& owner) : m_owner(owner) {}
+
+    RE::BSEventNotifyControl ProcessEvent(const RE::TESLoadGameEvent&, RE::BSTEventSource<RE::TESLoadGameEvent>*) override
+    {
+        m_owner.m_travelObservations.RecordLoadGame();
         return RE::BSEventNotifyControl::kContinue;
     }
 
@@ -361,6 +432,9 @@ public:
         const auto generation = static_cast<std::uint32_t>(reinterpret_cast<std::uintptr_t>(params.userData));
 
         FormID courseId = 0;
+        std::array<FormID, HudObservationInbox::MaxCourseRows> rows;
+        std::size_t rowCount = 0;
+        bool overflowed = false;
         bool valid = false;
         RE::Scaleform::GFx::Value data;
         if (CFS::ScaleformValue::Payload(params, data)) {
@@ -378,12 +452,15 @@ public:
                     if (collector.lockedCount == 1) {
                         courseId = collector.courseId;
                     }
+                    rows = collector.rows;
+                    rowCount = collector.rowCount;
+                    overflowed = collector.overflowed;
                 }
             }
         }
 
         if (valid) {
-            m_owner.m_hudObservations.RecordCourse(generation, courseId);
+            m_owner.m_hudObservations.RecordCourse(generation, courseId, rows, rowCount, overflowed);
         }
     }
 
@@ -680,7 +757,9 @@ StarfieldCruiseAdapter::StarfieldCruiseAdapter() :
     m_mapDataHandler(std::make_unique<MapDataHandler>(*this)),
     m_markersHandler(std::make_unique<MarkersHandler>(*this)),
     m_dossierHandler(std::make_unique<DossierHandler>(*this)),
-    m_hudCourseHandler(std::make_unique<HudCourseHandler>(*this))
+    m_hudCourseHandler(std::make_unique<HudCourseHandler>(*this)),
+    m_gravJumpSink(std::make_unique<GravJumpSink>(*this)),
+    m_loadGameSink(std::make_unique<LoadGameSink>(*this))
 {}
 
 StarfieldCruiseAdapter::~StarfieldCruiseAdapter() = default;
@@ -690,6 +769,10 @@ bool StarfieldCruiseAdapter::Initialize()
     if (m_initialized) {
         return true;
     }
+    if (m_initializationAttempted) {
+        REX::ERROR("StarfieldCruiseAdapter: prior initialization attempt failed after process-lifetime hook setup began; retry refused");
+        return false;
+    }
 
     const auto menus = SFSE::GetMenuInterface();
     const auto ui = RE::UI::GetSingleton();
@@ -698,6 +781,7 @@ bool StarfieldCruiseAdapter::Initialize()
         return false;
     }
 
+    m_initializationAttempted = true;
     if (!CFS::UiPostAdvanceHook::Install(&OnUiSafeFrame)) {
         REX::ERROR("StarfieldCruiseAdapter: Scaleform post-advance pump unavailable; v2 disabled");
         return false;
@@ -711,8 +795,29 @@ bool StarfieldCruiseAdapter::Initialize()
 
     menus->Register(&OnMovieCreated);
     ui->RegisterSink<RE::MenuOpenCloseEvent>(m_mapLifecycleSink.get());
+    const bool planetaryIdentityReady = m_bodySource.InitializeRemotePlanning();
+    const bool routeReady = planetaryIdentityReady && m_remoteRoute.Initialize(m_bodySource);
+    const bool travelReady = InitializeTravelObservers();
+    m_remoteRoutingAvailable = planetaryIdentityReady && routeReady && travelReady;
+    if (!m_remoteRoutingAvailable) {
+        REX::WARN("StarfieldCruiseAdapter: remote planet/moon routing disabled because one or more native guards failed; same-system Cruise remains enabled");
+    }
     m_initialized = true;
     REX::INFO("StarfieldCruiseAdapter: initialized with map action presentation, copied observations, and typed Starfield effects");
+    return true;
+}
+
+bool StarfieldCruiseAdapter::InitializeTravelObservers()
+{
+    auto* gravSource = ProveEventSource<RE::Spaceship::GravJumpEvent>();
+    auto* loadSource = ProveEventSource<RE::TESLoadGameEvent>();
+    if (!gravSource || !loadSource) {
+        REX::ERROR("StarfieldCruiseAdapter: guarded GravJump/TESLoadGame sources unavailable; remote routing disabled");
+        return false;
+    }
+    gravSource->RegisterSink(m_gravJumpSink.get());
+    loadSource->RegisterSink(m_loadGameSink.get());
+    REX::INFO("StarfieldCruiseAdapter: guarded player GravJump and TESLoadGame observers enabled");
     return true;
 }
 
@@ -744,13 +849,19 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
     }
 
     auto& adapter = GetSingleton();
+    if (!adapter.m_initialized) {
+        return;
+    }
     try {
         adapter.RefreshInputPresentation();
         adapter.DrainHudObservations();
+        adapter.DrainTravelObservations();
         adapter.DrainMapObservations();
         adapter.TrySubscribeMapFeeds();
         adapter.TrySubscribeHudFeed();
         adapter.UpdateHudRuntime();
+        adapter.HandleRemoteRouteResult(adapter.m_remoteRoute.Tick(adapter.m_activeMapIdentity));
+        adapter.EvaluateRemoteArrival();
         adapter.UpdateTimeouts();
         adapter.UpdateMapAction();
     } catch (const std::exception& error) {
@@ -789,6 +900,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
     auto observations = m_mapObservations.Drain();
 
     if (observations.movieCreated) {
+        HandleRemoteRouteResult(m_remoteRoute.OnMovieCreated(observations.movieGeneration));
         m_stationTargets.Invalidate();
         m_runtime.OnMapMovieCreated(observations.movieGeneration);
         m_mapActionSurface->InvalidateMovie();
@@ -801,6 +913,12 @@ void StarfieldCruiseAdapter::DrainMapObservations()
     }
 
     if (observations.lifecycleOverflowed) {
+        const bool hadRemoteOperation = m_runtime.CurrentNavigationState().remoteOperation.has_value();
+        m_remoteRoute.Cancel();
+        if (hadRemoteOperation) {
+            m_runtime.OnLoadGame();
+            ResetRemoteTravelState();
+        }
         m_stationTargets.Invalidate();
         if (!observations.movieCreated && observations.movieGeneration != 0) {
             m_runtime.OnMapMovieCreated(observations.movieGeneration);
@@ -821,15 +939,24 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         if (observation.opening) {
             const bool flying = IsPlayerFlying();
             const auto cruiseState = ReadCruiseState();
+            const auto currentSystem = m_bodySource.ResolveCurrentSystem();
             const bool accepted = m_runtime.OnMapOpened({
                 .identity = observation.identity,
                 .flying = flying,
                 .cruiseState = cruiseState,
-                .currentSystemId = std::nullopt,
+                .currentSystemId = currentSystem ?
+                    std::optional<FormID> {currentSystem->numericId} : std::nullopt,
             });
 
-            REX::INFO("StarfieldCruiseAdapter: map open session={} generation={} flying={} cruise-state={} accepted={}",
-                observation.identity.session, observation.identity.generation, flying, CruiseStateName(cruiseState), accepted);
+            if (accepted && currentSystem) {
+                m_runtime.OnCurrentSystemFormObserved(
+                    observation.identity, currentSystem->starFormId);
+            }
+
+            REX::INFO("StarfieldCruiseAdapter: map open session={} generation={} flying={} cruise-state={} current-STDT={:08X} current-numeric={:08X} accepted={}",
+                observation.identity.session, observation.identity.generation, flying,
+                CruiseStateName(cruiseState), currentSystem ? currentSystem->starFormId : 0,
+                currentSystem ? currentSystem->numericId : 0, accepted);
 
             if (accepted) {
                 m_activeMapIdentity = observation.identity;
@@ -839,7 +966,9 @@ void StarfieldCruiseAdapter::DrainMapObservations()
             m_pendingMapCloseIdentity = {};
             m_mapCloseStarted = {};
             const bool activeSession = m_activeMapIdentity == observation.identity;
+            const auto routeResult = m_remoteRoute.OnMapClosed(observation.identity);
             const auto closed = m_runtime.OnMapClosed(observation.identity);
+            HandleRemoteRouteResult(routeResult);
             m_stationTargets.Invalidate();
             if (closed.targetAssignmentFailed) {
                 REX::ERROR("StarfieldCruiseAdapter: station target assignment failed after map close; selection discarded");
@@ -857,15 +986,17 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         observations.mapData->identity == m_activeMapIdentity) {
         const auto& mapData = *observations.mapData;
 
-        if (mapData.currentSystemFormId != 0) {
-            m_runtime.OnCurrentSystemFormObserved(mapData.identity, mapData.currentSystemFormId);
-        }
+        // RemoteRouteProtocol compares an STDT system root. uBodyLocationID
+        // is the displayed PNDT and can never satisfy that gate.
+        m_remoteRoute.ObserveMapData(
+            mapData.identity, mapData.view, mapData.currentSystemFormId);
 
-        if (mapData.currentBodyId != 0) {
-            const auto currentBody = m_bodySource.ResolveBody(mapData.currentBodyId);
-            if (currentBody && currentBody->id == mapData.currentBodyId) {
-                m_runtime.OnCurrentSystemResolved(mapData.identity, currentBody->systemId);
-            }
+        // MapData describes the system being browsed, which can be remote.
+        // Selection policy needs the player's map-independent current pair.
+        if (const auto currentSystem = m_bodySource.ResolveCurrentSystem()) {
+            m_runtime.OnCurrentSystemResolved(mapData.identity, currentSystem->numericId);
+            m_runtime.OnCurrentSystemFormObserved(
+                mapData.identity, currentSystem->starFormId);
         }
 
         m_runtime.OnMapViewChanged(mapData.identity, mapData.view);
@@ -887,11 +1018,15 @@ void StarfieldCruiseAdapter::DrainMapObservations()
     } else if (observations.action &&
         observations.action->identity == m_activeMapIdentity) {
         auto gesture = MapActionGesture::Tap;
-        const auto environment = ReadMapActionEnvironment();
+        auto environment = ReadMapActionEnvironment();
         const auto selection = m_runtime.CurrentSelection();
         const bool holdRequested = observations.action->action ==
             MapObservationInbox::Action::HoldCompleted;
         const auto inputDevice = m_mapActionInput.AcceptAction();
+        if (inputDevice) {
+            environment.inputDevice = *inputDevice == static_cast<std::uint32_t>(RE::InputEvent::DeviceType::kGamepad) ?
+                NavigationInputDevice::Gamepad : NavigationInputDevice::KeyboardMouse;
+        }
         const bool holdOwned = holdRequested && inputDevice.has_value();
         if (holdOwned) {
             gesture = MapActionGesture::HoldCompleted;
@@ -903,10 +1038,21 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         if (rejectedUnownedHold) {
             REX::WARN("StarfieldCruiseAdapter: completed map hold had no matching physical control; handling it as a tap");
         }
+        const auto previousRemoteOperationId = m_runtime.CurrentNavigationState().remoteOperation ?
+            m_runtime.CurrentNavigationState().remoteOperation->id : 0;
+        if (previousRemoteOperationId != 0) {
+            // The user's new action owns replacement/toggle. Drop any old
+            // concrete route or HUD dispatch before the core emits a new one.
+            m_remoteRoute.Cancel();
+            ClearRemoteDispatchState(previousRemoteOperationId);
+        }
         const auto activated = m_runtime.ActivateMapAction(
             observations.action->identity,
             gesture,
             environment);
+        if (previousRemoteOperationId != 0 && !activated.handled) {
+            m_runtime.OnRemoteOperationCancelled(previousRemoteOperationId);
+        }
         if (activated.handled) {
             m_mapActionInteractive.store(false, std::memory_order_release);
             REX::INFO( "StarfieldCruiseAdapter: accepted map {} target={:08X} name='{}'", gesture == MapActionGesture::HoldCompleted ? "hold" : "tap", 
@@ -938,7 +1084,7 @@ void StarfieldCruiseAdapter::TraceCurrentSelection()
 
     if (selection.destination) {
         trace.targetId = selection.destination->targetId;
-        trace.systemId = selection.destination->systemId;
+        trace.system = selection.destination->system;
         trace.displayName = selection.destination->displayName;
     }
 
@@ -948,9 +1094,9 @@ void StarfieldCruiseAdapter::TraceCurrentSelection()
 
     m_lastSelectionTrace = trace;
 
-    if (trace.targetId != 0 && trace.systemId) {
-        REX::INFO("StarfieldCruiseAdapter: selection session={} generation={} availability={} reason={} target={:08X} system={:08X} name='{}'", 
-            trace.identity.session, trace.identity.generation, SelectionAvailabilityName(trace.availability), SelectionReasonName(trace.reason), trace.targetId, *trace.systemId, trace.displayName);
+    if (trace.targetId != 0 && trace.system) {
+        REX::INFO("StarfieldCruiseAdapter: selection session={} generation={} availability={} reason={} target={:08X} STDT={:08X} numeric={:08X} name='{}'",
+            trace.identity.session, trace.identity.generation, SelectionAvailabilityName(trace.availability), SelectionReasonName(trace.reason), trace.targetId, trace.system->starFormId, trace.system->numericId, trace.displayName);
         return;
     }
 
@@ -1054,25 +1200,41 @@ void StarfieldCruiseAdapter::DrainHudObservations()
     const auto observations = m_hudObservations.Drain();
 
     if (observations.movie) {
+        OperationId cancelledRemoteOperation {0};
         m_hudMovieGeneration = observations.movie->generation;
         m_hudMovieBornTicks = observations.movie->bornTicks;
         m_hudSubscriptionGeneration = 0;
         m_lastCruiseActive.reset();
         m_hudSnapshot = {};
+        m_lastHudCourse.reset();
         m_nextHudPoll = {};
         m_mapActionSurface->InvalidatePresentation();
 
         if (m_hudCruisePressed) {
+            const auto operationId = m_hudCruiseOperationId;
             m_hudCruisePressed = false;
             m_hudCruiseTimedOut = false;
+            m_hudCruiseOperationId = 0;
             m_hudCruiseUserEvent.clear();
             m_hudCruiseStarted = {};
-            m_runtime.OnCruiseActivationTimedOut();
+            m_runtime.OnCruiseActivationTimedOut(operationId);
+            if (operationId != 0) {
+                cancelledRemoteOperation = operationId;
+            }
         }
         if (m_pendingCourseId != 0) {
             const auto courseId = std::exchange(m_pendingCourseId, 0);
+            const auto operationId = std::exchange(m_pendingCourseOperationId, 0);
             m_courseRequestStarted = {};
-            m_runtime.OnCourseLockTimedOut(courseId);
+            if (operationId != 0) {
+                m_runtime.OnRemoteOperationCancelled(operationId);
+                cancelledRemoteOperation = operationId;
+            } else {
+                m_runtime.OnCourseLockTimedOut(courseId);
+            }
+        }
+        if (cancelledRemoteOperation != 0) {
+            ResetRemoteTravelState();
         }
     }
 
@@ -1085,6 +1247,17 @@ void StarfieldCruiseAdapter::DrainHudObservations()
         return;
     }
 
+    if (observations.course->overflowed && m_runtime.CurrentNavigationState().remoteOperation) {
+        const auto operationId = m_runtime.CurrentNavigationState().remoteOperation->id;
+        m_runtime.OnRemoteOperationCancelled(operationId);
+        m_pendingCourseId = 0;
+        m_pendingCourseOperationId = 0;
+        m_courseRequestStarted = {};
+        ResetRemoteTravelState();
+        REX::ERROR("StarfieldCruiseAdapter: HUD course row bound overflowed; remote operation={} reset", operationId);
+        return;
+    }
+
     const auto ui = RE::UI::GetSingleton();
     const RE::BSFixedString hudName {HudMenuName};
     const auto menu = ui ? ui->GetMenu(hudName) : nullptr;
@@ -1094,12 +1267,203 @@ void StarfieldCruiseAdapter::DrainHudObservations()
     }
 
     const auto courseId = observations.course->courseId;
+    m_lastHudCourse = observations.course;
+    const auto remoteOperationBefore = m_runtime.CurrentNavigationState().remoteOperation ?
+        m_runtime.CurrentNavigationState().remoteOperation->id : 0;
+    const bool exactPendingCourse = courseId != 0 && courseId == m_pendingCourseId;
     m_runtime.OnCourseLockChanged(courseId);
-    if (courseId != 0 && courseId == m_pendingCourseId) {
+    if (exactPendingCourse) {
         m_pendingCourseId = 0;
+        m_pendingCourseOperationId = 0;
         m_courseRequestStarted = {};
         REX::INFO("StarfieldCruiseAdapter: HUD confirmed exact course {:08X}", courseId);
     }
+
+    if (remoteOperationBefore != 0 && !m_runtime.CurrentNavigationState().remoteOperation) {
+        ClearRemoteDispatchState(remoteOperationBefore);
+    }
+}
+
+void StarfieldCruiseAdapter::DrainTravelObservations()
+{
+    const auto observations = m_travelObservations.Drain();
+    if (observations.overflowed) {
+        m_remoteRoute.Cancel();
+        m_runtime.OnLoadGame();
+        if (m_hudCruisePressed && InvokeHudCruiseUserEvent(m_hudCruiseUserEvent.c_str(), false)) {
+            m_hudCruisePressed = false;
+        }
+        m_hudCruiseOperationId = 0;
+        m_pendingCourseId = 0;
+        m_pendingCourseOperationId = 0;
+        m_courseRequestStarted = {};
+        ResetRemoteTravelState();
+        REX::ERROR("StarfieldCruiseAdapter: travel observation queue overflowed; navigation reset");
+        return;
+    }
+
+    for (std::size_t index = 0; index < observations.count; ++index) {
+        const auto& observation = observations.values[index];
+        if (observation.kind == TravelObservationInbox::Kind::LoadGame) {
+            m_remoteRoute.Cancel();
+            m_runtime.OnLoadGame();
+            m_stationTargets.Invalidate();
+            m_pendingMapCloseIdentity = {};
+            m_mapCloseStarted = {};
+            m_pendingCourseId = 0;
+            m_pendingCourseOperationId = 0;
+            m_courseRequestStarted = {};
+            if (m_hudCruisePressed && InvokeHudCruiseUserEvent(m_hudCruiseUserEvent.c_str(), false)) {
+                m_hudCruisePressed = false;
+            }
+            m_hudCruiseTimedOut = false;
+            m_hudCruiseOperationId = 0;
+            m_hudCruiseUserEvent.clear();
+            m_hudCruiseStarted = {};
+            ResetRemoteTravelState();
+            REX::INFO("StarfieldCruiseAdapter: TESLoadGameEvent performed one complete navigation reset");
+            continue;
+        }
+
+        m_lastTravelTicks = observation.ticks;
+        m_lastRemoteUnsettled = Clock::time_point {Clock::duration {observation.ticks}};
+        if (observation.kind == TravelObservationInbox::Kind::LoadingMenu) {
+            m_loadingMenuOpen = observation.opening;
+            continue;
+        }
+
+        if (observation.gravState == 0) {
+            m_gravJumpProgress = 1;
+            m_completedPlayerJump = false;
+        } else if (observation.gravState == 1 && m_gravJumpProgress == 1) {
+            m_gravJumpProgress = 2;
+        } else if (observation.gravState == 2 && m_gravJumpProgress == 2) {
+            m_gravJumpProgress = 0;
+            m_completedPlayerJump = true;
+        } else {
+            m_gravJumpProgress = 0;
+            m_completedPlayerJump = false;
+        }
+        REX::INFO("StarfieldCruiseAdapter: player grav-jump state={} destination={:08X} completed={}",
+            observation.gravState, observation.destinationId, m_completedPlayerJump);
+    }
+}
+
+void StarfieldCruiseAdapter::EvaluateRemoteArrival()
+{
+    const auto& navigation = m_runtime.CurrentNavigationState();
+    if (!navigation.remoteOperation || navigation.phase != NavigationPhase::PendingRemoteArrival) {
+        m_invalidFlightSince = {};
+        return;
+    }
+
+    const auto now = Clock::now();
+    const bool flying = IsPlayerFlying();
+
+    if (m_activeMapIdentity.IsValid() || m_loadingMenuOpen || !m_completedPlayerJump ||
+        !flying || m_lastRemoteUnsettled == Clock::time_point {} ||
+        now - m_lastRemoteUnsettled < RemoteWorldSettleTime || !m_lastHudCourse ||
+        m_lastHudCourse->overflowed || m_lastHudCourse->generation != m_hudMovieGeneration ||
+        m_lastHudCourse->publishedTicks <= m_lastTravelTicks) {
+        return;
+    }
+
+    const auto currentSystem = m_bodySource.ResolveCurrentSystem();
+    if (!currentSystem) {
+        return;
+    }
+
+    const auto operationId = navigation.remoteOperation->id;
+    RemoteArrivalObservation observation {
+        .operationId = operationId,
+        .currentSystem = *currentSystem,
+        .mapClosed = true,
+        .loadingMenuClosed = true,
+        .completedPlayerJump = true,
+        .settledFlight = true,
+        .flying = true,
+        .freshHudPublication = true,
+    };
+    observation.courseRows.reserve(m_lastHudCourse->rowCount);
+    for (std::size_t index = 0; index < m_lastHudCourse->rowCount; ++index) {
+        observation.courseRows.push_back(m_lastHudCourse->rows[index]);
+    }
+
+    const auto result = m_runtime.OnRemoteArrival(std::move(observation));
+    if (result.failedEffect) {
+        ClearRemoteDispatchState(operationId);
+        REX::ERROR("StarfieldCruiseAdapter: final-system remote activation failed to dispatch");
+    } else if (result.handled) {
+        if (m_runtime.CurrentNavigationState().phase == NavigationPhase::PreparingRemoteTarget) {
+            REX::INFO("StarfieldCruiseAdapter: operation={} accepted exact final-system arrival and dispatched one stock Cruise press", operationId);
+        } else {
+            REX::WARN("StarfieldCruiseAdapter: operation={} cancelled by ambiguous final-system HUD rows", operationId);
+        }
+    }
+}
+
+void StarfieldCruiseAdapter::HandleRemoteRouteResult(RemoteRouteResult result)
+{
+    if (!result) {
+        return;
+    }
+    EffectDispatchResult transition;
+    if (result.kind == RemoteRouteResult::Kind::Committed) {
+        transition = m_runtime.OnRemoteRouteCommitted(result.operationId, result.source);
+        if (transition.handled) {
+            ResetRemoteTravelState();
+            m_lastRemoteUnsettled = Clock::now();
+            m_lastTravelTicks = m_lastRemoteUnsettled.time_since_epoch().count();
+            REX::INFO("StarfieldCruiseAdapter: operation={} committed; vanilla owns travel until exact final-system arrival", result.operationId);
+        }
+    } else {
+        transition = m_runtime.OnRemoteRouteFailed(result.operationId, result.source);
+        if (transition.handled) {
+            ResetRemoteTravelState();
+        }
+    }
+    if (!transition.handled) {
+        REX::WARN("StarfieldCruiseAdapter: ignored stale remote route callback operation={} session={} generation={}",
+            result.operationId, result.source.session, result.source.generation);
+    }
+}
+
+void StarfieldCruiseAdapter::ClearRemoteDispatchState(OperationId operationId)
+{
+    if (operationId == 0) {
+        return;
+    }
+
+    if (m_hudCruisePressed && m_hudCruiseOperationId == operationId) {
+        if (InvokeHudCruiseUserEvent(m_hudCruiseUserEvent.c_str(), false)) {
+            m_hudCruisePressed = false;
+            m_hudCruiseTimedOut = false;
+            m_hudCruiseOperationId = 0;
+            m_hudCruiseUserEvent.clear();
+            m_hudCruiseStarted = {};
+        } else {
+            // Preserve enough state for UpdateTimeouts to retry the release.
+            m_hudCruiseTimedOut = true;
+        }
+    }
+    if (m_pendingCourseOperationId == operationId) {
+        m_pendingCourseId = 0;
+        m_pendingCourseOperationId = 0;
+        m_courseRequestStarted = {};
+    }
+    ResetRemoteTravelState();
+}
+
+void StarfieldCruiseAdapter::ResetRemoteTravelState()
+{
+    m_loadingMenuOpen = false;
+    m_gravJumpProgress = 0;
+    m_completedPlayerJump = false;
+    m_lastTravelTicks = 0;
+    m_lastRemoteUnsettled = {};
+    m_invalidFlightSince = {};
+    m_remoteCruiseInactiveSince = {};
+    m_lastHudCourse.reset();
 }
 
 void StarfieldCruiseAdapter::TrySubscribeHudFeed()
@@ -1231,17 +1595,39 @@ void StarfieldCruiseAdapter::UpdateHudRuntime()
     if (m_hudCruisePressed && active && InvokeHudCruiseUserEvent(m_hudCruiseUserEvent.c_str(), false)) {
         m_hudCruisePressed = false;
         m_hudCruiseTimedOut = false;
+        m_hudCruiseOperationId = 0;
         m_hudCruiseUserEvent.clear();
         m_hudCruiseStarted = {};
     }
 
     if (!m_lastCruiseActive || *m_lastCruiseActive != active) {
         m_lastCruiseActive = active;
+        const auto remoteOperationBefore = m_runtime.CurrentNavigationState().remoteOperation ?
+            m_runtime.CurrentNavigationState().remoteOperation->id : 0;
         const auto changed = m_runtime.OnCruiseChanged(active);
         if (changed.failedEffect) {
+            if (remoteOperationBefore != 0) {
+                ClearRemoteDispatchState(remoteOperationBefore);
+            }
             REX::ERROR("StarfieldCruiseAdapter: Cruise state transition failed to dispatch its next effect");
         }
         m_mapActionSurface->InvalidatePresentation();
+    }
+
+    const auto& navigation = m_runtime.CurrentNavigationState();
+    if (!active && navigation.remoteOperation && navigation.phase == NavigationPhase::AwaitingCourseLock) {
+        if (m_remoteCruiseInactiveSince == Clock::time_point {}) {
+            m_remoteCruiseInactiveSince = now;
+        } else if (now - m_remoteCruiseInactiveSince >= RemoteCruiseExitTimeout) {
+            const auto operationId = navigation.remoteOperation->id;
+            if (m_runtime.OnRemoteCruiseExitTimedOut(operationId)) {
+                ClearRemoteDispatchState(operationId);
+                REX::WARN("StarfieldCruiseAdapter: sustained manual Cruise exit cancelled remote operation={}", operationId);
+            }
+            m_remoteCruiseInactiveSince = {};
+        }
+    } else {
+        m_remoteCruiseInactiveSince = {};
     }
 }
 
@@ -1288,6 +1674,8 @@ MapActionEnvironment StarfieldCruiseAdapter::ReadMapActionEnvironment()
         .cruiseControlBound = controlBound,
         .cruiseEngageAvailable = m_hudSnapshot.engageAvailable,
         .vanillaActionEnabled = vanillaActionEnabled,
+        .remoteRoutingAvailable = m_remoteRoutingAvailable,
+        .inputDevice = m_presentedInputWasGamepad ? NavigationInputDevice::Gamepad : NavigationInputDevice::KeyboardMouse,
     };
 }
 
@@ -1305,6 +1693,22 @@ void StarfieldCruiseAdapter::UpdateTimeouts()
 {
     const auto now = Clock::now();
 
+    const auto& navigation = m_runtime.CurrentNavigationState();
+    if (navigation.remoteOperation && navigation.phase != NavigationPhase::RoutingRemote &&
+        !m_loadingMenuOpen && !IsPlayerFlying()) {
+        if (m_invalidFlightSince == Clock::time_point {}) {
+            m_invalidFlightSince = now;
+        } else if (now - m_invalidFlightSince >= RemoteWorldSettleTime) {
+            const auto operationId = navigation.remoteOperation->id;
+            if (m_runtime.OnRemoteFlightInvalidated()) {
+                ClearRemoteDispatchState(operationId);
+                REX::WARN("StarfieldCruiseAdapter: remote operation={} cancelled after settled landing, docking, or pilot exit", operationId);
+            }
+        }
+    } else {
+        m_invalidFlightSince = {};
+    }
+
     if (m_pendingMapCloseIdentity.IsValid() && m_mapCloseStarted != Clock::time_point {} && now - m_mapCloseStarted > MapCloseTimeout) {
         const auto identity = std::exchange(m_pendingMapCloseIdentity, {});
         m_mapCloseStarted = {};
@@ -1317,19 +1721,26 @@ void StarfieldCruiseAdapter::UpdateTimeouts()
     }
 
     if (m_hudCruisePressed && !m_hudCruiseTimedOut && m_hudCruiseStarted != Clock::time_point {} && now - m_hudCruiseStarted > CruisePressTimeout) {
+        const auto operationId = m_hudCruiseOperationId;
         m_hudCruiseTimedOut = true;
-        m_runtime.OnCruiseActivationTimedOut();
-        REX::WARN("StarfieldCruiseAdapter: Cruise activation timed out; retained destination as a mark");
+        const bool recovered = m_runtime.OnCruiseActivationTimedOut(operationId);
+        if (operationId != 0 && recovered) {
+            ClearRemoteDispatchState(operationId);
+            REX::WARN("StarfieldCruiseAdapter: remote Cruise activation timed out; operation={} cancelled", operationId);
+        } else {
+            REX::WARN("StarfieldCruiseAdapter: Cruise activation timed out; retained destination as a mark");
+        }
     }
 
     if (m_hudCruisePressed && m_hudCruiseTimedOut && InvokeHudCruiseUserEvent(m_hudCruiseUserEvent.c_str(), false)) {
         m_hudCruisePressed = false;
         m_hudCruiseTimedOut = false;
+        m_hudCruiseOperationId = 0;
         m_hudCruiseUserEvent.clear();
         m_hudCruiseStarted = {};
     }
 
-    if (m_pendingCourseId != 0 && m_courseRequestStarted != Clock::time_point {} && now - m_courseRequestStarted > CourseLockTimeout) {
+    if (m_pendingCourseId != 0 && m_pendingCourseOperationId == 0 && m_courseRequestStarted != Clock::time_point {} && now - m_courseRequestStarted > CourseLockTimeout) {
         const auto courseId = std::exchange(m_pendingCourseId, 0);
         m_courseRequestStarted = {};
         if (m_runtime.OnCourseLockTimedOut(courseId)) {
@@ -1360,8 +1771,11 @@ bool StarfieldCruiseAdapter::InstallInput()
 
     auto* receiver = static_cast<RE::BSInputEventReceiver*>(ui);
     const auto vtable = *reinterpret_cast<std::uintptr_t*>(receiver);
+    if (!vtable) {
+        return false;
+    }
     const auto original = *reinterpret_cast<std::uintptr_t*>(vtable + sizeof(void*));
-    if (!vtable || !original) {
+    if (!original || original == reinterpret_cast<std::uintptr_t>(&ProcessInput)) {
         return false;
     }
 
@@ -1380,6 +1794,14 @@ void StarfieldCruiseAdapter::ProcessInput(RE::BSInputEventReceiver* receiver, co
 void StarfieldCruiseAdapter::ProcessInputEvents(RE::BSInputEventReceiver* receiver, const RE::InputEvent* head)
 {
     const auto originalInput = m_originalInput.load(std::memory_order_acquire);
+
+    if (!m_initialized) {
+        if (originalInput) {
+            originalInput(receiver, head);
+        }
+        return;
+    }
+
 
     struct Fix
     {
@@ -1557,7 +1979,7 @@ bool StarfieldCruiseAdapter::InvokeHudCruiseUserEvent(const char* userEvent, boo
     return invoked;
 }
 
-bool StarfieldCruiseAdapter::DispatchCourse(FormID courseId)
+bool StarfieldCruiseAdapter::DispatchCourse(FormID courseId, OperationId operationId)
 {
     if (courseId == 0 || ReadHudSnapshot().cruiseState != ObservedCruiseState::Active) {
         return false;
@@ -1583,8 +2005,9 @@ bool StarfieldCruiseAdapter::DispatchCourse(FormID courseId)
     }
 
     m_pendingCourseId = courseId;
+    m_pendingCourseOperationId = operationId;
     m_courseRequestStarted = Clock::now();
-    REX::INFO("StarfieldCruiseAdapter: dispatched course request uBodyID={:08X}", courseId);
+    REX::INFO("StarfieldCruiseAdapter: dispatched course request uBodyID={:08X} operation={}", courseId, operationId);
     return true;
 }
 
@@ -1612,12 +2035,17 @@ bool StarfieldCruiseAdapter::Commands::CloseMap()
     return false;
 }
 
+bool StarfieldCruiseAdapter::Commands::BeginRemoteRoute(const ::BeginRemoteRoute& effect)
+{
+    return m_owner.m_remoteRoutingAvailable && m_owner.m_remoteRoute.Begin(effect, m_owner.m_activeMapIdentity);
+}
+
 bool StarfieldCruiseAdapter::Commands::AssignStationTarget(FormID targetId)
 {
     return m_owner.m_stationTargets.Assign(targetId);
 }
 
-bool StarfieldCruiseAdapter::Commands::PressCruise()
+bool StarfieldCruiseAdapter::Commands::PressCruise(OperationId operationId)
 {
     const auto hud = m_owner.ReadHudSnapshot();
     if (m_owner.m_hudCruisePressed ||
@@ -1627,16 +2055,24 @@ bool StarfieldCruiseAdapter::Commands::PressCruise()
     }
 
     bool gamepad = m_owner.m_presentedInputWasGamepad;
-    if (const auto device = std::exchange(m_owner.m_pendingCruiseInputDevice, std::nullopt)) {
+    if (operationId != 0) {
+        const auto& navigation = m_owner.m_runtime.CurrentNavigationState();
+        if (!navigation.remoteOperation || navigation.remoteOperation->id != operationId) {
+            return false;
+        }
+        gamepad = navigation.remoteOperation->inputDevice == NavigationInputDevice::Gamepad;
+    } else if (const auto device = std::exchange(m_owner.m_pendingCruiseInputDevice, std::nullopt)) {
         gamepad = *device ==
             static_cast<std::uint32_t>(RE::InputEvent::DeviceType::kGamepad);
     }
     m_owner.m_hudCruiseUserEvent = gamepad ? GamepadCruiseUserEvent : CruiseUserEvent;
     m_owner.m_hudCruisePressed = true;
     m_owner.m_hudCruiseTimedOut = false;
+    m_owner.m_hudCruiseOperationId = operationId;
     m_owner.m_hudCruiseStarted = Clock::now();
     if (!m_owner.InvokeHudCruiseUserEvent(m_owner.m_hudCruiseUserEvent.c_str(), true)) {
         m_owner.m_hudCruisePressed = false;
+        m_owner.m_hudCruiseOperationId = 0;
         m_owner.m_hudCruiseUserEvent.clear();
         m_owner.m_hudCruiseStarted = {};
         return false;
@@ -1644,7 +2080,7 @@ bool StarfieldCruiseAdapter::Commands::PressCruise()
     return true;
 }
 
-bool StarfieldCruiseAdapter::Commands::RequestCourse(FormID courseId)
+bool StarfieldCruiseAdapter::Commands::RequestCourse(FormID courseId, OperationId operationId)
 {
-    return m_owner.DispatchCourse(courseId);
+    return m_owner.DispatchCourse(courseId, operationId);
 }

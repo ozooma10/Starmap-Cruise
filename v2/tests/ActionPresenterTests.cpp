@@ -39,7 +39,7 @@ namespace
                 .kind = ::DestinationKind::Planet,
                 .targetId = 0x10,
                 .courseId = 0x10,
-                .systemId = 0x100,
+                .system = {.starFormId = 0x1000, .numericId = 0x100},
                 .displayName = "Jemison",
             },
         };

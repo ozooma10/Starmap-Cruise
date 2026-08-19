@@ -67,7 +67,7 @@ public:
 
     // Allows the first late cockpit-system resolution to complete an already-open session. Once captured, it cannot be rewritten.
     bool CaptureCurrentSystem(const MapSessionIdentity& identity, FormID systemId);
-    // Captures the current/player STDT identity separately from the numeric galaxy-system ID.
+    // Captures the map-independent player STDT separately from the numeric galaxy-system ID.
     bool CaptureCurrentSystemForm(const MapSessionIdentity& identity, FormID systemFormId);
 
     SelectionSnapshot Snapshot() const;

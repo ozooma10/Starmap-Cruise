@@ -14,9 +14,10 @@ public:
     virtual ~CruiseCommands() = default;
 
     virtual bool CloseMap() = 0;
+    virtual bool BeginRemoteRoute(const ::BeginRemoteRoute& effect) = 0;
     virtual bool AssignStationTarget(FormID targetId) = 0;
-    virtual bool PressCruise() = 0;
-    virtual bool RequestCourse(FormID courseId) = 0;
+    virtual bool PressCruise(OperationId operationId) = 0;
+    virtual bool RequestCourse(FormID courseId, OperationId operationId) = 0;
 };
 
 struct EffectDispatchResult
@@ -42,6 +43,8 @@ struct MapActionEnvironment
     bool cruiseControlBound {false};
     bool cruiseEngageAvailable {false};
     bool vanillaActionEnabled {false};
+    bool remoteRoutingAvailable {false};
+    NavigationInputDevice inputDevice {NavigationInputDevice::KeyboardMouse};
 };
 
 class CruiseRuntime
@@ -69,11 +72,19 @@ public:
 
     EffectDispatchResult ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment);
 
+    EffectDispatchResult OnRemoteRouteCommitted(OperationId operationId, const MapSessionIdentity& identity);
+    EffectDispatchResult OnRemoteRouteFailed(OperationId operationId, const MapSessionIdentity& identity);
+    EffectDispatchResult OnRemoteArrival(RemoteArrivalObservation observation);
+    bool OnRemoteOperationCancelled(OperationId operationId);
+    bool OnRemoteFlightInvalidated();
+    bool OnLoadGame();
+    bool OnRemoteCruiseExitTimedOut(OperationId operationId);
+
     EffectDispatchResult OnCruiseChanged(bool active);
-    bool OnCruiseActivationTimedOut();
+    bool OnCruiseActivationTimedOut(OperationId operationId = 0);
 
     EffectDispatchResult OnCourseLockChanged(FormID lockedCourseId);
-    bool OnCourseLockTimedOut(FormID courseId);
+    bool OnCourseLockTimedOut(FormID courseId, OperationId operationId = 0);
 
     const NavigationState& CurrentNavigationState() const;
 

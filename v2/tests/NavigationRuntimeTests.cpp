@@ -5,7 +5,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
+#include <vector>
 
 namespace
 {
@@ -26,7 +28,7 @@ namespace
             .kind = ::DestinationKind::Planet,
             .targetId = 0x00000010,
             .courseId = 0x00000010,
-            .systemId = 0x00000100,
+            .system = {.starFormId = 0x00001000, .numericId = 0x00000100},
             .displayName = "Jemison",
         };
     }
@@ -37,8 +39,51 @@ namespace
             .kind = ::DestinationKind::Planet,
             .targetId = 0x00000020,
             .courseId = 0x00000020,
-            .systemId = 0x00000100,
+            .system = {.starFormId = 0x00001000, .numericId = 0x00000100},
             .displayName = "Mars",
+        };
+    }
+
+    ::Destination Chawla()
+    {
+        return ::Destination {
+            .kind = ::DestinationKind::Moon,
+            .targetId = 0x0005E315,
+            .courseId = 0x0005E315,
+            .system = {.starFormId = 0x0005E60A, .numericId = 0x00011720},
+            .remotePlan = {.allowedWaypointIds = {0x0005E313}},
+            .displayName = "Chawla",
+        };
+    }
+
+    constexpr ::RemoteOperationSource RemoteSource {
+        .session = 7,
+        .movieGeneration = 3,
+    };
+
+    ::OperationId StartRemote(::NavigationRuntime& runtime)
+    {
+        const auto selected = runtime.SelectDestination(
+            Chawla(), ::SelectionIntent::StartRemoteCruise, false,
+            {.source = RemoteSource, .inputDevice = ::NavigationInputDevice::Gamepad});
+        const auto* begin = FindEffect<::BeginRemoteRoute>(selected);
+        Require(begin != nullptr, "remote selection did not emit BeginRemoteRoute");
+        Require(begin->operationId != 0, "remote operation did not receive a monotonic ID");
+        return begin->operationId;
+    }
+
+    ::RemoteArrivalObservation ReadyArrival(::OperationId operationId, std::vector<::FormID> rows)
+    {
+        return {
+            .operationId = operationId,
+            .currentSystem = {.starFormId = 0x0005E60A, .numericId = 0x00011720},
+            .mapClosed = true,
+            .loadingMenuClosed = true,
+            .completedPlayerJump = true,
+            .settledFlight = true,
+            .flying = true,
+            .freshHudPublication = true,
+            .courseRows = std::move(rows),
         };
     }
 
@@ -212,13 +257,13 @@ namespace
     {
         ::NavigationRuntime runtime;
         auto destination = Jemison();
-        destination.systemId = 0;
+        destination.system = {.starFormId = 0x0005E5CB, .numericId = 0};
 
         const auto result = runtime.SelectDestination(destination, ::SelectionIntent::Mark, false);
 
         Require(result.handled, "valid Sol destination was rejected");
         Require(runtime.CurrentState().destination.has_value(), "valid Sol destination was not retained");
-        Require(runtime.CurrentState().destination->systemId == ::FormID {0}, "Sol destination changed system identity");
+        Require(runtime.CurrentState().destination->system == ::SystemIdentity {.starFormId = 0x0005E5CB, .numericId = 0}, "Sol destination changed system identity");
     }
 
     void TestCloseMapFailureAbandonsIncompleteSelection()
@@ -284,6 +329,90 @@ namespace
         Require(runtime.CurrentState().destination.has_value(), "stale failure discarded the destination");
     }
 
+    void TestRemoteOperationCorrelationAndIntermediatePreservation()
+    {
+        ::NavigationRuntime runtime;
+        const auto operationId = StartRemote(runtime);
+
+        Require(runtime.CurrentState().phase == ::NavigationPhase::RoutingRemote, "remote selection did not enter RoutingRemote");
+        Require(runtime.CurrentState().remoteOperation && runtime.CurrentState().remoteOperation->inputDevice == ::NavigationInputDevice::Gamepad, "remote operation lost its input device");
+        Require(!runtime.RemoteRouteCommitted(operationId + 1, RemoteSource).handled, "stale operation callback was accepted");
+        Require(!runtime.RemoteRouteCommitted(operationId, {.session = 8, .movieGeneration = 3}).handled, "wrong-session callback was accepted");
+
+        Require(runtime.RemoteRouteCommitted(operationId, RemoteSource).handled, "exact route commitment was rejected");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "route commitment did not enter PendingRemoteArrival");
+        Require(!runtime.InvalidateMapSelection(), "movie invalidation discarded post-route travel");
+
+        auto intermediate = ReadyArrival(operationId, {0x0005E313});
+        intermediate.currentSystem = {.starFormId = 0x0005E607, .numericId = 0x00011AF0};
+        Require(!runtime.ObserveRemoteArrival(std::move(intermediate)).handled, "intermediate system was mistaken for final arrival");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "intermediate jump discarded the pending operation");
+    }
+
+    void TestRemoteLatentMoonAcquiresOnlyFinalCourse()
+    {
+        ::NavigationRuntime runtime;
+        const auto operationId = StartRemote(runtime);
+        runtime.RemoteRouteCommitted(operationId, RemoteSource);
+
+        const auto arrived = runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313, 0x00ABCDEF}));
+        const auto* press = FindEffect<::PressCruise>(arrived);
+        Require(press && press->operationId == operationId, "latent arrival did not emit one correlated Cruise press");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::PreparingRemoteTarget, "latent arrival did not enter PreparingRemoteTarget");
+
+        const auto activated = runtime.CruiseChanged(true);
+        const auto* request = FindEffect<::RequestCourse>(activated);
+        Require(request && request->operationId == operationId, "remote Cruise activation lost operation correlation");
+        Require(request->courseId == Chawla().courseId, "remote Cruise requested the waypoint instead of the final moon");
+        Require(!runtime.CourseLockChanged(0).handled, "empty delayed lock cancelled the operation");
+        Require(runtime.CourseLockChanged(0x0005E313).handled, "ordered parent lock was rejected");
+        Require(runtime.CourseLockChanged(0x0005E313).handled, "repeated parent lock was not idempotent");
+        Require(runtime.CourseLockChanged(Chawla().courseId).handled, "exact final moon lock was rejected");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::CourseLocked, "exact final lock did not complete the operation");
+        Require(!runtime.CurrentState().remoteOperation, "completed operation retained asynchronous ownership");
+    }
+
+    void TestRemoteAmbiguityUnrelatedLockAndLoadReset()
+    {
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+            Require(runtime.ObserveRemoteArrival(ReadyArrival(operationId, {Chawla().courseId, Chawla().courseId})).handled, "duplicate final rows were not handled");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "duplicate final rows did not fail closed");
+        }
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+            runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313}));
+            runtime.CruiseChanged(true);
+            Require(runtime.CourseLockChanged(0x00DEAD00).handled, "unrelated nonzero lock was ignored");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "unrelated lock did not cancel the operation");
+        }
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+            Require(runtime.ResetForLoad(), "load did not reset pending remote travel");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "load retained a remote operation");
+        }
+    }
+
+    void TestRemoteMovieReplacementAndEffectFailureAreCorrelated()
+    {
+        ::NavigationRuntime runtime;
+        const auto operationId = StartRemote(runtime);
+        Require(!runtime.RecoverFromEffectFailure(::BeginRemoteRoute {.operationId = operationId + 1, .source = RemoteSource, .destination = Chawla()}), "stale BeginRemoteRoute failure was accepted");
+        Require(runtime.InvalidateMapSelection(), "movie replacement did not cancel RoutingRemote");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "movie replacement retained RoutingRemote");
+
+        const auto nextOperationId = StartRemote(runtime);
+        Require(nextOperationId > operationId, "operation IDs were reused after cancellation");
+        Require(runtime.RecoverFromEffectFailure(::BeginRemoteRoute {.operationId = nextOperationId, .source = RemoteSource, .destination = Chawla()}), "exact BeginRemoteRoute failure was not recovered");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "route effect failure retained the operation");
+    }
+
     void RunTests()
     {
         TestTapMarksDestination();
@@ -299,6 +428,10 @@ namespace
         TestCruisePressFailureFallsBackToMark();
         TestOnlyExactCourseRequestFailureRecovers();
         TestFailureOutsideOwningPhaseIsIgnored();
+        TestRemoteOperationCorrelationAndIntermediatePreservation();
+        TestRemoteLatentMoonAcquiresOnlyFinalCourse();
+        TestRemoteAmbiguityUnrelatedLockAndLoadReset();
+        TestRemoteMovieReplacementAndEffectFailureAreCorrelated();
     }
 }
 
