@@ -167,6 +167,34 @@ namespace
         Require(view.attempts.size() == 2, "invalidated presentation did not touch the view again");
     }
 
+    void TestFailedReplacementPreservesLastAppliedPresentation()
+    {
+        ::ActionPresenter presenter;
+        FakeMapActionView view;
+        const auto original = ReadyDecision();
+        Require(presenter.Present(original, view).applied, "original presentation setup failed");
+
+        auto replacement = original;
+        replacement.control = ::ActionControl::TapOnly;
+        replacement.enabled = false;
+        replacement.label = "TARGET DATA IS UPDATING";
+        replacement.holdLabel.clear();
+
+        view.applySucceeds = false;
+        const auto failed = presenter.Present(replacement, view);
+        Require(failed.changed && !failed.applied, "failed replacement produced the wrong result");
+        Require(view.attempts.size() == 2, "failed replacement was not attempted once");
+
+        view.applySucceeds = true;
+        const auto originalAgain = presenter.Present(original, view);
+        Require(!originalAgain.changed && originalAgain.applied, "failed replacement corrupted the last applied cache");
+        Require(view.attempts.size() == 2, "already-rendered original was written after a failed replacement");
+
+        const auto retried = presenter.Present(replacement, view);
+        Require(retried.changed && retried.applied, "replacement was not retryable");
+        Require(view.attempts.size() == 3, "replacement retry touched the view the wrong number of times");
+    }
+
     void RunTests()
     {
         TestFirstPresentationIsApplied();
@@ -176,6 +204,7 @@ namespace
         TestHiddenDecisionIsApplied();
         TestFailedApplicationIsRetried();
         TestInvalidationForcesReapplication();
+        TestFailedReplacementPreservesLastAppliedPresentation();
     }
 }
 

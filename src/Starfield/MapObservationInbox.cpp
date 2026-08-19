@@ -1,4 +1,5 @@
 #include "Starfield/MapObservationInbox.h"
+#include "Domain/NonzeroCounter.h"
 
 #include <utility>
 
@@ -6,10 +7,7 @@ void MapObservationInbox::RecordMovieCreated(std::int64_t bornTicks)
 {
     std::lock_guard lock {m_mutex};
 
-    m_movieGeneration++;
-    if (m_movieGeneration == 0) {
-        m_movieGeneration++;
-    }
+    m_movieGeneration = CFS::AdvanceNonzeroCounter(m_movieGeneration);
 
     m_movieCreated = true;
     m_movieBornTicks = bornTicks;
@@ -45,10 +43,7 @@ void MapObservationInbox::RecordLifecycle(bool opening)
     auto identity = m_currentIdentity;
 
     if (opening) {
-        m_session++;
-        if (m_session == 0) {
-            m_session++;
-        }
+        m_session = CFS::AdvanceNonzeroCounter(m_session);
 
         identity = {
             .session = m_session,

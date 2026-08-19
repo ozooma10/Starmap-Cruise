@@ -58,8 +58,8 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
     }
 
     if (snapshot.marker.kind == ObservedTargetKind::Station) {
-        if (snapshot.marker.resolvedTargetId == 0 || snapshot.marker.resolvedCourseId == 0 || !snapshot.marker.displayedSystemFormId || *snapshot.marker.displayedSystemFormId == 0 ||
-            !snapshot.currentSystemFormId || *snapshot.currentSystemFormId == 0) {
+        if (snapshot.marker.resolvedTargetId == 0 || snapshot.marker.resolvedCourseId == 0 || !snapshot.marker.displayedSystemFormId || *snapshot.marker.displayedSystemFormId == 0 || !snapshot.currentSystemFormId ||
+            *snapshot.currentSystemFormId == 0) {
             return Disabled(SelectionReason::TargetSystemUnavailable);
         }
 
@@ -107,6 +107,10 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
     };
 
     if (!snapshot.resolvedBody->system.IsValid()) {
+        return Disabled(SelectionReason::TargetSystemUnavailable);
+    }
+
+    if (snapshot.resolvedBody->remotePlan && !snapshot.resolvedBody->remotePlan->IsValid()) {
         return Disabled(SelectionReason::TargetSystemUnavailable);
     }
 

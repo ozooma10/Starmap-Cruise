@@ -1,5 +1,6 @@
 #pragma once
 
+void RunDomainTests();
 void RunNavigationRuntimeTests();
 void RunSelectionPolicyTests();
 void RunActionPolicyTests();

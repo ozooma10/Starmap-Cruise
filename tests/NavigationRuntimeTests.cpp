@@ -63,9 +63,7 @@ namespace
 
     ::OperationId StartRemote(::NavigationRuntime& runtime)
     {
-        const auto selected = runtime.SelectDestination(
-            Chawla(), ::SelectionIntent::StartRemoteCruise, false,
-            {.source = RemoteSource, .inputDevice = ::NavigationInputDevice::Gamepad});
+        const auto selected = runtime.SelectDestination(Chawla(), ::SelectionIntent::StartRemoteCruise, false, {.source = RemoteSource, .inputDevice = ::NavigationInputDevice::Gamepad});
         const auto* begin = FindEffect<::BeginRemoteRoute>(selected);
         Require(begin != nullptr, "remote selection did not emit BeginRemoteRoute");
         Require(begin->operationId != 0, "remote operation did not receive a monotonic ID");
@@ -413,6 +411,253 @@ namespace
         Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "route effect failure retained the operation");
     }
 
+    void TestRemoteSelectionRejectsUnsafeContexts()
+    {
+        {
+            ::NavigationRuntime runtime;
+            const auto result = runtime.SelectDestination(Chawla(), ::SelectionIntent::StartRemoteCruise, true, {.source = RemoteSource});
+            Require(!result.handled && !result.effect, "active Cruise started remote routing");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "rejected active-Cruise remote selection changed state");
+        }
+        {
+            ::NavigationRuntime runtime;
+            const auto result = runtime.SelectDestination(Chawla(), ::SelectionIntent::StartRemoteCruise, false, {.source = {.session = 0, .movieGeneration = RemoteSource.movieGeneration}});
+            Require(!result.handled && !result.effect, "zero-session remote source was accepted");
+        }
+        {
+            ::NavigationRuntime runtime;
+            const auto result = runtime.SelectDestination(Chawla(), ::SelectionIntent::StartRemoteCruise, false, {.source = {.session = RemoteSource.session, .movieGeneration = 0}});
+            Require(!result.handled && !result.effect, "zero-generation remote source was accepted");
+        }
+        {
+            ::NavigationRuntime runtime;
+            auto station = Jemison();
+            station.kind = ::DestinationKind::Station;
+            const auto result = runtime.SelectDestination(station, ::SelectionIntent::StartRemoteCruise, false, {.source = RemoteSource});
+            Require(!result.handled && !result.effect, "station started remote routing");
+        }
+    }
+
+    void TestRemoteFailureCancellationAndLoadResetAreCorrelated()
+    {
+        ::NavigationRuntime runtime;
+        auto operationId = StartRemote(runtime);
+
+        Require(!runtime.RemoteRouteFailed(operationId + 1, RemoteSource).handled, "stale remote-route failure was accepted");
+        Require(!runtime.RemoteRouteFailed(operationId, {.session = 8, .movieGeneration = 3}).handled, "wrong-source remote-route failure was accepted");
+        Require(runtime.RemoteRouteFailed(operationId, RemoteSource).handled, "exact remote-route failure was rejected");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "remote-route failure retained navigation state");
+
+        operationId = StartRemote(runtime);
+        Require(!runtime.CancelRemoteOperation(operationId + 1), "stale cancellation was accepted");
+        Require(runtime.CancelRemoteOperation(operationId), "exact cancellation was rejected");
+        Require(!runtime.CancelRemoteOperation(operationId), "repeated cancellation was accepted");
+
+        operationId = StartRemote(runtime);
+        Require(runtime.InvalidateRemoteFlight(), "remote-flight invalidation was rejected");
+        Require(!runtime.InvalidateRemoteFlight(), "repeated remote-flight invalidation was accepted");
+
+        Require(!runtime.ResetForLoad(), "idle load reset reported a change");
+        runtime.SelectDestination(Jemison(), ::SelectionIntent::Mark, false);
+        runtime.MapClosed();
+        Require(runtime.ResetForLoad(), "load did not clear a stable destination");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::Idle && !runtime.CurrentState().destination, "load retained stable navigation state");
+    }
+
+    void TestRemoteArrivalRequiresEveryFreshTravelProof()
+    {
+        ::NavigationRuntime runtime;
+        const auto operationId = StartRemote(runtime);
+        runtime.RemoteRouteCommitted(operationId, RemoteSource);
+
+        auto observation = ReadyArrival(operationId, {0x0005E313});
+        observation.operationId++;
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "wrong operation arrival was accepted");
+
+        observation = ReadyArrival(operationId, {0x0005E313});
+        observation.mapClosed = false;
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "arrival without map close was accepted");
+
+        observation = ReadyArrival(operationId, {0x0005E313});
+        observation.loadingMenuClosed = false;
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "arrival with loading menu open was accepted");
+
+        observation = ReadyArrival(operationId, {0x0005E313});
+        observation.completedPlayerJump = false;
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "incomplete player jump was accepted");
+
+        observation = ReadyArrival(operationId, {0x0005E313});
+        observation.settledFlight = false;
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "unsettled flight was accepted");
+
+        observation = ReadyArrival(operationId, {0x0005E313});
+        observation.flying = false;
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "non-flight arrival was accepted");
+
+        observation = ReadyArrival(operationId, {0x0005E313});
+        observation.freshHudPublication = false;
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "stale HUD arrival was accepted");
+
+        observation = ReadyArrival(operationId, {0x0005E313});
+        observation.currentSystem = {.starFormId = 0x0005E607, .numericId = 0x00011AF0};
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "wrong-system arrival was accepted");
+
+        Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "rejected travel proof discarded the owned operation");
+        Require(runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313})).handled, "complete fresh travel proof was rejected");
+    }
+
+    void TestRemoteWaypointEvidenceMustBeUniqueAndOrdered()
+    {
+        auto destination = Chawla();
+        destination.remotePlan.allowedWaypointIds = {0x0005E313, 0x0005E314};
+
+        const auto start = [&](::NavigationRuntime& runtime) {
+            const auto selected = runtime.SelectDestination(destination, ::SelectionIntent::StartRemoteCruise, false, {.source = RemoteSource});
+            const auto* begin = FindEffect<::BeginRemoteRoute>(selected);
+            Require(begin != nullptr, "custom remote route did not start");
+            Require(runtime.RemoteRouteCommitted(begin->operationId, RemoteSource).handled, "custom remote route did not commit");
+            return begin->operationId;
+        };
+
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = start(runtime);
+            Require(runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313, 0x0005E313})).handled, "duplicate waypoint evidence was not handled");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "duplicate waypoint evidence did not fail closed");
+        }
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = start(runtime);
+            Require(!runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E314})).handled, "non-first waypoint was accepted as arrival proof");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "out-of-order arrival proof discarded the operation");
+        }
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = start(runtime);
+            Require(!runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x00ABCDEF})).handled, "unrelated HUD row was accepted as arrival proof");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "unrelated HUD row discarded the operation");
+        }
+    }
+
+    void TestLocalCallbacksArePhaseSensitiveAndIdempotent()
+    {
+        ::NavigationRuntime runtime;
+        Require(!runtime.MapClosed().handled, "idle map close was handled");
+        Require(!runtime.CruiseChanged(true).handled, "idle Cruise activation was handled");
+        Require(!runtime.CourseLockChanged(Jemison().courseId).handled, "idle course lock was handled");
+
+        runtime.SelectDestination(Jemison(), ::SelectionIntent::Mark, false);
+        runtime.MapClosed();
+        Require(!runtime.MapClosed().handled, "duplicate map close was handled");
+
+        Require(runtime.CourseLockChanged(Jemison().courseId).handled, "exact lock did not promote a retained mark");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::CourseLocked, "retained mark did not become course-locked");
+        Require(runtime.CruiseChanged(false).handled, "Cruise exit did not demote a local course lock");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::Marked, "Cruise exit did not retain the mark");
+        Require(!runtime.CruiseChanged(false).handled, "repeated Cruise exit changed a stable mark");
+
+        runtime.CruiseChanged(true);
+        Require(runtime.CurrentState().phase == ::NavigationPhase::AwaitingCourseLock, "Cruise activation did not restore course wait");
+        Require(runtime.CruiseChanged(false).handled, "Cruise exit did not cancel local course wait");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::Marked, "course-wait cancellation did not retain the mark");
+    }
+
+    void TestRemoteCruiseExitTimeoutIsPhaseAndOperationBound()
+    {
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+            Require(!runtime.RemoteCruiseExitTimedOut(operationId), "arrival-phase timeout was accepted as Cruise-exit timeout");
+        }
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+            runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313}));
+            Require(!runtime.RemoteCruiseExitTimedOut(operationId + 1), "stale remote Cruise timeout was accepted");
+            Require(runtime.RemoteCruiseExitTimedOut(operationId), "preparing remote Cruise timeout was rejected");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "preparing timeout retained the remote operation");
+        }
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+            runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313}));
+            runtime.CruiseChanged(true);
+            Require(runtime.RemoteCruiseExitTimedOut(operationId), "remote course-wait timeout was rejected");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "remote course-wait timeout retained the operation");
+        }
+    }
+
+    void TestRemoteEffectFailuresRequireExactOperation()
+    {
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+            const auto arrived = runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313}));
+            const auto* press = FindEffect<::PressCruise>(arrived);
+            Require(press != nullptr, "remote arrival did not emit Cruise press");
+            Require(!runtime.RecoverFromEffectFailure(::PressCruise {.operationId = operationId + 1}), "wrong remote Cruise failure was accepted");
+            Require(runtime.RecoverFromEffectFailure(*press), "exact remote Cruise failure was rejected");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "remote Cruise failure retained operation state");
+        }
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+            runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313}));
+            const auto request = runtime.CruiseChanged(true);
+            const auto* course = FindEffect<::RequestCourse>(request);
+            Require(course != nullptr, "remote activation did not emit course request");
+            Require(!runtime.RecoverFromEffectFailure(::RequestCourse {.courseId = course->courseId}), "uncorrelated remote course failure was accepted");
+            Require(
+                !runtime.RecoverFromEffectFailure(
+                    ::RequestCourse {
+                        .courseId = course->courseId,
+                        .operationId = operationId + 1,
+                    }
+                ),
+                "wrong remote course operation was accepted"
+            );
+            Require(runtime.RecoverFromEffectFailure(*course), "exact remote course failure was rejected");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "remote course failure retained operation state");
+        }
+    }
+
+    void TestRemoteOperationValidityRequiresEveryOwnedIdentity()
+    {
+        auto operation = ::RemoteCruiseOperation {
+            .id = 1,
+            .source = RemoteSource,
+            .inputDevice = ::NavigationInputDevice::KeyboardMouse,
+            .destination = Chawla(),
+        };
+        Require(operation.IsValid(), "complete remote operation was invalid");
+        Require(RemoteSource.IsValid(), "complete remote source was invalid");
+
+        auto changed = operation;
+        changed.id = 0;
+        Require(!changed.IsValid(), "zero operation ID was accepted");
+
+        changed = operation;
+        changed.source.session = 0;
+        Require(!changed.IsValid(), "zero source session was accepted");
+
+        changed = operation;
+        changed.source.movieGeneration = 0;
+        Require(!changed.IsValid(), "zero movie generation was accepted");
+
+        changed = operation;
+        changed.destination.targetId = 0;
+        Require(!changed.IsValid(), "invalid destination was accepted by remote operation");
+
+        changed = operation;
+        changed.destination.kind = ::DestinationKind::Station;
+        Require(!changed.IsValid(), "station was accepted by remote operation");
+    }
+
     void RunTests()
     {
         TestTapMarksDestination();
@@ -432,6 +677,14 @@ namespace
         TestRemoteLatentMoonAcquiresOnlyFinalCourse();
         TestRemoteAmbiguityUnrelatedLockAndLoadReset();
         TestRemoteMovieReplacementAndEffectFailureAreCorrelated();
+        TestRemoteSelectionRejectsUnsafeContexts();
+        TestRemoteFailureCancellationAndLoadResetAreCorrelated();
+        TestRemoteArrivalRequiresEveryFreshTravelProof();
+        TestRemoteWaypointEvidenceMustBeUniqueAndOrdered();
+        TestLocalCallbacksArePhaseSensitiveAndIdempotent();
+        TestRemoteCruiseExitTimeoutIsPhaseAndOperationBound();
+        TestRemoteEffectFailuresRequireExactOperation();
+        TestRemoteOperationValidityRequiresEveryOwnedIdentity();
     }
 }
 

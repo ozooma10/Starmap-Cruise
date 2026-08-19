@@ -5,6 +5,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <vector>
 
 namespace
 {
@@ -90,18 +92,67 @@ namespace
 
         const auto first = inbox.Drain().course;
         Require(first.has_value(), "course-row publication was not recorded");
-        Require(first->rowCount == 2 && first->rows[0] == 0x1000 && first->rows[1] == 0x2000,
-            "course-row publication did not copy exact IDs");
+        Require(first->rowCount == 2 && first->rows[0] == 0x1000 && first->rows[1] == 0x2000, "course-row publication did not copy exact IDs");
         Require(!first->overflowed, "bounded course-row publication reported overflow");
-        Require(first->revision != 0 && first->publishedTicks != 0,
-            "course-row publication lacked freshness identity");
+        Require(first->revision != 0 && first->publishedTicks != 0, "course-row publication lacked freshness identity");
 
         inbox.RecordCourse(generation, 0, rows, rows.size() + 1, false);
         const auto second = inbox.Drain().course;
-        Require(second.has_value() && second->overflowed,
-            "oversized course-row publication did not fail closed");
+        Require(second.has_value() && second->overflowed, "oversized course-row publication did not fail closed");
         Require(second->rowCount == rows.size(), "oversized row count escaped the copied bound");
         Require(second->revision > first->revision, "course publication revision was not monotonic");
+    }
+
+    void TestInvalidGenerationsAndEmptyDrainAreRejected()
+    {
+        HudObservationInbox inbox;
+        Require(!inbox.IsCurrentGeneration(0), "zero generation was current before a movie");
+        inbox.RecordCourse(0, 0x1234);
+        inbox.RecordCourse(1, 0x1234);
+        const auto empty = inbox.Drain();
+        Require(!empty.movie && !empty.course, "inactive HUD inbox produced observations");
+
+        inbox.RecordMovieCreated(100);
+        const auto generation = inbox.Drain().movie->generation;
+        Require(!inbox.IsCurrentGeneration(0), "zero generation became current");
+        Require(!inbox.IsCurrentGeneration(generation + 1), "future generation became current");
+        inbox.RecordCourse(0, 0x1234);
+        inbox.RecordCourse(generation + 1, 0x5678);
+        Require(!inbox.Drain().course, "invalid generation published a course");
+    }
+
+    void TestExplicitOverflowAndEmptyRowsArePreserved()
+    {
+        HudObservationInbox inbox;
+        inbox.RecordMovieCreated(100);
+        const auto generation = inbox.Drain().movie->generation;
+
+        std::array<FormID, HudObservationInbox::MaxCourseRows> rows {};
+        inbox.RecordCourse(generation, 0, rows, 0, true);
+        const auto observation = inbox.Drain().course;
+        Require(observation.has_value(), "empty course publication was lost");
+        Require(observation->courseId == 0 && observation->rowCount == 0, "empty course publication invented row data");
+        Require(observation->overflowed, "producer overflow flag was lost");
+    }
+
+    void TestConcurrentCoursePublishersRemainCoherent()
+    {
+        HudObservationInbox inbox;
+        inbox.RecordMovieCreated(100);
+        const auto generation = inbox.Drain().movie->generation;
+
+        std::vector<std::thread> producers;
+        for (FormID id = 1; id <= 16; ++id) {
+            producers.emplace_back([&inbox, generation, id] { inbox.RecordCourse(generation, id); });
+        }
+        for (auto& producer : producers) {
+            producer.join();
+        }
+
+        const auto observation = inbox.Drain().course;
+        Require(observation.has_value(), "concurrent publishers lost every course");
+        Require(observation->generation == generation && observation->courseId != 0, "concurrent course publication was torn");
+        Require(observation->revision == 16, "concurrent course revision lost a publication");
     }
 }
 
@@ -112,4 +163,7 @@ void RunHudObservationInboxTests()
     TestReplacementRejectsOldGenerationBeforeDrain();
     TestCurrentReplacementCourseSurvivesDrain();
     TestCoursePublicationCopiesRowsRevisionAndOverflow();
+    TestInvalidGenerationsAndEmptyDrainAreRejected();
+    TestExplicitOverflowAndEmptyRowsArePreserved();
+    TestConcurrentCoursePublishersRemainCoherent();
 }

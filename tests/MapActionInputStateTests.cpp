@@ -72,6 +72,30 @@ namespace
         Require(!state.Filter(Keyboard, CruiseKey, true), "reset action kept claiming the control");
         Require(!state.AcceptAction(), "reset action retained its input device");
     }
+
+    void TestActionCanOnlyBeAcceptedOnce()
+    {
+        MapActionInputState state;
+        Require(!state.AcceptAction(), "empty input state was accepted");
+
+        state.Begin(Gamepad, CruiseKey);
+        Require(state.AcceptAction() == Gamepad, "first action acceptance failed");
+        Require(!state.AcceptAction(), "claimed action was accepted twice");
+        Require(state.Filter(Gamepad, CruiseKey, false), "claimed release was not filtered");
+        Require(!state.AcceptAction(), "released action became acceptable again without Begin");
+    }
+
+    void TestBeginAtomicallyReplacesPreviousControl()
+    {
+        MapActionInputState state;
+        state.Begin(Keyboard, CruiseKey);
+        Require(state.AcceptAction() == Keyboard, "old control setup failed");
+
+        state.Begin(Gamepad, CruiseKey + 1);
+        Require(!state.Filter(Keyboard, CruiseKey, true), "replacement retained the old claimed control");
+        Require(state.AcceptAction() == Gamepad, "replacement lost its input device");
+        Require(state.Filter(Gamepad, CruiseKey + 1, false), "replacement exact release was not filtered");
+    }
 }
 
 void RunMapActionInputStateTests()
@@ -81,4 +105,6 @@ void RunMapActionInputStateTests()
     TestReleaseBeforeCloseEndsTheClaim();
     TestOnlyTheExactControlIsFiltered();
     TestResetReleasesTheClaim();
+    TestActionCanOnlyBeAcceptedOnce();
+    TestBeginAtomicallyReplacesPreviousControl();
 }

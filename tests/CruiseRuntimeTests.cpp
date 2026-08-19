@@ -138,10 +138,7 @@ namespace
         };
     }
 
-    void OpenMap(
-        ::CruiseRuntime& runtime,
-        ::ObservedCruiseState cruiseState = ::ObservedCruiseState::Inactive,
-        std::optional<::FormID> currentSystemId = AlphaCentauriId)
+    void OpenMap(::CruiseRuntime& runtime, ::ObservedCruiseState cruiseState = ::ObservedCruiseState::Inactive, std::optional<::FormID> currentSystemId = AlphaCentauriId)
     {
         runtime.OnMapMovieCreated(CurrentIdentity.generation);
 
@@ -178,9 +175,7 @@ namespace
         Require(runtime.OnDossierChanged(CurrentIdentity, JemisonDossier()), "runtime rejected dossier observation");
     }
 
-    void OpenStationMap(
-        ::CruiseRuntime& runtime,
-        ::ObservedCruiseState cruiseState = ::ObservedCruiseState::Inactive)
+    void OpenStationMap(::CruiseRuntime& runtime, ::ObservedCruiseState cruiseState = ::ObservedCruiseState::Inactive)
     {
         runtime.OnMapMovieCreated(CurrentIdentity.generation);
         Require(
@@ -339,11 +334,12 @@ namespace
                 CurrentIdentity,
                 {
                     .highlightedCount = 1,
-                    .highlighted = {
-                        .id = JemisonId,
-                        .kind = ::ObservedTargetKind::Planet,
-                        .displayName = "Jemison Marker",
-                    },
+                    .highlighted =
+                        {
+                            .id = JemisonId,
+                            .kind = ::ObservedTargetKind::Planet,
+                            .displayName = "Jemison Marker",
+                        },
                 }
             ),
             "selection-proof marker was rejected"
@@ -492,6 +488,9 @@ namespace
 
         const auto callsBefore = bodySource.calls;
 
+        Require(runtime.OnDossierChanged(CurrentIdentity, {}), "zero dossier did not update the active session");
+        Require(bodySource.calls == callsBefore, "zero dossier queried the engine");
+
         Require(
             runtime.OnDossierChanged(
                 CurrentIdentity,
@@ -585,6 +584,7 @@ namespace
         ::CruiseRuntime runtime {bodySource, commands};
         OpenMap(runtime);
 
+        Require(!runtime.OnMapCloseTimedOut(CurrentIdentity), "active map without a pending close accepted a timeout");
         Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "tap did not dispatch CloseMap");
         Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::ClosingMap, "accepted CloseMap did not wait for confirmation");
 
@@ -669,28 +669,19 @@ namespace
         OpenMap(runtime);
 
         const auto action = runtime.CurrentMapAction(ReadyEnvironment());
-        Require(action.CanHandleInput() && action.requiresTravel,
-            "remote body did not produce a travel action");
-        Require(action.control == ::ActionControl::TapOnly,
-            "remote action exposed a hold gesture");
+        Require(action.CanHandleInput() && action.requiresTravel, "remote body did not produce a travel action");
+        Require(action.control == ::ActionControl::TapOnly, "remote action exposed a hold gesture");
 
-        const auto activated = runtime.ActivateMapAction(
-            CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
+        const auto activated = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
         Require(activated.Succeeded(), "remote tap did not dispatch its route effect");
-        Require(commands.calls.size() == 1 &&
-                commands.calls[0].command == RecordedCommand::BeginRemoteRoute,
-            "remote tap did not dispatch exactly one BeginRemoteRoute command");
+        Require(commands.calls.size() == 1 && commands.calls[0].command == RecordedCommand::BeginRemoteRoute, "remote tap did not dispatch exactly one BeginRemoteRoute command");
         const auto operationId = commands.calls[0].operationId;
         Require(operationId != 0, "remote command lost its operation ID");
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::RoutingRemote,
-            "remote tap did not enter RoutingRemote");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::RoutingRemote, "remote tap did not enter RoutingRemote");
 
-        Require(!runtime.OnRemoteRouteCommitted(operationId + 1, CurrentIdentity).handled,
-            "stale route commitment was accepted");
-        Require(runtime.OnRemoteRouteCommitted(operationId, CurrentIdentity).Succeeded(),
-            "exact route commitment was rejected");
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::PendingRemoteArrival,
-            "route commitment did not enter PendingRemoteArrival");
+        Require(!runtime.OnRemoteRouteCommitted(operationId + 1, CurrentIdentity).handled, "stale route commitment was accepted");
+        Require(runtime.OnRemoteRouteCommitted(operationId, CurrentIdentity).Succeeded(), "exact route commitment was rejected");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::PendingRemoteArrival, "route commitment did not enter PendingRemoteArrival");
 
         ::RemoteArrivalObservation intermediate {
             .operationId = operationId,
@@ -703,8 +694,7 @@ namespace
             .freshHudPublication = true,
             .courseRows = {JemisonId},
         };
-        Require(!runtime.OnRemoteArrival(std::move(intermediate)).handled,
-            "an intermediate system was accepted as final arrival");
+        Require(!runtime.OnRemoteArrival(std::move(intermediate)).handled, "an intermediate system was accepted as final arrival");
 
         ::RemoteArrivalObservation finalArrival {
             .operationId = operationId,
@@ -717,25 +707,205 @@ namespace
             .freshHudPublication = true,
             .courseRows = {JemisonId},
         };
-        Require(runtime.OnRemoteArrival(std::move(finalArrival)).Succeeded(),
-            "exact final arrival did not dispatch Cruise activation");
-        Require(commands.calls.size() == 2 &&
-                commands.calls[1].command == RecordedCommand::PressCruise &&
-                commands.calls[1].operationId == operationId,
-            "final arrival did not issue one correlated Cruise press");
+        Require(runtime.OnRemoteArrival(std::move(finalArrival)).Succeeded(), "exact final arrival did not dispatch Cruise activation");
+        Require(commands.calls.size() == 2 && commands.calls[1].command == RecordedCommand::PressCruise && commands.calls[1].operationId == operationId, "final arrival did not issue one correlated Cruise press");
 
-        Require(runtime.OnCruiseChanged(true).Succeeded(),
-            "remote Cruise activation did not dispatch the final course request");
-        Require(commands.calls.size() == 3 &&
-                commands.calls[2].command == RecordedCommand::RequestCourse &&
-                commands.calls[2].courseId == JemisonId &&
-                commands.calls[2].operationId == operationId,
-            "remote lifecycle requested a waypoint or lost correlation");
-        Require(runtime.OnCourseLockChanged(JemisonId).Succeeded(),
-            "exact remote final lock was rejected");
-        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::CourseLocked &&
-                !runtime.CurrentNavigationState().remoteOperation,
-            "completed remote lifecycle retained asynchronous ownership");
+        Require(runtime.OnCruiseChanged(true).Succeeded(), "remote Cruise activation did not dispatch the final course request");
+        Require(
+            commands.calls.size() == 3 && commands.calls[2].command == RecordedCommand::RequestCourse && commands.calls[2].courseId == JemisonId && commands.calls[2].operationId == operationId,
+            "remote lifecycle requested a waypoint or lost correlation"
+        );
+        Require(runtime.OnCourseLockChanged(JemisonId).Succeeded(), "exact remote final lock was rejected");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::CourseLocked && !runtime.CurrentNavigationState().remoteOperation, "completed remote lifecycle retained asynchronous ownership");
+    }
+
+    void ConfigureRemoteBody(FakeBodyResolutionSource& bodySource)
+    {
+        bodySource.result = ::ResolvedBody {
+            .id = JemisonId,
+            .system = {.starFormId = CheyenneFormId, .numericId = CheyenneId},
+            .remotePlan = ::RemoteTargetPlan {
+                .allowedWaypointIds = {ChawlaParentId},
+            },
+        };
+    }
+
+    ::OperationId ActivateRemote(::CruiseRuntime& runtime, FakeCruiseCommands& commands)
+    {
+        const auto result = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
+        Require(result.Succeeded(), "remote setup did not dispatch BeginRemoteRoute");
+        Require(!commands.calls.empty() && commands.calls.back().command == RecordedCommand::BeginRemoteRoute, "remote setup dispatched the wrong command");
+        return commands.calls.back().operationId;
+    }
+
+    ::RemoteArrivalObservation ReadyRemoteArrival(::OperationId operationId)
+    {
+        return {
+            .operationId = operationId,
+            .currentSystem = {.starFormId = CheyenneFormId, .numericId = CheyenneId},
+            .mapClosed = true,
+            .loadingMenuClosed = true,
+            .completedPlayerJump = true,
+            .settledFlight = true,
+            .flying = true,
+            .freshHudPublication = true,
+            .courseRows = {JemisonId},
+        };
+    }
+
+    void TestDisabledActiveActionDoesNotDispatch()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        auto environment = ReadyEnvironment();
+        environment.cruiseControlBound = false;
+        Require(!runtime.CurrentMapAction(environment).CanHandleInput(), "unbound active action remained actionable");
+        Require(!runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, environment).handled, "disabled active action was handled");
+        Require(commands.calls.empty(), "disabled active action dispatched a command");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "disabled active action changed navigation state");
+    }
+
+    void TestFailedRemoteRouteDispatchRecoversAutomatically()
+    {
+        FakeBodyResolutionSource bodySource;
+        ConfigureRemoteBody(bodySource);
+        FakeCruiseCommands commands;
+        commands.failOn = RecordedCommand::BeginRemoteRoute;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        const auto activated = runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
+        Require(!activated.Succeeded(), "failed remote-route dispatch reported success");
+        Require(activated.failedEffect && std::get_if<::BeginRemoteRoute>(&*activated.failedEffect), "failed remote-route dispatch retained the wrong effect");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle && !runtime.CurrentNavigationState().remoteOperation, "failed remote-route dispatch retained ownership");
+    }
+
+    void TestRemoteFailureAndCancellationCallbacksAreCorrelated()
+    {
+        {
+            FakeBodyResolutionSource bodySource;
+            ConfigureRemoteBody(bodySource);
+            FakeCruiseCommands commands;
+            ::CruiseRuntime runtime {bodySource, commands};
+            OpenMap(runtime);
+            const auto operationId = ActivateRemote(runtime, commands);
+
+            const ::MapSessionIdentity wrongIdentity {
+                .session = CurrentIdentity.session + 1,
+                .generation = CurrentIdentity.generation,
+            };
+            Require(!runtime.OnRemoteRouteFailed(operationId, wrongIdentity).handled, "wrong-session route failure was handled");
+            Require(!runtime.OnRemoteRouteFailed(operationId + 1, CurrentIdentity).handled, "wrong-operation route failure was handled");
+            Require(runtime.OnRemoteRouteFailed(operationId, CurrentIdentity).Succeeded(), "exact route failure was rejected");
+            Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "exact route failure retained navigation state");
+        }
+        {
+            FakeBodyResolutionSource bodySource;
+            ConfigureRemoteBody(bodySource);
+            FakeCruiseCommands commands;
+            ::CruiseRuntime runtime {bodySource, commands};
+            OpenMap(runtime);
+            const auto operationId = ActivateRemote(runtime, commands);
+
+            Require(!runtime.OnRemoteOperationCancelled(operationId + 1), "wrong-operation cancellation was accepted");
+            Require(runtime.OnRemoteOperationCancelled(operationId), "exact cancellation was rejected");
+            Require(!runtime.OnRemoteOperationCancelled(operationId), "repeated cancellation was accepted");
+        }
+        {
+            FakeBodyResolutionSource bodySource;
+            ConfigureRemoteBody(bodySource);
+            FakeCruiseCommands commands;
+            ::CruiseRuntime runtime {bodySource, commands};
+            OpenMap(runtime);
+            ActivateRemote(runtime, commands);
+
+            Require(runtime.OnRemoteFlightInvalidated(), "remote-flight invalidation was rejected");
+            Require(!runtime.OnRemoteFlightInvalidated(), "repeated remote-flight invalidation was accepted");
+        }
+        {
+            FakeBodyResolutionSource bodySource;
+            ConfigureRemoteBody(bodySource);
+            FakeCruiseCommands commands;
+            ::CruiseRuntime runtime {bodySource, commands};
+            Require(!runtime.OnLoadGame(), "idle load reset reported a change");
+            OpenMap(runtime);
+            ActivateRemote(runtime, commands);
+
+            Require(runtime.OnLoadGame(), "load did not clear remote ownership");
+            Require(!runtime.OnLoadGame(), "repeated load reset reported a change");
+            Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "load retained remote navigation state");
+        }
+    }
+
+    void TestRemoteCruiseAndCourseDispatchFailuresClearOwnership()
+    {
+        {
+            FakeBodyResolutionSource bodySource;
+            ConfigureRemoteBody(bodySource);
+            FakeCruiseCommands commands;
+            ::CruiseRuntime runtime {bodySource, commands};
+            OpenMap(runtime);
+            const auto operationId = ActivateRemote(runtime, commands);
+            runtime.OnRemoteRouteCommitted(operationId, CurrentIdentity);
+
+            commands.failOn = RecordedCommand::PressCruise;
+            const auto arrival = runtime.OnRemoteArrival(ReadyRemoteArrival(operationId));
+            Require(!arrival.Succeeded() && arrival.failedEffect && std::get_if<::PressCruise>(&*arrival.failedEffect), "failed remote Cruise press produced the wrong result");
+            Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "failed remote Cruise press retained ownership");
+        }
+        {
+            FakeBodyResolutionSource bodySource;
+            ConfigureRemoteBody(bodySource);
+            FakeCruiseCommands commands;
+            ::CruiseRuntime runtime {bodySource, commands};
+            OpenMap(runtime);
+            const auto operationId = ActivateRemote(runtime, commands);
+            runtime.OnRemoteRouteCommitted(operationId, CurrentIdentity);
+            Require(runtime.OnRemoteArrival(ReadyRemoteArrival(operationId)).Succeeded(), "remote course-failure setup did not reach Cruise press");
+
+            commands.failOn = RecordedCommand::RequestCourse;
+            const auto activated = runtime.OnCruiseChanged(true);
+            Require(!activated.Succeeded() && activated.failedEffect && std::get_if<::RequestCourse>(&*activated.failedEffect), "failed remote course request produced the wrong result");
+            Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "failed remote course request retained ownership");
+        }
+    }
+
+    void TestRemoteCruiseExitTimeoutWrapperIsCorrelated()
+    {
+        FakeBodyResolutionSource bodySource;
+        ConfigureRemoteBody(bodySource);
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+        const auto operationId = ActivateRemote(runtime, commands);
+        runtime.OnRemoteRouteCommitted(operationId, CurrentIdentity);
+        Require(runtime.OnRemoteArrival(ReadyRemoteArrival(operationId)).Succeeded(), "remote timeout setup did not reach Cruise preparation");
+
+        Require(!runtime.OnRemoteCruiseExitTimedOut(operationId + 1), "wrong-operation remote Cruise timeout was accepted");
+        Require(runtime.OnRemoteCruiseExitTimedOut(operationId), "exact remote Cruise timeout was rejected");
+        Require(!runtime.OnRemoteCruiseExitTimedOut(operationId), "repeated remote Cruise timeout was accepted");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "remote Cruise timeout retained ownership");
+    }
+
+    void TestRuntimeUpdateWrappersRejectStaleIdentity()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+        const ::MapSessionIdentity stale {
+            .session = CurrentIdentity.session + 1,
+            .generation = CurrentIdentity.generation,
+        };
+
+        Require(!runtime.OnMapViewChanged(stale, ::MapView::Galaxy), "stale view update was accepted");
+        Require(!runtime.OnMarkersChanged(stale, {}), "stale marker update was accepted");
+        Require(!runtime.OnCurrentSystemResolved(stale, MarsId), "stale numeric-system update was accepted");
+        Require(!runtime.OnCurrentSystemFormObserved(stale, CheyenneFormId), "stale system-form update was accepted");
+        Require(runtime.CurrentSelection().IsEligible(), "stale wrapper calls changed the current selection");
     }
 
     void RunTests()
@@ -759,6 +929,12 @@ namespace
         TestCruiseActivationTimeoutFallsBackAndRejectsLateObservation();
         TestCourseLockTimeoutRequiresExactCourseAndFallsBack();
         TestRemoteTapRunsOneCorrelatedLifecycle();
+        TestDisabledActiveActionDoesNotDispatch();
+        TestFailedRemoteRouteDispatchRecoversAutomatically();
+        TestRemoteFailureAndCancellationCallbacksAreCorrelated();
+        TestRemoteCruiseAndCourseDispatchFailuresClearOwnership();
+        TestRemoteCruiseExitTimeoutWrapperIsCorrelated();
+        TestRuntimeUpdateWrappersRejectStaleIdentity();
     }
 }
 

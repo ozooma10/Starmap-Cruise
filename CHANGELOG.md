@@ -8,7 +8,8 @@
 - Added exact course-lock correlation, map/HUD generation checks, operation IDs, and fail-closed timeouts.
 - Added copied map, HUD, and travel observation inboxes for safe post-advance processing.
 - Added keyboard, mouse, and gamepad Cruise binding support.
-- Added automated coverage for selection, presentation, map state, navigation, remote routing, input, and observation queues.
+- Expanded the native automated release gate across domain invariants, selection, presentation, map state, navigation, remote routing, dispatch recovery, input, and concurrent observation queues.
+- Added direct boundary coverage for timeout deadlines, invalid identities, stale callbacks, overflow recovery, and nonzero counter rollover.
 - Promoted the current implementation from `v2/` to the primary `src/` and `tests/` layout.
 - Removed the unused legacy implementation and dead diagnostic APIs.
 - Simplified the release payload to the plugin DLL, with symbols distributed separately.

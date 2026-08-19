@@ -1,4 +1,5 @@
 #include "Starfield/TravelObservationInbox.h"
+#include "Domain/NonzeroCounter.h"
 
 #include <chrono>
 
@@ -61,10 +62,7 @@ void TravelObservationInbox::Push(Observation observation) noexcept
             m_overflowed = true;
             return;
         }
-        ++m_nextSequence;
-        if (m_nextSequence == 0) {
-            ++m_nextSequence;
-        }
+        m_nextSequence = CFS::AdvanceNonzeroCounter(m_nextSequence);
         observation.sequence = m_nextSequence;
         m_values[m_count++] = observation;
     } catch (...) {

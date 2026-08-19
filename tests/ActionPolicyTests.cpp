@@ -1,6 +1,7 @@
 #include "Presentation/ActionPolicy.h"
 #include "TestSuites.h"
 
+#include <array>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -205,6 +206,83 @@ namespace
         Require(action.label == "CURRENT-SYSTEM TARGETS ONLY", "remote station rejection produced the wrong label");
     }
 
+    void TestEveryDisabledReasonHasStablePresentation()
+    {
+        struct Case
+        {
+            ::SelectionReason reason;
+            std::string_view label;
+            ::ActionControl control;
+        };
+
+        constexpr std::array cases {
+            Case {::SelectionReason::InactiveContext, "", ::ActionControl::TapAndHold},
+            Case {::SelectionReason::CurrentSystemUnavailable, "CURRENT SYSTEM UNAVAILABLE", ::ActionControl::TapAndHold},
+            Case {::SelectionReason::SelectDestination, "HIGHLIGHT A DESTINATION", ::ActionControl::TapAndHold},
+            Case {::SelectionReason::AmbiguousTarget, "TARGET IS AMBIGUOUS", ::ActionControl::TapAndHold},
+            Case {::SelectionReason::UnsupportedTarget, "", ::ActionControl::TapAndHold},
+            Case {::SelectionReason::TargetDataUpdating, "TARGET DATA IS UPDATING", ::ActionControl::TapAndHold},
+            Case {::SelectionReason::TargetSystemUnavailable, "TARGET DATA IS NOT AVAILABLE", ::ActionControl::TapAndHold},
+            Case {::SelectionReason::RemoteSystem, "CURRENT-SYSTEM TARGETS ONLY", ::ActionControl::TapOnly},
+            Case {::SelectionReason::Eligible, "SET CRUISE TARGET", ::ActionControl::TapAndHold},
+            Case {static_cast<::SelectionReason>(0xFF), "", ::ActionControl::TapAndHold},
+        };
+
+        for (const auto& testCase : cases) {
+            const auto action = ::EvaluateAction(DisabledSelection(testCase.reason), ReadyContext());
+            Require(action.IsVisible(), "disabled reason unexpectedly hid its presentation");
+            Require(!action.CanHandleInput(), "disabled reason accepted input");
+            Require(action.label == testCase.label, "disabled reason produced the wrong label");
+            Require(action.control == testCase.control, "disabled reason produced the wrong control");
+        }
+    }
+
+    void TestEligibleSelectionRequiresAValidDestination()
+    {
+        auto selection = EligibleSelection();
+        selection.destination.reset();
+
+        auto action = ::EvaluateAction(selection, ReadyContext());
+        Require(!selection.IsEligible(), "eligible flag without a destination passed validation");
+        Require(!action.CanHandleInput(), "eligible flag without a destination accepted input");
+        Require(!action.destination, "eligible flag without a destination invented one");
+
+        selection = EligibleSelection();
+        selection.destination->targetId = 0;
+        action = ::EvaluateAction(selection, ReadyContext());
+        Require(!selection.IsEligible(), "invalid destination passed selection validation");
+        Require(!action.CanHandleInput(), "invalid destination accepted input");
+        Require(!action.destination, "invalid destination escaped into the action");
+    }
+
+    void TestRemoteUnknownCruiseStateFailsClosed()
+    {
+        auto selection = EligibleSelection();
+        selection.requiresTravel = true;
+
+        auto context = ReadyContext();
+        context.cruiseStateWhenMapOpened = ::ObservedCruiseState::Unknown;
+
+        const auto action = ::EvaluateAction(selection, context);
+        Require(action.control == ::ActionControl::TapOnly, "remote unknown-state action exposed a hold");
+        Require(!action.CanHandleInput(), "remote unknown-state action accepted input");
+        Require(action.label == "CRUISE STATE UNAVAILABLE", "remote unknown-state action produced the wrong label");
+        Require(!action.destination, "remote unknown-state action retained a destination");
+    }
+
+    void TestRemoteActionStillRequiresVanillaEnablement()
+    {
+        auto selection = EligibleSelection();
+        selection.requiresTravel = true;
+        auto context = ReadyContext();
+        context.vanillaActionEnabled = false;
+
+        const auto action = ::EvaluateAction(selection, context);
+        Require(action.label == "JUMP THEN CRUISE", "disabled remote action lost its intended label");
+        Require(!action.CanHandleInput(), "vanilla-disabled remote action accepted input");
+        Require(!action.destination, "vanilla-disabled remote action retained its destination");
+    }
+
     void RunTests()
     {
         TestHiddenSelectionProducesNoControl();
@@ -218,6 +296,10 @@ namespace
         TestRemoteTargetUsesOneAction();
         TestRemoteTargetRejectsActiveCruiseAndMissingBindings();
         TestRemoteStationReasonRemainsDisabled();
+        TestEveryDisabledReasonHasStablePresentation();
+        TestEligibleSelectionRequiresAValidDestination();
+        TestRemoteUnknownCruiseStateFailsClosed();
+        TestRemoteActionStillRequiresVanillaEnablement();
     }
 }
 

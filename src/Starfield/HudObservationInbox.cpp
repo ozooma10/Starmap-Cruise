@@ -1,4 +1,5 @@
 #include "Starfield/HudObservationInbox.h"
+#include "Domain/NonzeroCounter.h"
 
 #include <algorithm>
 #include <chrono>
@@ -8,10 +9,7 @@ void HudObservationInbox::RecordMovieCreated(std::int64_t bornTicks)
 {
     std::lock_guard lock {m_mutex};
 
-    m_generation++;
-    if (m_generation == 0) {
-        m_generation++;
-    }
+    m_generation = CFS::AdvanceNonzeroCounter(m_generation);
 
     m_movie = MovieObservation {
         .generation = m_generation,
@@ -33,10 +31,7 @@ void HudObservationInbox::RecordCourse(std::uint32_t generation, FormID courseId
         return;
     }
 
-    ++m_revision;
-    if (m_revision == 0) {
-        ++m_revision;
-    }
+    m_revision = CFS::AdvanceNonzeroCounter(m_revision);
 
     CourseObservation observation {
         .generation = generation,

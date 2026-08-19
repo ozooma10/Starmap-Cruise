@@ -1,4 +1,5 @@
 #include "Navigation/NavigationRuntime.h"
+#include "Domain/NonzeroCounter.h"
 
 #include <algorithm>
 #include <utility>
@@ -29,10 +30,6 @@ TransitionResult NavigationRuntime::SelectDestination(Destination destination, S
             .inputDevice = remote.inputDevice,
             .destination = destination,
         };
-        if (!operation.IsValid()) {
-            result.handled = false;
-            return result;
-        }
 
         m_pendingIntent.reset();
         m_cruiseWasActiveWhenSelected = false;
@@ -104,14 +101,13 @@ TransitionResult NavigationRuntime::RemoteRouteFailed(OperationId operationId, R
 
 TransitionResult NavigationRuntime::ObserveRemoteArrival(RemoteArrivalObservation observation)
 {
-    if (!m_state.remoteOperation || m_state.phase != NavigationPhase::PendingRemoteArrival ||
-        observation.operationId != m_state.remoteOperation->id) {
+    if (!m_state.remoteOperation || m_state.phase != NavigationPhase::PendingRemoteArrival || observation.operationId != m_state.remoteOperation->id) {
         return {};
     }
 
     auto& operation = *m_state.remoteOperation;
-    if (!observation.mapClosed || !observation.loadingMenuClosed || !observation.completedPlayerJump || !observation.settledFlight ||
-        !observation.flying || !observation.freshHudPublication || observation.currentSystem != operation.destination.system) {
+    if (!observation.mapClosed || !observation.loadingMenuClosed || !observation.completedPlayerJump || !observation.settledFlight || !observation.flying || !observation.freshHudPublication ||
+        observation.currentSystem != operation.destination.system) {
         return {};
     }
 
@@ -202,13 +198,11 @@ TransitionResult NavigationRuntime::CourseLockChanged(FormID lockedCourseId)
         }
 
         const auto& waypoints = operation.destination.remotePlan.allowedWaypointIds;
-        if (operation.nextWaypointIndex < waypoints.size() &&
-            lockedCourseId == waypoints[operation.nextWaypointIndex]) {
+        if (operation.nextWaypointIndex < waypoints.size() && lockedCourseId == waypoints[operation.nextWaypointIndex]) {
             ++operation.nextWaypointIndex;
             return {.handled = true};
         }
-        if (operation.nextWaypointIndex != 0 &&
-            lockedCourseId == waypoints[operation.nextWaypointIndex - 1]) {
+        if (operation.nextWaypointIndex != 0 && lockedCourseId == waypoints[operation.nextWaypointIndex - 1]) {
             return {.handled = true};
         }
 
@@ -335,10 +329,7 @@ const NavigationState& NavigationRuntime::CurrentState() const
 
 OperationId NavigationRuntime::NextOperationId()
 {
-    ++m_nextOperationId;
-    if (m_nextOperationId == 0) {
-        ++m_nextOperationId;
-    }
+    m_nextOperationId = CFS::AdvanceNonzeroCounter(m_nextOperationId);
     return m_nextOperationId;
 }
 

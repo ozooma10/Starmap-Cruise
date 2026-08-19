@@ -49,8 +49,18 @@ Build and run the core test suite:
 
 ```powershell
 xmake build CruiseFromStarmapTests
-xmake run CruiseFromStarmapTests
+xmake test -v
 ```
+
+The native suite covers domain invariants, selection and action policies, map
+sessions, local and remote navigation state machines, command-dispatch recovery,
+protocol deadlines and correlation, presentation caching, input claiming, and
+the map/HUD/travel inbox boundaries and concurrent producers.
+
+SFSE relocations, live Scaleform objects, vanilla route dispatch, station
+reference discovery, and the final HUD/gameplay result still require the
+in-game release matrix because those interfaces only exist inside Starfield.
+
 
 Generate `compile_commands.json`:
 

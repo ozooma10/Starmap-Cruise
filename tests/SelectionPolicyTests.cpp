@@ -53,15 +53,14 @@ namespace
             .currentSystemId = 0x11720,
             .currentSystemFormId = 0x5E60A,
             .highlightedMarkerCount = 1,
-            .marker =
-                {
-                    .id = 0x1285A,
-                    .kind = ::ObservedTargetKind::Station,
-                    .displayName = "The Eye",
-                    .resolvedTargetId = 0x12894,
-                    .resolvedCourseId = 0x12895,
-                    .displayedSystemFormId = 0x5E60A,
-                },
+            .marker = {
+                .id = 0x1285A,
+                .kind = ::ObservedTargetKind::Station,
+                .displayName = "The Eye",
+                .resolvedTargetId = 0x12894,
+                .resolvedCourseId = 0x12895,
+                .displayedSystemFormId = 0x5E60A,
+            },
         };
     }
 
@@ -299,13 +298,104 @@ namespace
         RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
     }
 
+    void TestZeroMarkerIdentityIsHidden()
+    {
+        auto snapshot = ValidPlanet();
+        snapshot.marker.id = 0;
+
+        const auto decision = ::EvaluateSelection(snapshot);
+
+        RequireDecision(decision, ::SelectionAvailability::Hidden, ::SelectionReason::UnsupportedTarget);
+        Require(!decision.destination, "zero marker identity produced a destination");
+    }
+
+    void TestDossierMustBePresentAndMatchMarkerKind()
+    {
+        auto snapshot = ValidPlanet();
+        snapshot.dossier = {};
+
+        auto decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetDataUpdating);
+
+        snapshot = ValidPlanet();
+        snapshot.dossier.kind = ::ObservedTargetKind::Moon;
+        decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetDataUpdating);
+    }
+
+    void TestPlanetarySystemFormsMustBeNonzero()
+    {
+        auto snapshot = ValidPlanet();
+        snapshot.currentSystemFormId.reset();
+
+        auto decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::CurrentSystemUnavailable);
+
+        snapshot = ValidPlanet();
+        snapshot.currentSystemFormId = 0;
+        decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::CurrentSystemUnavailable);
+
+        snapshot = ValidPlanet();
+        snapshot.resolvedBody->system.starFormId = 0;
+        decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+    }
+
+    void TestStationSystemFormsMustBeNonzero()
+    {
+        auto snapshot = ValidStation();
+        snapshot.marker.displayedSystemFormId = 0;
+
+        auto decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+
+        snapshot = ValidStation();
+        snapshot.currentSystemFormId = 0;
+        decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+    }
+
+    void TestRemotePlanMustBeValid()
+    {
+        auto snapshot = ValidPlanet();
+        snapshot.resolvedBody->system = {.starFormId = 0x2000, .numericId = 0x200};
+        snapshot.resolvedBody->remotePlan = ::RemoteTargetPlan {
+            .allowedWaypointIds = {0},
+        };
+
+        auto decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+        Require(!decision.destination, "zero remote waypoint produced a destination");
+
+        snapshot.resolvedBody->remotePlan = ::RemoteTargetPlan {
+            .allowedWaypointIds = {0x77, 0x77},
+        };
+        decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Disabled, ::SelectionReason::TargetSystemUnavailable);
+        Require(!decision.destination, "duplicate remote waypoint produced a destination");
+
+        snapshot.resolvedBody->remotePlan = ::RemoteTargetPlan {};
+        decision = ::EvaluateSelection(snapshot);
+        Require(decision.IsEligible() && decision.requiresTravel, "direct remote planet with an empty native plan was rejected");
+    }
+
     void TestInvalidContextIsHidden()
     {
         auto snapshot = ValidPlanet();
         snapshot.sessionValid = false;
 
-        const auto decision = ::EvaluateSelection(snapshot);
+        auto decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Hidden, ::SelectionReason::InactiveContext);
 
+        snapshot = ValidPlanet();
+        snapshot.flying = false;
+        decision = ::EvaluateSelection(snapshot);
+        RequireDecision(decision, ::SelectionAvailability::Hidden, ::SelectionReason::InactiveContext);
+
+        snapshot = ValidPlanet();
+        snapshot.systemView = false;
+        decision = ::EvaluateSelection(snapshot);
         RequireDecision(decision, ::SelectionAvailability::Hidden, ::SelectionReason::InactiveContext);
     }
 
@@ -328,6 +418,11 @@ namespace
         TestSolSystemIsEligible();
         TestMissingCurrentSystemIsUnavailable();
         TestMissingBodySystemIsUnavailable();
+        TestZeroMarkerIdentityIsHidden();
+        TestDossierMustBePresentAndMatchMarkerKind();
+        TestPlanetarySystemFormsMustBeNonzero();
+        TestStationSystemFormsMustBeNonzero();
+        TestRemotePlanMustBeValid();
         TestInvalidContextIsHidden();
     }
 }

@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace
 {
@@ -34,19 +35,25 @@ namespace
         const auto identity = OpenMap(inbox);
 
         inbox.RecordMapData(identity, MapView::System, 0xABCD);
-        inbox.RecordMarkers(identity, {
-            .highlightedCount = 1,
-            .highlighted = {
+        inbox.RecordMarkers(
+            identity,
+            {
+                .highlightedCount = 1,
+                .highlighted = {
+                    .id = 0x5678,
+                    .kind = ObservedTargetKind::Planet,
+                    .displayName = "Jemison",
+                },
+            }
+        );
+        inbox.RecordDossier(
+            identity,
+            {
                 .id = 0x5678,
                 .kind = ObservedTargetKind::Planet,
                 .displayName = "Jemison",
-            },
-        });
-        inbox.RecordDossier(identity, {
-            .id = 0x5678,
-            .kind = ObservedTargetKind::Planet,
-            .displayName = "Jemison",
-        });
+            }
+        );
         inbox.RecordLifecycle(false);
         const auto observations = inbox.Drain();
 
@@ -91,19 +98,25 @@ namespace
         MapObservationInbox inbox;
         const auto identity = OpenMap(inbox);
 
-        inbox.RecordMarkers(identity, {
-            .highlightedCount = 1,
-            .highlighted = {
+        inbox.RecordMarkers(
+            identity,
+            {
+                .highlightedCount = 1,
+                .highlighted = {
+                    .id = 0x1234,
+                    .kind = ObservedTargetKind::Moon,
+                    .displayName = "Luna",
+                },
+            }
+        );
+        inbox.RecordDossier(
+            identity,
+            {
                 .id = 0x1234,
                 .kind = ObservedTargetKind::Moon,
                 .displayName = "Luna",
-            },
-        });
-        inbox.RecordDossier(identity, {
-            .id = 0x1234,
-            .kind = ObservedTargetKind::Moon,
-            .displayName = "Luna",
-        });
+            }
+        );
 
         const auto observations = inbox.Drain();
         Require(observations.markers.has_value(), "markers were not recorded");
@@ -125,20 +138,26 @@ namespace
         MapObservationInbox inbox;
         const auto identity = OpenMap(inbox);
 
-        inbox.RecordMarkers(identity, {
-            .highlightedCount = 1,
-            .highlighted = {
+        inbox.RecordMarkers(
+            identity,
+            {
+                .highlightedCount = 1,
+                .highlighted = {
+                    .id = 0x1234,
+                    .kind = ObservedTargetKind::Planet,
+                    .displayName = "Jemison",
+                },
+            }
+        );
+        inbox.RecordMarkers(identity, {});
+        inbox.RecordDossier(
+            identity,
+            {
                 .id = 0x1234,
                 .kind = ObservedTargetKind::Planet,
                 .displayName = "Jemison",
-            },
-        });
-        inbox.RecordMarkers(identity, {});
-        inbox.RecordDossier(identity, {
-            .id = 0x1234,
-            .kind = ObservedTargetKind::Planet,
-            .displayName = "Jemison",
-        });
+            }
+        );
         inbox.RecordDossier(identity, {});
 
         const auto observations = inbox.Drain();
@@ -156,17 +175,23 @@ namespace
 
         inbox.RecordMovieCreated(200);
         inbox.RecordMapData(oldIdentity, MapView::System, 0xABCD);
-        inbox.RecordMarkers(oldIdentity, {
-            .highlightedCount = 1,
-            .highlighted = {
+        inbox.RecordMarkers(
+            oldIdentity,
+            {
+                .highlightedCount = 1,
+                .highlighted = {
+                    .id = 0x5678,
+                    .kind = ObservedTargetKind::Planet,
+                },
+            }
+        );
+        inbox.RecordDossier(
+            oldIdentity,
+            {
                 .id = 0x5678,
                 .kind = ObservedTargetKind::Planet,
-            },
-        });
-        inbox.RecordDossier(oldIdentity, {
-            .id = 0x5678,
-            .kind = ObservedTargetKind::Planet,
-        });
+            }
+        );
 
         const auto observations = inbox.Drain();
         Require(observations.movieGeneration == 2, "replacement movie retained the wrong generation");
@@ -187,17 +212,23 @@ namespace
         const auto newIdentity = lifecycle.lifecycle[1].identity;
         Require(newIdentity.IsValid() && newIdentity != oldIdentity, "reopen did not create a new identity");
 
-        inbox.RecordMarkers(oldIdentity, {
-            .highlightedCount = 1,
-            .highlighted = {
+        inbox.RecordMarkers(
+            oldIdentity,
+            {
+                .highlightedCount = 1,
+                .highlighted = {
+                    .id = 0x1234,
+                    .kind = ObservedTargetKind::Planet,
+                },
+            }
+        );
+        inbox.RecordDossier(
+            oldIdentity,
+            {
                 .id = 0x1234,
                 .kind = ObservedTargetKind::Planet,
-            },
-        });
-        inbox.RecordDossier(oldIdentity, {
-            .id = 0x1234,
-            .kind = ObservedTargetKind::Planet,
-        });
+            }
+        );
 
         const auto stale = inbox.Drain();
         Require(!stale.markers, "old session published markers into the reopened map");
@@ -255,22 +286,29 @@ namespace
         const auto identity = OpenMap(inbox);
 
         inbox.RecordMapData(identity, MapView::System, 0xABCD);
-        inbox.RecordMarkers(identity, {
-            .highlightedCount = 1,
-            .highlighted = {
+        inbox.RecordMarkers(
+            identity,
+            {
+                .highlightedCount = 1,
+                .highlighted = {
+                    .id = 0x5678,
+                    .kind = ObservedTargetKind::Planet,
+                },
+            }
+        );
+        inbox.RecordDossier(
+            identity,
+            {
                 .id = 0x5678,
                 .kind = ObservedTargetKind::Planet,
-            },
-        });
-        inbox.RecordDossier(identity, {
-            .id = 0x5678,
-            .kind = ObservedTargetKind::Planet,
-        });
+            }
+        );
         inbox.RecordAction(identity, MapObservationInbox::Action::Tap);
 
         for (std::size_t index = 0; index <= MapObservationInbox::MaxLifecycleObservations; ++index) {
             inbox.RecordLifecycle(true);
         }
+        inbox.RecordLifecycle(false);
 
         const auto observations = inbox.Drain();
         Require(observations.lifecycleOverflowed, "full lifecycle queue did not report overflow");
@@ -280,6 +318,95 @@ namespace
         Require(!observations.dossier, "overflow retained a stale dossier");
         Require(!observations.action, "overflow retained a stale map action");
         Require(!observations.actionOverflowed, "lifecycle overflow retained action overflow state");
+    }
+
+    void TestInactiveAndInvalidIdentitiesPublishNothing()
+    {
+        MapObservationInbox inbox;
+        const MapSessionIdentity identity {
+            .session = 1,
+            .generation = 1,
+        };
+
+        inbox.RecordMapData(identity, MapView::System, 0x1000);
+        inbox.RecordMarkers(identity, {.highlightedCount = 1});
+        inbox.RecordDossier(identity, {.id = 0x10});
+        inbox.RecordAction(identity, MapObservationInbox::Action::Tap);
+        auto observations = inbox.Drain();
+        Require(!observations.mapData && !observations.markers && !observations.dossier && !observations.action, "inactive inbox accepted session-scoped data");
+
+        inbox.RecordMovieCreated(100);
+        inbox.RecordMapData({}, MapView::System, 0x1000);
+        inbox.RecordMarkers({}, {.highlightedCount = 1});
+        inbox.RecordDossier({}, {.id = 0x10});
+        inbox.RecordAction({}, MapObservationInbox::Action::Tap);
+        observations = inbox.Drain();
+        Require(observations.movieCreated, "movie observation was lost");
+        Require(!observations.mapData && !observations.markers && !observations.dossier && !observations.action, "invalid identity accepted session-scoped data");
+
+        const auto secondDrain = inbox.Drain();
+        Require(!secondDrain.movieCreated && secondDrain.movieGeneration == 1, "empty drain repeated the movie event or lost generation identity");
+    }
+
+    void TestIdenticalMapDataCoalescesWithoutInformationLoss()
+    {
+        MapObservationInbox inbox;
+        const auto identity = OpenMap(inbox);
+        inbox.RecordMapData(identity, MapView::System, 0xABCD);
+        inbox.RecordMapData(identity, MapView::System, 0xABCD);
+
+        const auto observation = inbox.Drain().mapData;
+        Require(observation.has_value(), "identical map data was lost");
+        Require(observation->view == MapView::System, "identical views became unknown");
+        Require(observation->currentSystemFormId == 0xABCD, "identical system forms became unavailable");
+    }
+
+    void TestCloseWithoutOpenCarriesNoIdentity()
+    {
+        MapObservationInbox inbox;
+        inbox.RecordMovieCreated(100);
+        inbox.RecordLifecycle(false);
+
+        const auto observations = inbox.Drain();
+        Require(observations.lifecycleCount == 1, "close-without-open lifecycle was lost");
+        Require(!observations.lifecycle[0].opening && !observations.lifecycle[0].identity.IsValid(), "close-without-open invented a valid identity");
+    }
+
+    void TestConcurrentIndependentFeedsRemainCoherent()
+    {
+        MapObservationInbox inbox;
+        const auto identity = OpenMap(inbox);
+
+        std::thread mapData {[&] { inbox.RecordMapData(identity, MapView::System, 0xABCD); }};
+        std::thread markers {[&] {
+            inbox.RecordMarkers(
+                identity,
+                {
+                    .highlightedCount = 1,
+                    .highlighted = {
+                        .id = 0x10,
+                        .kind = ObservedTargetKind::Planet,
+                    },
+                }
+            );
+        }};
+        std::thread dossier {[&] {
+            inbox.RecordDossier(
+                identity,
+                {
+                    .id = 0x10,
+                    .kind = ObservedTargetKind::Planet,
+                }
+            );
+        }};
+        mapData.join();
+        markers.join();
+        dossier.join();
+
+        const auto observations = inbox.Drain();
+        Require(observations.mapData && observations.mapData->identity == identity, "concurrent map-data publication was torn");
+        Require(observations.markers && observations.markers->identity == identity && observations.markers->update.highlighted.id == 0x10, "concurrent marker publication was torn");
+        Require(observations.dossier && observations.dossier->identity == identity && observations.dossier->target.id == 0x10, "concurrent dossier publication was torn");
     }
 
     void RunTests()
@@ -294,6 +421,10 @@ namespace
         TestActionsCarryIdentityAndFailClosedOnConflict();
         TestStaleActionsAreRejectedAndLifecycleClearsPendingAction();
         TestOverflowDropsPartialHistory();
+        TestInactiveAndInvalidIdentitiesPublishNothing();
+        TestIdenticalMapDataCoalescesWithoutInformationLoss();
+        TestCloseWithoutOpenCarriesNoIdentity();
+        TestConcurrentIndependentFeedsRemainCoherent();
     }
 }
 

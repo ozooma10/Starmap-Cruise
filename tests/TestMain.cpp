@@ -14,6 +14,7 @@ namespace
     };
 
     constexpr TestSuite Suites[] {
+        {"Domain", &RunDomainTests},
         {"NavigationRuntime", &RunNavigationRuntimeTests},
         {"SelectionPolicy", &RunSelectionPolicyTests},
         {"ActionPolicy", &RunActionPolicyTests},

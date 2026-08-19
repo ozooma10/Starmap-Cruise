@@ -86,7 +86,7 @@ struct SelectionDecision
 
     bool IsEligible() const
     {
-        return availability == SelectionAvailability::Eligible && destination.has_value();
+        return availability == SelectionAvailability::Eligible && destination && destination->IsValid();
     }
 };
 

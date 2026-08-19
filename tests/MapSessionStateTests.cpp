@@ -294,6 +294,103 @@ namespace
         Require(state.CruiseStateWhenOpened() == ::ObservedCruiseState::Unknown, "closed session retained its Cruise state");
     }
 
+    void TestInvalidOpenContextsAreRejected()
+    {
+        ::MapSessionState state;
+        state.BeginMovie(CurrentIdentity.generation);
+
+        auto context = ::MapOpenContext {
+            .identity = CurrentIdentity,
+            .flying = true,
+            .currentSystemId = 0x100,
+        };
+
+        context.identity.session = 0;
+        Require(!state.Open(context), "zero-session identity opened a map");
+
+        context.identity = CurrentIdentity;
+        context.identity.generation = 0;
+        Require(!state.Open(context), "zero-generation identity opened a map");
+
+        context.identity = CurrentIdentity;
+        context.identity.generation--;
+        Require(!state.Open(context), "old movie generation opened a map");
+
+        Require(!state.Snapshot().sessionValid, "rejected open context changed session state");
+        Require(!state.IsActive(CurrentIdentity), "rejected open context became active");
+    }
+
+    void TestInactiveAndStaleOperationsAreRejected()
+    {
+        ::MapSessionState state;
+        state.BeginMovie(CurrentIdentity.generation);
+
+        Require(!state.Close(CurrentIdentity), "inactive map accepted close");
+        Require(!state.SetView(CurrentIdentity, ::MapView::System), "inactive map accepted view");
+        Require(!state.SetMarkers(CurrentIdentity, {}), "inactive map accepted markers");
+        Require(!state.SetDossier(CurrentIdentity, {}, std::nullopt), "inactive map accepted dossier");
+        Require(!state.CaptureCurrentSystem(CurrentIdentity, 0x100), "inactive map accepted numeric system");
+        Require(!state.CaptureCurrentSystemForm(CurrentIdentity, 0x1000), "inactive map accepted system form");
+
+        OpenSession(state);
+        const ::MapSessionIdentity stale {
+            .session = CurrentIdentity.session + 1,
+            .generation = CurrentIdentity.generation,
+        };
+
+        Require(!state.Close(stale), "stale identity closed current map");
+        Require(!state.SetView(stale, ::MapView::Galaxy), "stale identity changed view");
+        Require(!state.SetMarkers(stale, {.highlightedCount = 1}), "stale identity changed markers");
+        Require(!state.SetDossier(stale, {.id = 0x20}, std::nullopt), "stale identity changed dossier");
+        Require(!state.CaptureCurrentSystem(stale, 0x200), "stale identity changed numeric system");
+        Require(!state.CaptureCurrentSystemForm(stale, 0x2000), "stale identity changed system form");
+        Require(!state.IsActive(stale), "stale identity reported active");
+        Require(state.IsActive(CurrentIdentity), "current identity stopped reporting active");
+    }
+
+    void TestCloseResetsCompleteSnapshot()
+    {
+        ::MapSessionState state;
+        OpenSession(state);
+        PopulateExactPlanet(state);
+
+        Require(state.Close(CurrentIdentity), "current session close was rejected");
+        const auto snapshot = state.Snapshot();
+        Require(!snapshot.sessionValid, "closed session remained valid");
+        Require(!snapshot.flying && !snapshot.systemView, "closed session retained map context");
+        Require(!snapshot.currentSystemId && !snapshot.currentSystemFormId, "closed session retained system identity");
+        Require(snapshot.highlightedMarkerCount == 0 && snapshot.marker.id == 0, "closed session retained marker state");
+        Require(snapshot.dossier.id == 0 && !snapshot.resolvedBody, "closed session retained dossier state");
+        Require(!state.Close(CurrentIdentity), "repeated close was accepted");
+    }
+
+    void TestOpeningNewSessionReplacesAllOldEvidence()
+    {
+        ::MapSessionState state;
+        OpenSession(state);
+        PopulateExactPlanet(state);
+
+        const ::MapSessionIdentity replacement {
+            .session = CurrentIdentity.session + 1,
+            .generation = CurrentIdentity.generation,
+        };
+        Require(
+            state.Open({
+                .identity = replacement,
+                .flying = false,
+                .cruiseState = ::ObservedCruiseState::Unknown,
+                .currentSystemId = std::nullopt,
+            }),
+            "replacement session was rejected"
+        );
+
+        const auto snapshot = state.Snapshot();
+        Require(snapshot.sessionValid && !snapshot.flying, "replacement context was not captured");
+        Require(!snapshot.currentSystemId && !snapshot.currentSystemFormId, "replacement inherited old system identity");
+        Require(snapshot.highlightedMarkerCount == 0 && snapshot.dossier.id == 0 && !snapshot.resolvedBody, "replacement inherited old target evidence");
+        Require(!state.IsActive(CurrentIdentity) && state.IsActive(replacement), "replacement retained the old active identity");
+    }
+
     void RunTests()
     {
         TestExactFeedsProduceEligibleSelection();
@@ -307,6 +404,10 @@ namespace
         TestCurrentSystemFormIsCapturedOnce();
         TestMovieReplacementInvalidatesSession();
         TestCruiseStateIsCapturedAndReset();
+        TestInvalidOpenContextsAreRejected();
+        TestInactiveAndStaleOperationsAreRejected();
+        TestCloseResetsCompleteSnapshot();
+        TestOpeningNewSessionReplacesAllOldEvidence();
     }
 }
 
