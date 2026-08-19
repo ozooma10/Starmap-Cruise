@@ -41,7 +41,6 @@ public:
     RemoteRouteBridge& operator=(RemoteRouteBridge&&) = delete;
 
     bool Initialize(const StarfieldBodyResolutionSource& bodySource);
-    bool Available() const;
 
     bool Begin(const BeginRemoteRoute& effect, const MapSessionIdentity& activeIdentity);
     void ObserveMapData(const MapSessionIdentity& identity, MapView view, FormID displayedSystemFormId);
@@ -49,7 +48,6 @@ public:
     RemoteRouteResult OnMapClosed(const MapSessionIdentity& identity);
     RemoteRouteResult OnMovieCreated(std::uint32_t generation);
     void Cancel();
-    bool Active() const;
 
 private:
     class Impl;

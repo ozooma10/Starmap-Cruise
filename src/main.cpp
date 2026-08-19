@@ -13,7 +13,7 @@ namespace
             !g_runtimeSupported.load(std::memory_order_acquire))
             return;
         if (!StarfieldCruiseAdapter::GetSingleton().Initialize()) {
-            REX::ERROR("Cruise From Starmap v2 initialization failed; plugin remains disabled");
+            REX::ERROR("Cruise From Starmap initialization failed; plugin remains disabled");
         }
     }
 }

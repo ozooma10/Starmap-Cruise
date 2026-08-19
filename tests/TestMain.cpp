@@ -53,10 +53,10 @@ int main()
     }
 
     if (failureCount != 0) {
-        std::cerr << failureCount << " v2 test suite(s) failed\n";
+        std::cerr << failureCount << " test suite(s) failed\n";
         return 1;
     }
 
-    std::cout << "All Cruise From Starmap v2 tests passed\n";
+    std::cout << "All Cruise From Starmap tests passed\n";
     return 0;
 }

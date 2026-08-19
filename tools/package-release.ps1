@@ -67,9 +67,7 @@ if (-not $SkipBuild) {
 $pluginRoot = Join-Path $releaseData 'SFSE\Plugins'
 $expectedRelativeFiles = @(
     'SFSE/Plugins/CruiseFromStarmap.dll',
-    'SFSE/Plugins/CruiseFromStarmap.ini',
-    'SFSE/Plugins/CruiseFromStarmap.pdb',
-    'SFSE/Plugins/CruiseFromStarmapCustom.ini.example'
+    'SFSE/Plugins/CruiseFromStarmap.pdb'
 )
 $actualRelativeFiles = @(
     Get-ChildItem -LiteralPath $releaseData -File -Recurse -ErrorAction Stop |
@@ -81,29 +79,13 @@ $actualRelativeFiles = @(
 $allowlistDifference = Compare-Object ($expectedRelativeFiles | Sort-Object) $actualRelativeFiles
 if ($allowlistDifference) {
     $detail = $allowlistDifference | Out-String
-    throw "Release payload differs from the four-file allowlist:`n$detail"
-}
-
-$defaultIni = Join-Path $pluginRoot 'CruiseFromStarmap.ini'
-$activeKeys = @(
-    Get-Content -LiteralPath $defaultIni |
-        Where-Object { $_ -match '^\s*[^;#\[\s][^=]*=' } |
-        ForEach-Object { ($_ -split '=', 2)[0].Trim() }
-)
-if ($activeKeys.Count -ne 1 -or $activeKeys[0] -ne 'bVerboseLog') {
-    throw "Default INI exposes unexpected keys: $($activeKeys -join ', ')"
-}
-if ((Get-Content -LiteralPath $defaultIni) -notcontains 'bVerboseLog=true') {
-    throw 'Default INI must ship with bVerboseLog=true until release smoke validation passes.'
+    throw "Release payload differs from the DLL/PDB allowlist:`n$detail"
 }
 
 $builtDll = Join-Path $projectRoot 'build\windows\x64\releasedbg\CruiseFromStarmap.dll'
 $builtPdb = Join-Path $projectRoot 'build\windows\x64\releasedbg\CruiseFromStarmap.pdb'
 $stagedDll = Join-Path $pluginRoot 'CruiseFromStarmap.dll'
 $stagedPdb = Join-Path $pluginRoot 'CruiseFromStarmap.pdb'
-$sourceIni = Join-Path $projectRoot 'CruiseFromStarmap.ini'
-$sourceExample = Join-Path $projectRoot 'CruiseFromStarmapCustom.ini.example'
-$stagedExample = Join-Path $pluginRoot 'CruiseFromStarmapCustom.ini.example'
 
 $builtVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($builtDll)
 if ($builtVersion.FileMajorPart -lt 0 -or $builtVersion.FileMinorPart -lt 0 -or
@@ -118,9 +100,7 @@ if ($Version -eq '0.0.0') {
 
 $hashPairs = @(
     @($builtDll, $stagedDll, 'DLL'),
-    @($builtPdb, $stagedPdb, 'PDB'),
-    @($sourceIni, $defaultIni, 'default INI'),
-    @($sourceExample, $stagedExample, 'custom INI example')
+    @($builtPdb, $stagedPdb, 'PDB')
 )
 foreach ($pair in $hashPairs) {
     $leftHash = (Get-FileHash -LiteralPath $pair[0] -Algorithm SHA256).Hash
@@ -163,10 +143,7 @@ $symbolsPlugins = Join-Path $symbolsRoot 'Data\SFSE\Plugins'
 New-Item -ItemType Directory -Path $mainPlugins -Force | Out-Null
 New-Item -ItemType Directory -Path $symbolsPlugins -Force | Out-Null
 
-foreach ($name in @('CruiseFromStarmap.dll', 'CruiseFromStarmap.ini',
-        'CruiseFromStarmapCustom.ini.example')) {
-    Copy-Item -LiteralPath (Join-Path $pluginRoot $name) -Destination $mainPlugins -Force
-}
+Copy-Item -LiteralPath $stagedDll -Destination $mainPlugins -Force
 Copy-Item -LiteralPath $stagedPdb -Destination $symbolsPlugins -Force
 
 New-Item -ItemType Directory -Path $distRoot -Force | Out-Null
@@ -181,8 +158,8 @@ Compress-Archive -LiteralPath (Join-Path $mainRoot 'Data') -DestinationPath $mai
 Compress-Archive -LiteralPath (Join-Path $symbolsRoot 'Data') -DestinationPath $symbolsArchive
 
 $hashRows = @(
-    Get-FileHash -LiteralPath $stagedDll, $stagedPdb, $defaultIni,
-        $stagedExample, $mainArchive, $symbolsArchive -Algorithm SHA256
+    Get-FileHash -LiteralPath $stagedDll, $stagedPdb, $mainArchive,
+        $symbolsArchive -Algorithm SHA256
 )
 $checksumPath = Join-Path $distRoot 'SHA256SUMS.txt'
 $checksumLines = $hashRows | ForEach-Object {

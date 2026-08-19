@@ -334,17 +334,15 @@ public:
         }
 
         MapView view = MapView::Unknown;
-        FormID currentBodyId = 0;
         FormID currentSystemFormId = 0;
 
         RE::Scaleform::GFx::Value data;
         if (CFS::ScaleformValue::Payload(params, data)) {
             view = ReadMapView(data);
-            currentBodyId = CFS::ScaleformValue::UIntMember(data, "uBodyLocationID");
             currentSystemFormId = CFS::ScaleformValue::UIntMember(data, "uSystemLocationID");
         }
 
-        m_owner.m_mapObservations.RecordMapData(identity, view, currentBodyId, currentSystemFormId);
+        m_owner.m_mapObservations.RecordMapData(identity, view, currentSystemFormId);
     }
 
 private:
@@ -777,19 +775,19 @@ bool StarfieldCruiseAdapter::Initialize()
     const auto menus = SFSE::GetMenuInterface();
     const auto ui = RE::UI::GetSingleton();
     if (!menus || !ui) {
-        REX::ERROR("StarfieldCruiseAdapter: required menu interface unavailable (sfse={} ui={}); v2 disabled", static_cast<bool>(menus), static_cast<bool>(ui));
+        REX::ERROR("StarfieldCruiseAdapter: required menu interface unavailable (sfse={} ui={}); plugin disabled", static_cast<bool>(menus), static_cast<bool>(ui));
         return false;
     }
 
     m_initializationAttempted = true;
     if (!CFS::UiPostAdvanceHook::Install(&OnUiSafeFrame)) {
-        REX::ERROR("StarfieldCruiseAdapter: Scaleform post-advance pump unavailable; v2 disabled");
+        REX::ERROR("StarfieldCruiseAdapter: Scaleform post-advance pump unavailable; plugin disabled");
         return false;
     }
 
     ResolveInputBindings();
     if (!InstallInput()) {
-        REX::ERROR("StarfieldCruiseAdapter: UI input hook unavailable; v2 disabled");
+        REX::ERROR("StarfieldCruiseAdapter: UI input hook unavailable; plugin disabled");
         return false;
     }
 
@@ -877,7 +875,7 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
             }
         }
         faulted = true;
-        REX::ERROR("StarfieldCruiseAdapter: post-advance action boundary threw '{}'; further v2 UI work disabled{}", error.what(), unresolvedPress && adapter.m_hudCruisePressed ? "; a dispatched HUD Cruise press could not be safely released" : "");
+        REX::ERROR("StarfieldCruiseAdapter: post-advance action boundary threw '{}'; further UI work disabled{}", error.what(), unresolvedPress && adapter.m_hudCruisePressed ? "; a dispatched HUD Cruise press could not be safely released" : "");
     } catch (...) {
         adapter.m_mapActionInteractive.store(false, std::memory_order_release);
         adapter.ResetMapActionInput();
@@ -891,7 +889,7 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
             }
         }
         faulted = true;
-        REX::ERROR( "StarfieldCruiseAdapter: post-advance action boundary threw an unknown exception; further v2 UI work disabled{}", unresolvedPress && adapter.m_hudCruisePressed ? "; a dispatched HUD Cruise press could not be safely released" : "");
+        REX::ERROR( "StarfieldCruiseAdapter: post-advance action boundary threw an unknown exception; further UI work disabled{}", unresolvedPress && adapter.m_hudCruisePressed ? "; a dispatched HUD Cruise press could not be safely released" : "");
     }
 }
 
@@ -986,8 +984,8 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         observations.mapData->identity == m_activeMapIdentity) {
         const auto& mapData = *observations.mapData;
 
-        // RemoteRouteProtocol compares an STDT system root. uBodyLocationID
-        // is the displayed PNDT and can never satisfy that gate.
+        // RemoteRouteProtocol compares an STDT system root. The displayed
+        // uBodyLocationID is a PNDT and is intentionally not retained.
         m_remoteRoute.ObserveMapData(
             mapData.identity, mapData.view, mapData.currentSystemFormId);
 

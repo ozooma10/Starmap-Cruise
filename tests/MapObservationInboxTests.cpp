@@ -33,7 +33,7 @@ namespace
         MapObservationInbox inbox;
         const auto identity = OpenMap(inbox);
 
-        inbox.RecordMapData(identity, MapView::System, 0x1234, 0xABCD);
+        inbox.RecordMapData(identity, MapView::System, 0xABCD);
         inbox.RecordMarkers(identity, {
             .highlightedCount = 1,
             .highlighted = {
@@ -58,18 +58,17 @@ namespace
         Require(!observations.dossier, "close retained a stale dossier");
     }
 
-    void TestMapDataCarriesCurrentBody()
+    void TestMapDataCarriesCurrentSystem()
     {
         MapObservationInbox inbox;
         const auto identity = OpenMap(inbox);
 
-        inbox.RecordMapData(identity, MapView::System, 0x1234, 0xABCD);
+        inbox.RecordMapData(identity, MapView::System, 0xABCD);
 
         const auto observations = inbox.Drain();
         Require(observations.mapData.has_value(), "map data was not recorded");
         Require(observations.mapData->identity == identity, "map data retained the wrong identity");
         Require(observations.mapData->view == MapView::System, "map data retained the wrong view");
-        Require(observations.mapData->currentBodyId == 0x1234, "map data retained the wrong current body");
         Require(observations.mapData->currentSystemFormId == 0xABCD, "map data retained the wrong current-system form");
     }
 
@@ -78,13 +77,12 @@ namespace
         MapObservationInbox inbox;
         const auto identity = OpenMap(inbox);
 
-        inbox.RecordMapData(identity, MapView::System, 0x1234, 0xABCD);
-        inbox.RecordMapData(identity, MapView::Galaxy, 0x5678, 0xBCDE);
+        inbox.RecordMapData(identity, MapView::System, 0xABCD);
+        inbox.RecordMapData(identity, MapView::Galaxy, 0xBCDE);
 
         const auto observations = inbox.Drain();
         Require(observations.mapData.has_value(), "map data was not recorded");
         Require(observations.mapData->view == MapView::Unknown, "conflicting views did not become unknown");
-        Require(observations.mapData->currentBodyId == 0, "conflicting current bodies did not become unavailable");
         Require(observations.mapData->currentSystemFormId == 0, "conflicting current-system forms did not become unavailable");
     }
 
@@ -157,7 +155,7 @@ namespace
         const auto oldIdentity = OpenMap(inbox);
 
         inbox.RecordMovieCreated(200);
-        inbox.RecordMapData(oldIdentity, MapView::System, 0x1234, 0xABCD);
+        inbox.RecordMapData(oldIdentity, MapView::System, 0xABCD);
         inbox.RecordMarkers(oldIdentity, {
             .highlightedCount = 1,
             .highlighted = {
@@ -256,7 +254,7 @@ namespace
         MapObservationInbox inbox;
         const auto identity = OpenMap(inbox);
 
-        inbox.RecordMapData(identity, MapView::System, 0x1234, 0xABCD);
+        inbox.RecordMapData(identity, MapView::System, 0xABCD);
         inbox.RecordMarkers(identity, {
             .highlightedCount = 1,
             .highlighted = {
@@ -287,7 +285,7 @@ namespace
     void RunTests()
     {
         TestCloseKeepsOpenIdentity();
-        TestMapDataCarriesCurrentBody();
+        TestMapDataCarriesCurrentSystem();
         TestMapDataCoalescesFailClosed();
         TestTargetObservationsCarryPlainValues();
         TestLatestTargetObservationsReplaceStaleValues();

@@ -462,11 +462,6 @@ bool RemoteRouteBridge::Initialize(const StarfieldBodyResolutionSource& bodySour
     return m_impl->Initialize(bodySource);
 }
 
-bool RemoteRouteBridge::Available() const
-{
-    return m_impl->available;
-}
-
 bool RemoteRouteBridge::Begin(const BeginRemoteRoute& effect, const MapSessionIdentity& activeIdentity)
 {
     return m_impl->Begin(effect, activeIdentity);
@@ -495,9 +490,4 @@ RemoteRouteResult RemoteRouteBridge::OnMovieCreated(std::uint32_t generation)
 void RemoteRouteBridge::Cancel()
 {
     m_impl->Clear();
-}
-
-bool RemoteRouteBridge::Active() const
-{
-    return m_impl->protocol.Active();
 }

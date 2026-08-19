@@ -224,11 +224,6 @@ bool StarfieldBodyResolutionSource::InitializeRemotePlanning()
     return true;
 }
 
-bool StarfieldBodyResolutionSource::RemotePlanningAvailable() const
-{
-    return g_remotePlanningAvailable.load(std::memory_order_acquire);
-}
-
 std::optional<ResolvedBody> StarfieldBodyResolutionSource::ResolveBody(FormID bodyId) const
 {
     if (!IsLiveFormType(bodyId, RE::FormType::kPNDT)) {

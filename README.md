@@ -6,6 +6,7 @@ Starmap Cruise adds a Cruise action to Starfield's system map. Select a planet, 
 
 - SFSE
 - Address Library for SFSE Plugins
+- Starfield 1.16.244
 
 ## Installation
 
@@ -25,21 +26,34 @@ Data/
 
 Supported:
 
-- Planets and moons in the current or another system
-- Indexed stations in the current or another system
+- Planets and moons in the current system
+- Planets and moons in another system when Starfield can build a vanilla route
+- Indexed stations in the current system
 
-Currently Unsupported:
+Currently unsupported:
 
-- Remote Systems
+- Stations in another system
 - Generic non-station markers
 
 
-### Build
-To build the project, run the following command:
-```bat
+## Build and test
+
+Configure and build the plugin:
+
+```powershell
+xmake f -m releasedbg -y
 xmake build
 ```
-Generate compile_commands.json
-```bat
+
+Build and run the core test suite:
+
+```powershell
+xmake build CruiseFromStarmapTests
+xmake run CruiseFromStarmapTests
+```
+
+Generate `compile_commands.json`:
+
+```powershell
 xmake project -k compile_commands
 ```

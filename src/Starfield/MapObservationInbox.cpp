@@ -70,7 +70,7 @@ void MapObservationInbox::RecordLifecycle(bool opening)
     };
 }
 
-void MapObservationInbox::RecordMapData(const MapSessionIdentity& identity, MapView view, FormID currentBodyId, FormID currentSystemFormId)
+void MapObservationInbox::RecordMapData(const MapSessionIdentity& identity, MapView view, FormID currentSystemFormId)
 {
     std::lock_guard lock {m_mutex};
 
@@ -82,7 +82,6 @@ void MapObservationInbox::RecordMapData(const MapSessionIdentity& identity, MapV
         m_mapData = MapDataObservation {
             .identity = identity,
             .view = view,
-            .currentBodyId = currentBodyId,
             .currentSystemFormId = currentSystemFormId,
         };
         return;
@@ -90,9 +89,6 @@ void MapObservationInbox::RecordMapData(const MapSessionIdentity& identity, MapV
 
     if (m_mapData->view != view) {
         m_mapData->view = MapView::Unknown;
-    }
-    if (m_mapData->currentBodyId != currentBodyId) {
-        m_mapData->currentBodyId = 0;
     }
     if (m_mapData->currentSystemFormId != currentSystemFormId) {
         m_mapData->currentSystemFormId = 0;
