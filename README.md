@@ -29,6 +29,7 @@ Supported:
 - Planets and moons in the current system
 - Planets and moons in another system when Starfield can build a vanilla route
 - Indexed stations in the current system
+- Remote planet and moon jumps made through FTL - A Grav Lanes Successor
 
 Currently unsupported:
 

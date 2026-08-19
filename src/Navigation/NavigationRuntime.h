@@ -113,6 +113,7 @@ struct RemoteArrivalObservation
     bool mapClosed {false};
     bool loadingMenuClosed {false};
     bool completedPlayerJump {false};
+    bool completedReplacementJump {false};
     bool settledFlight {false};
     bool flying {false};
     bool freshHudPublication {false};

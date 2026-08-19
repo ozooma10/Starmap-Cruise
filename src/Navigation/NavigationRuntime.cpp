@@ -106,7 +106,7 @@ TransitionResult NavigationRuntime::ObserveRemoteArrival(RemoteArrivalObservatio
     }
 
     auto& operation = *m_state.remoteOperation;
-    if (!observation.mapClosed || !observation.loadingMenuClosed || !observation.completedPlayerJump || !observation.settledFlight || !observation.flying || !observation.freshHudPublication ||
+    if (!observation.mapClosed || !observation.loadingMenuClosed || (!observation.completedPlayerJump && !observation.completedReplacementJump) || !observation.settledFlight || !observation.flying || !observation.freshHudPublication ||
         observation.currentSystem != operation.destination.system) {
         return {};
     }

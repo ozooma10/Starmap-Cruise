@@ -1,5 +1,6 @@
 #include "Domain/Destination.h"
 #include "Domain/NonzeroCounter.h"
+#include "Domain/PlayerJumpState.h"
 #include "TestSuites.h"
 
 #include <limits>
@@ -102,6 +103,28 @@ namespace
         Require(CFS::AdvanceNonzeroCounter<std::uint32_t>(41) == 42, "ordinary counter did not advance once");
         Require(CFS::AdvanceNonzeroCounter(std::numeric_limits<std::uint64_t>::max()) == 1, "maximum counter did not roll over to one");
     }
+
+    void TestPlayerJumpStatePreservesReplacementJumpInitiation()
+    {
+        PlayerJumpState state;
+        state.Observe(1);
+        Require(!state.Started() && !state.Completed(), "orphaned calculation state started a jump");
+
+        state.Observe(0);
+        Require(state.Started() && !state.Completed(), "FTL-style initiation without vanilla completion was not retained");
+        state.Observe(1);
+        state.Observe(3);
+        Require(state.Started(), "replacement cancellation discarded the proven jump initiation");
+        Require(!state.Completed(), "replacement cancellation was mistaken for vanilla completion");
+
+        state.Reset();
+        Require(!state.Started() && !state.Completed(), "jump reset retained travel proof");
+
+        state.Observe(0);
+        state.Observe(1);
+        state.Observe(2);
+        Require(state.Started() && state.Completed(), "exact vanilla jump sequence did not complete");
+    }
 }
 
 void RunDomainTests()
@@ -111,4 +134,5 @@ void RunDomainTests()
     TestDestinationValidatesEveryIdentityComponent();
     TestDestinationIdentityIgnoresOnlyPresentationName();
     TestNonzeroCounterCoversInitialAdvanceAndRollover();
+    TestPlayerJumpStatePreservesReplacementJumpInitiation();
 }

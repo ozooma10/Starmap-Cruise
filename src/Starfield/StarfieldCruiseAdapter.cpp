@@ -35,6 +35,7 @@ namespace
     constexpr const char* HudCourseFeed = "TargetLowFrequencyProvider";
     constexpr const char* CruiseUserEvent = "Cruise";
     constexpr const char* GamepadCruiseUserEvent = "SHMonocle";
+    constexpr const char* FtlPluginName = "FTL.esm";
     constexpr auto MapMovieSettleTime = std::chrono::milliseconds(250);
     constexpr auto HudMovieSettleTime = std::chrono::milliseconds(250);
     constexpr auto HudPollInterval = std::chrono::milliseconds(50);
@@ -72,6 +73,27 @@ namespace
         const auto player = RE::PlayerCharacter::GetSingleton();
         const auto ship = player ? player->GetSpaceship() : nullptr;
         return ship && ship->IsInSpace(false);
+    }
+
+    template <class Files> bool ContainsPlugin(const Files& files, const char* name)
+    {
+        for (const auto* file : files) {
+            if (file && std::strcmp(file->fileName, name) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool IsPluginLoaded(const char* name)
+    {
+        const auto* data = RE::TESDataHandler::GetSingleton();
+        if (!data) {
+            return false;
+        }
+
+        const auto& files = data->compiledFileCollection;
+        return ContainsPlugin(files.files, name) || ContainsPlugin(files.smallFiles, name) || ContainsPlugin(files.mediumFiles, name);
     }
 
     template <class Event> RE::BSTEventSource<Event>* ProveEventSource()
@@ -763,9 +785,13 @@ bool StarfieldCruiseAdapter::Initialize()
     const bool planetaryIdentityReady = m_bodySource.InitializeRemotePlanning();
     const bool routeReady = planetaryIdentityReady && m_remoteRoute.Initialize(m_bodySource);
     const bool travelReady = InitializeTravelObservers();
+    m_ftlReplacementJumpLoaded = IsPluginLoaded(FtlPluginName);
     m_remoteRoutingAvailable = planetaryIdentityReady && routeReady && travelReady;
     if (!m_remoteRoutingAvailable) {
         REX::WARN("StarfieldCruiseAdapter: remote planet/moon routing disabled because one or more native guards failed; same-system Cruise remains enabled");
+    }
+    if (m_ftlReplacementJumpLoaded) {
+        REX::INFO("StarfieldCruiseAdapter: FTL replacement-jump compatibility enabled");
     }
     m_initialized = true;
     REX::INFO("StarfieldCruiseAdapter: initialized with map action presentation, copied observations, and typed Starfield effects");
@@ -1297,19 +1323,14 @@ void StarfieldCruiseAdapter::DrainTravelObservations()
             continue;
         }
 
-        if (observation.gravState == 0) {
-            m_gravJumpProgress = 1;
-            m_completedPlayerJump = false;
-        } else if (observation.gravState == 1 && m_gravJumpProgress == 1) {
-            m_gravJumpProgress = 2;
-        } else if (observation.gravState == 2 && m_gravJumpProgress == 2) {
-            m_gravJumpProgress = 0;
-            m_completedPlayerJump = true;
-        } else {
-            m_gravJumpProgress = 0;
-            m_completedPlayerJump = false;
-        }
-        REX::INFO("StarfieldCruiseAdapter: player grav-jump state={} destination={:08X} completed={}", observation.gravState, observation.destinationId, m_completedPlayerJump);
+        m_playerJumpState.Observe(observation.gravState);
+        REX::INFO(
+            "StarfieldCruiseAdapter: player grav-jump state={} destination={:08X} started={} completed={}",
+            observation.gravState,
+            observation.destinationId,
+            m_playerJumpState.Started(),
+            m_playerJumpState.Completed()
+        );
     }
 }
 
@@ -1324,7 +1345,11 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
     const auto now = Clock::now();
     const bool flying = IsPlayerFlying();
 
-    if (m_activeMapIdentity.IsValid() || m_loadingMenuOpen || !m_completedPlayerJump || !flying || m_lastRemoteUnsettled == Clock::time_point {} || now - m_lastRemoteUnsettled < RemoteWorldSettleTime || !m_lastHudCourse ||
+    const auto hud = ReadHudSnapshot();
+    const bool cruiseCanEngage = hud.cruiseState == ObservedCruiseState::Inactive && hud.engageAvailable;
+    const bool completedReplacementJump = m_ftlReplacementJumpLoaded && m_playerJumpState.Started() && !m_playerJumpState.Completed() && cruiseCanEngage;
+    const bool completedPlayerTravel = m_playerJumpState.Completed() || completedReplacementJump;
+    if (m_activeMapIdentity.IsValid() || m_loadingMenuOpen || !completedPlayerTravel || !cruiseCanEngage || !flying || m_lastRemoteUnsettled == Clock::time_point {} || now - m_lastRemoteUnsettled < RemoteWorldSettleTime || !m_lastHudCourse ||
         m_lastHudCourse->generation != m_hudMovieGeneration || m_lastHudCourse->publishedTicks <= m_lastTravelTicks) {
         return;
     }
@@ -1340,7 +1365,8 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
         .currentSystem = *currentSystem,
         .mapClosed = true,
         .loadingMenuClosed = true,
-        .completedPlayerJump = true,
+        .completedPlayerJump = m_playerJumpState.Completed(),
+        .completedReplacementJump = completedReplacementJump,
         .settledFlight = true,
         .flying = true,
         .freshHudPublication = true,
@@ -1358,7 +1384,11 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
         REX::ERROR("StarfieldCruiseAdapter: final-system remote activation failed to dispatch");
     } else if (result.handled) {
         if (m_runtime.CurrentNavigationState().phase == NavigationPhase::PreparingRemoteTarget) {
-            REX::INFO("StarfieldCruiseAdapter: operation={} accepted exact final-system arrival and dispatched one stock Cruise press", operationId);
+            REX::INFO(
+                "StarfieldCruiseAdapter: operation={} accepted exact final-system arrival via {} and dispatched one stock Cruise press",
+                operationId,
+                completedReplacementJump ? "FTL replacement completion" : "vanilla grav-jump completion"
+            );
         } else if (!courseRowsComplete) {
             REX::WARN("StarfieldCruiseAdapter: operation={} cancelled after proven final-system arrival because the HUD course row snapshot exceeded its fixed bound", operationId);
         } else {
@@ -1421,8 +1451,7 @@ void StarfieldCruiseAdapter::ClearRemoteDispatchState(OperationId operationId)
 void StarfieldCruiseAdapter::ResetRemoteTravelState()
 {
     m_loadingMenuOpen = false;
-    m_gravJumpProgress = 0;
-    m_completedPlayerJump = false;
+    m_playerJumpState.Reset();
     m_lastTravelTicks = 0;
     m_lastRemoteUnsettled = {};
     m_invalidFlightSince = {};

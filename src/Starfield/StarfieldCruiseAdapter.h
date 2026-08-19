@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Application/CruiseRuntime.h"
+#include "Domain/PlayerJumpState.h"
 #include "Starfield/HudObservationInbox.h"
 #include "Starfield/MapActionInputState.h"
 #include "Starfield/MapObservationInbox.h"
@@ -178,9 +179,9 @@ private:
     Clock::time_point m_courseRequestStarted;
 
     bool m_remoteRoutingAvailable {false};
+    bool m_ftlReplacementJumpLoaded {false};
     bool m_loadingMenuOpen {false};
-    std::uint8_t m_gravJumpProgress {0};
-    bool m_completedPlayerJump {false};
+    PlayerJumpState m_playerJumpState;
     std::int64_t m_lastTravelTicks {0};
     Clock::time_point m_lastRemoteUnsettled;
     Clock::time_point m_invalidFlightSince;

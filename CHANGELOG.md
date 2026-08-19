@@ -11,6 +11,7 @@
 - Expanded the native automated release gate across domain invariants, selection, presentation, map state, navigation, remote routing, dispatch recovery, input, and concurrent observation queues.
 - Added direct boundary coverage for timeout deadlines, invalid identities, stale callbacks, overflow recovery, and nonzero counter rollover.
 - Fixed a UI-frame race where an unrelated HUD row overflow could cancel a remote route immediately before its commit callback.
+- Added FTL compatibility for remote jumps whose scripted travel replaces the vanilla grav-jump completion event.
 - Promoted the current implementation from `v2/` to the primary `src/` and `tests/` layout.
 - Removed the unused legacy implementation and dead diagnostic APIs.
 - Simplified the release payload to the plugin DLL, with symbols distributed separately.

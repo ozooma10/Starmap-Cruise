@@ -507,6 +507,22 @@ namespace
         Require(runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313})).handled, "complete fresh travel proof was rejected");
     }
 
+    void TestReplacementJumpCompletionIsExplicitArrivalProof()
+    {
+        ::NavigationRuntime runtime;
+        const auto operationId = StartRemote(runtime);
+        runtime.RemoteRouteCommitted(operationId, RemoteSource);
+
+        auto observation = ReadyArrival(operationId, {0x0005E313});
+        observation.completedPlayerJump = false;
+        observation.completedReplacementJump = true;
+        const auto arrived = runtime.ObserveRemoteArrival(std::move(observation));
+
+        const auto* press = FindEffect<::PressCruise>(arrived);
+        Require(press && press->operationId == operationId, "completed replacement jump did not emit one correlated Cruise press");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::PreparingRemoteTarget, "completed replacement jump did not enter PreparingRemoteTarget");
+    }
+
     void TestIncompleteHudRowsFailOnlyAtProvenFinalArrival()
     {
         {
@@ -716,6 +732,7 @@ namespace
         TestRemoteSelectionRejectsUnsafeContexts();
         TestRemoteFailureCancellationAndLoadResetAreCorrelated();
         TestRemoteArrivalRequiresEveryFreshTravelProof();
+        TestReplacementJumpCompletionIsExplicitArrivalProof();
         TestIncompleteHudRowsFailOnlyAtProvenFinalArrival();
         TestRemoteWaypointEvidenceMustBeUniqueAndOrdered();
         TestLocalCallbacksArePhaseSensitiveAndIdempotent();
