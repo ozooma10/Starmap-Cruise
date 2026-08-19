@@ -156,8 +156,8 @@ Copy-Item -LiteralPath $stagedDll -Destination $mainPlugins -Force
 Copy-Item -LiteralPath $stagedPdb -Destination $symbolsPlugins -Force
 
 New-Item -ItemType Directory -Path $distRoot -Force | Out-Null
-$mainArchive = Join-Path $distRoot "Starmap Cruise-$Version.zip"
-$symbolsArchive = Join-Path $distRoot "Starmap Cruise-$Version-symbols.zip"
+$mainArchive = Join-Path $distRoot "Starmap-Cruise-$Version.zip"
+$symbolsArchive = Join-Path $distRoot "Starmap-Cruise-$Version-symbols.zip"
 foreach ($archive in @($mainArchive, $symbolsArchive)) {
     if (Test-Path -LiteralPath $archive) {
         Remove-Item -LiteralPath (Assert-ProjectChildPath $archive) -Force
