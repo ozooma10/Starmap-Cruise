@@ -16,8 +16,14 @@ std::optional<std::uint32_t> MapActionInputState::AcceptAction()
         return std::nullopt;
     }
 
+    const auto device = m_state->device;
+    if (m_state->released) {
+        m_state.reset();
+        return device;
+    }
+
     m_state->claimed = true;
-    return m_state->device;
+    return device;
 }
 
 bool MapActionInputState::Filter(std::uint32_t device, std::int32_t idCode, bool down)
@@ -29,9 +35,21 @@ bool MapActionInputState::Filter(std::uint32_t device, std::int32_t idCode, bool
 
     const bool claimed = m_state->claimed;
     if (!down) {
-        m_state.reset();
+        if (claimed) {
+            m_state.reset();
+        } else {
+            m_state->released = true;
+        }
     }
     return claimed;
+}
+
+void MapActionInputState::ExpireReleased()
+{
+    std::lock_guard lock {m_mutex};
+    if (m_state && m_state->released) {
+        m_state.reset();
+    }
 }
 
 void MapActionInputState::Reset()

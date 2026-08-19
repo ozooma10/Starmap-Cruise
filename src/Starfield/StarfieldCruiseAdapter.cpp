@@ -848,6 +848,7 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
         adapter.DrainHudObservations();
         adapter.DrainTravelObservations();
         adapter.DrainMapObservations();
+        adapter.m_mapActionInput.ExpireReleased();
         adapter.TrySubscribeMapFeeds();
         adapter.TrySubscribeHudFeed();
         adapter.UpdateHudRuntime();

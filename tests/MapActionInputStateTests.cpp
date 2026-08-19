@@ -18,14 +18,36 @@ namespace
         }
     }
 
-    void TestUnacceptedControlPassesThrough()
+    void TestReleasedControlRemainsAcceptableThroughActionDrain()
     {
         MapActionInputState state;
         state.Begin(Keyboard, CruiseKey);
 
         Require(!state.Filter(Keyboard, CruiseKey, true), "tracked map hold was filtered before acceptance");
         Require(!state.Filter(Keyboard, CruiseKey, false), "unaccepted map release was filtered");
-        Require(!state.AcceptAction(), "released control remained available for acceptance");
+        Require(state.AcceptAction() == Keyboard, "released control was lost before the action drain");
+        Require(!state.AcceptAction(), "released control was accepted twice");
+    }
+
+    void TestReleasedControlExpiresAfterActionDrain()
+    {
+        MapActionInputState state;
+        state.Begin(Keyboard, CruiseKey);
+
+        Require(!state.Filter(Keyboard, CruiseKey, false), "unaccepted map release was filtered");
+        state.ExpireReleased();
+        Require(!state.AcceptAction(), "released control survived beyond its action drain");
+    }
+
+    void TestFrameExpirationPreservesPressedControl()
+    {
+        MapActionInputState state;
+        state.Begin(Gamepad, CruiseKey);
+
+        state.ExpireReleased();
+        Require(state.AcceptAction() == Gamepad, "frame expiration discarded a control that was still pressed");
+        state.ExpireReleased();
+        Require(state.Filter(Gamepad, CruiseKey, false), "frame expiration discarded a claimed control before release");
     }
 
     void TestAcceptedControlIsClaimedThroughRelease()
@@ -100,7 +122,9 @@ namespace
 
 void RunMapActionInputStateTests()
 {
-    TestUnacceptedControlPassesThrough();
+    TestReleasedControlRemainsAcceptableThroughActionDrain();
+    TestReleasedControlExpiresAfterActionDrain();
+    TestFrameExpirationPreservesPressedControl();
     TestAcceptedControlIsClaimedThroughRelease();
     TestReleaseBeforeCloseEndsTheClaim();
     TestOnlyTheExactControlIsFiltered();

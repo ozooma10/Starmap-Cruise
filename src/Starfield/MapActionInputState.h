@@ -10,6 +10,7 @@ public:
     void Begin(std::uint32_t device, std::int32_t idCode);
     std::optional<std::uint32_t> AcceptAction();
     bool Filter(std::uint32_t device, std::int32_t idCode, bool down);
+    void ExpireReleased();
     void Reset();
 
 private:
@@ -18,6 +19,7 @@ private:
         std::uint32_t device {0};
         std::int32_t idCode {0};
         bool claimed {false};
+        bool released {false};
     };
 
     std::mutex m_mutex;
