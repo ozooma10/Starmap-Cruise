@@ -8,4 +8,6 @@ void RunCruiseRuntimeTests();
 void RunActionPresenterTests();
 void RunMapObservationInboxTests();
 void RunHudObservationInboxTests();
+void RunTravelObservationInboxTests();
+void RunRemoteRouteProtocolTests();
 void RunMapActionInputStateTests();

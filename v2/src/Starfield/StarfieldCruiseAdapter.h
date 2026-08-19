@@ -4,8 +4,10 @@
 #include "Starfield/HudObservationInbox.h"
 #include "Starfield/MapActionInputState.h"
 #include "Starfield/MapObservationInbox.h"
+#include "Starfield/RemoteRouteBridge.h"
 #include "Starfield/StationTargetBridge.h"
 #include "Starfield/StarfieldBodyResolutionSource.h"
+#include "Starfield/TravelObservationInbox.h"
 
 #include <atomic>
 #include <chrono>
@@ -40,6 +42,8 @@ private:
     class DossierHandler;
     class HudCourseHandler;
     class MapActionSurface;
+    class GravJumpSink;
+    class LoadGameSink;
 
     struct SelectionTrace
     {
@@ -47,7 +51,7 @@ private:
         SelectionAvailability availability {SelectionAvailability::Hidden};
         SelectionReason reason {SelectionReason::InactiveContext};
         FormID targetId {0};
-        std::optional<FormID> systemId;
+        std::optional<SystemIdentity> system;
         std::string displayName;
 
         friend bool operator==(const SelectionTrace&, const SelectionTrace&) = default;
@@ -59,9 +63,10 @@ private:
         explicit Commands(StarfieldCruiseAdapter& owner);
 
         bool CloseMap() override;
+        bool BeginRemoteRoute(const ::BeginRemoteRoute& effect) override;
         bool AssignStationTarget(FormID targetId) override;
-        bool PressCruise() override;
-        bool RequestCourse(FormID courseId) override;
+        bool PressCruise(OperationId operationId) override;
+        bool RequestCourse(FormID courseId, OperationId operationId) override;
 
     private:
         StarfieldCruiseAdapter& m_owner;
@@ -93,6 +98,11 @@ private:
 
     void DrainMapObservations();
     void DrainHudObservations();
+    void DrainTravelObservations();
+    void EvaluateRemoteArrival();
+    void HandleRemoteRouteResult(RemoteRouteResult result);
+    void ClearRemoteDispatchState(OperationId operationId);
+    void ResetRemoteTravelState();
     void TraceCurrentSelection();
     void TrySubscribeMapFeeds();
     void TrySubscribeHudFeed();
@@ -100,6 +110,7 @@ private:
     void RefreshInputPresentation();
     void UpdateMapAction();
     void UpdateTimeouts();
+    bool InitializeTravelObservers();
 
     bool InstallInput();
     void ResolveInputBindings();
@@ -109,18 +120,20 @@ private:
     MapActionEnvironment ReadMapActionEnvironment();
     HudSnapshot ReadHudSnapshot();
     bool InvokeHudCruiseUserEvent(const char* userEvent, bool down);
-    bool DispatchCourse(FormID courseId);
+    bool DispatchCourse(FormID courseId, OperationId operationId);
     bool DispatchMapClose();
 
     bool IsCurrentMapMovie(const void* root, const MapSessionIdentity& identity);
     bool IsCurrentHudMovie(const void* root, std::uint32_t generation);
 
     StarfieldBodyResolutionSource m_bodySource;
+    RemoteRouteBridge m_remoteRoute;
     StationTargetBridge m_stationTargets;
     Commands m_commands;
     CruiseRuntime m_runtime;
     MapObservationInbox m_mapObservations;
     HudObservationInbox m_hudObservations;
+    TravelObservationInbox m_travelObservations;
     std::optional<SelectionTrace> m_lastSelectionTrace;
     std::unique_ptr<MapActionSurface> m_mapActionSurface;
 
@@ -134,6 +147,8 @@ private:
     std::unique_ptr<MarkersHandler> m_markersHandler;
     std::unique_ptr<DossierHandler> m_dossierHandler;
     std::unique_ptr<HudCourseHandler> m_hudCourseHandler;
+    std::unique_ptr<GravJumpSink> m_gravJumpSink;
+    std::unique_ptr<LoadGameSink> m_loadGameSink;
 
     std::uint32_t m_hudMovieGeneration {0};
     std::int64_t m_hudMovieBornTicks {0};
@@ -152,13 +167,29 @@ private:
     Clock::time_point m_nextHudPoll;
     bool m_hudCruisePressed {false};
     bool m_hudCruiseTimedOut {false};
+    OperationId m_hudCruiseOperationId {0};
     std::string m_hudCruiseUserEvent;
     Clock::time_point m_hudCruiseStarted;
 
     MapSessionIdentity m_pendingMapCloseIdentity;
     Clock::time_point m_mapCloseStarted;
     FormID m_pendingCourseId {0};
+    OperationId m_pendingCourseOperationId {0};
     Clock::time_point m_courseRequestStarted;
 
+    bool m_remoteRoutingAvailable {false};
+    bool m_loadingMenuOpen {false};
+    std::uint8_t m_gravJumpProgress {0};
+    bool m_completedPlayerJump {false};
+    std::int64_t m_lastTravelTicks {0};
+    Clock::time_point m_lastRemoteUnsettled;
+    Clock::time_point m_invalidFlightSince;
+    Clock::time_point m_remoteCruiseInactiveSince;
+    std::optional<HudObservationInbox::CourseObservation> m_lastHudCourse;
+
+    // Hook installation is process-lifetime and intentionally not undone.
+    // Once initialization starts, a partial failure is terminal so a later
+    // retry cannot treat one of our own vtable hooks as the original target.
+    bool m_initializationAttempted {false};
     bool m_initialized {false};
 };

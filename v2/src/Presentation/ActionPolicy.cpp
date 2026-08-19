@@ -38,8 +38,7 @@ namespace
 
     ActionControl SelectControl(const SelectionDecision& selection, const ActionContext& context)
     {
-        // Remote targets are shown without a hold action during the current-system-only MVP.
-        if (selection.reason == SelectionReason::RemoteSystem) {
+        if (selection.requiresTravel || selection.reason == SelectionReason::RemoteSystem) {
             return ActionControl::TapOnly;
         }
 
@@ -68,6 +67,7 @@ ActionDecision EvaluateAction(const SelectionDecision& selection, const ActionCo
         .control = SelectControl(selection, context),
         .selectionReason = selection.reason,
         .label = LabelFor(selection.reason),
+        .requiresTravel = selection.requiresTravel,
     };
 
     if (!context.cruiseControlBound) {
@@ -77,6 +77,19 @@ ActionDecision EvaluateAction(const SelectionDecision& selection, const ActionCo
 
     if (!selection.IsEligible())
         return decision;
+
+    if (selection.requiresTravel) {
+        decision.label = "JUMP THEN CRUISE";
+        if (!context.remoteRoutingAvailable) {
+            decision.label = "REMOTE ROUTING UNAVAILABLE";
+            return decision;
+        }
+        if (context.cruiseStateWhenMapOpened != ObservedCruiseState::Inactive) {
+            decision.label = context.cruiseStateWhenMapOpened == ObservedCruiseState::Active ?
+                "EXIT CRUISE FIRST" : "CRUISE STATE UNAVAILABLE";
+            return decision;
+        }
+    }
 
     if (!context.vanillaActionEnabled)
         return decision;

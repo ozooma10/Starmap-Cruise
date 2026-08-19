@@ -20,6 +20,10 @@ namespace
     constexpr ::FormID MarsId = 0x20;
     constexpr ::FormID AlphaCentauriId = 0x100;
     constexpr ::FormID AlphaCentauriFormId = 0x5E60A;
+    constexpr ::FormID ChawlaId = 0x5E315;
+    constexpr ::FormID ChawlaParentId = 0x5E313;
+    constexpr ::FormID CheyenneId = 0x11AF0;
+    constexpr ::FormID CheyenneFormId = 0x5E607;
     constexpr ::FormID TheEyeMapId = 0x1285A;
     constexpr ::FormID TheEyeTargetId = 0x12894;
     constexpr ::FormID TheEyeCourseId = 0x12895;
@@ -32,6 +36,7 @@ namespace
     enum class RecordedCommand
     {
         CloseMap,
+        BeginRemoteRoute,
         AssignStationTarget,
         PressCruise,
         RequestCourse,
@@ -41,6 +46,7 @@ namespace
     {
         RecordedCommand command;
         ::FormID courseId {0};
+        ::OperationId operationId {0};
     };
 
     class FakeBodyResolutionSource final : public ::BodyResolutionSource
@@ -55,7 +61,8 @@ namespace
 
         std::optional<::ResolvedBody> result {::ResolvedBody {
             .id = JemisonId,
-            .systemId = AlphaCentauriId,
+            .system = {.starFormId = AlphaCentauriFormId, .numericId = AlphaCentauriId},
+            .remotePlan = ::RemoteTargetPlan {},
         }};
 
         mutable std::size_t calls {0};
@@ -70,9 +77,14 @@ namespace
             return Record(RecordedCommand::CloseMap);
         }
 
-        bool PressCruise() override
+        bool BeginRemoteRoute(const ::BeginRemoteRoute& effect) override
         {
-            return Record(RecordedCommand::PressCruise);
+            return Record(RecordedCommand::BeginRemoteRoute, effect.destination.courseId, effect.operationId);
+        }
+
+        bool PressCruise(::OperationId operationId) override
+        {
+            return Record(RecordedCommand::PressCruise, 0, operationId);
         }
 
         bool AssignStationTarget(::FormID targetId) override
@@ -80,20 +92,21 @@ namespace
             return Record(RecordedCommand::AssignStationTarget, targetId);
         }
 
-        bool RequestCourse(::FormID courseId) override
+        bool RequestCourse(::FormID courseId, ::OperationId operationId) override
         {
-            return Record(RecordedCommand::RequestCourse, courseId);
+            return Record(RecordedCommand::RequestCourse, courseId, operationId);
         }
 
         std::optional<RecordedCommand> failOn;
         std::vector<RecordedCall> calls;
 
     private:
-        bool Record(RecordedCommand command, ::FormID courseId = 0)
+        bool Record(RecordedCommand command, ::FormID courseId = 0, ::OperationId operationId = 0)
         {
             calls.push_back({
                 .command = command,
                 .courseId = courseId,
+                .operationId = operationId,
             });
 
             return !failOn || *failOn != command;
@@ -121,6 +134,7 @@ namespace
             .cruiseControlBound = true,
             .cruiseEngageAvailable = true,
             .vanillaActionEnabled = true,
+            .remoteRoutingAvailable = true,
         };
     }
 
@@ -142,6 +156,8 @@ namespace
         );
 
         Require(runtime.OnMapViewChanged(CurrentIdentity, ::MapView::System), "runtime rejected system view");
+        const auto starFormId = currentSystemId == ::FormID {0} ? ::FormID {0x5E5CB} : AlphaCentauriFormId;
+        Require(runtime.OnCurrentSystemFormObserved(CurrentIdentity, starFormId), "runtime rejected current-system STDT");
 
         Require(
             runtime.OnMarkersChanged(
@@ -312,6 +328,7 @@ namespace
             "selection-proof session did not open"
         );
         Require(runtime.OnMapViewChanged(CurrentIdentity, ::MapView::System), "selection-proof system view was rejected");
+        Require(runtime.OnCurrentSystemFormObserved(CurrentIdentity, AlphaCentauriFormId), "selection-proof STDT was rejected");
 
         const auto empty = runtime.CurrentSelection();
         Require(empty.availability == ::SelectionAvailability::Disabled, "empty system view did not disable selection");
@@ -341,7 +358,7 @@ namespace
         const auto eligible = runtime.CurrentSelection();
         Require(eligible.IsEligible(), "coherent runtime observations did not become eligible");
         Require(eligible.destination->targetId == JemisonId, "selection proof retained the wrong target");
-        Require(eligible.destination->systemId == ::FormID {AlphaCentauriId}, "selection proof retained the wrong system");
+        Require(eligible.destination->system.numericId == ::FormID {AlphaCentauriId}, "selection proof retained the wrong system");
         Require(eligible.destination->displayName == "Jemison", "selection proof retained the wrong display name");
         Require(commands.calls.empty(), "read-only selection proof dispatched a command");
         Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "read-only selection proof changed navigation state");
@@ -501,7 +518,7 @@ namespace
     void TestSolSystemIsEligible()
     {
         FakeBodyResolutionSource bodySource;
-        bodySource.result->systemId = 0;
+        bodySource.result->system = {.starFormId = 0x5E5CB, .numericId = 0};
         FakeCruiseCommands commands;
         ::CruiseRuntime runtime {bodySource, commands};
         OpenMap(runtime, ::ObservedCruiseState::Inactive, ::FormID {0});
@@ -637,6 +654,90 @@ namespace
         Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::CourseLocked, "late course-lock timeout changed the confirmed lock");
     }
 
+    void TestRemoteTapRunsOneCorrelatedLifecycle()
+    {
+        FakeBodyResolutionSource bodySource;
+        bodySource.result = ::ResolvedBody {
+            .id = JemisonId,
+            .system = {.starFormId = CheyenneFormId, .numericId = CheyenneId},
+            .remotePlan = ::RemoteTargetPlan {
+                .allowedWaypointIds = {ChawlaParentId},
+            },
+        };
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        const auto action = runtime.CurrentMapAction(ReadyEnvironment());
+        Require(action.CanHandleInput() && action.requiresTravel,
+            "remote body did not produce a travel action");
+        Require(action.control == ::ActionControl::TapOnly,
+            "remote action exposed a hold gesture");
+
+        const auto activated = runtime.ActivateMapAction(
+            CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment());
+        Require(activated.Succeeded(), "remote tap did not dispatch its route effect");
+        Require(commands.calls.size() == 1 &&
+                commands.calls[0].command == RecordedCommand::BeginRemoteRoute,
+            "remote tap did not dispatch exactly one BeginRemoteRoute command");
+        const auto operationId = commands.calls[0].operationId;
+        Require(operationId != 0, "remote command lost its operation ID");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::RoutingRemote,
+            "remote tap did not enter RoutingRemote");
+
+        Require(!runtime.OnRemoteRouteCommitted(operationId + 1, CurrentIdentity).handled,
+            "stale route commitment was accepted");
+        Require(runtime.OnRemoteRouteCommitted(operationId, CurrentIdentity).Succeeded(),
+            "exact route commitment was rejected");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::PendingRemoteArrival,
+            "route commitment did not enter PendingRemoteArrival");
+
+        ::RemoteArrivalObservation intermediate {
+            .operationId = operationId,
+            .currentSystem = {.starFormId = AlphaCentauriFormId, .numericId = AlphaCentauriId},
+            .mapClosed = true,
+            .loadingMenuClosed = true,
+            .completedPlayerJump = true,
+            .settledFlight = true,
+            .flying = true,
+            .freshHudPublication = true,
+            .courseRows = {JemisonId},
+        };
+        Require(!runtime.OnRemoteArrival(std::move(intermediate)).handled,
+            "an intermediate system was accepted as final arrival");
+
+        ::RemoteArrivalObservation finalArrival {
+            .operationId = operationId,
+            .currentSystem = {.starFormId = CheyenneFormId, .numericId = CheyenneId},
+            .mapClosed = true,
+            .loadingMenuClosed = true,
+            .completedPlayerJump = true,
+            .settledFlight = true,
+            .flying = true,
+            .freshHudPublication = true,
+            .courseRows = {JemisonId},
+        };
+        Require(runtime.OnRemoteArrival(std::move(finalArrival)).Succeeded(),
+            "exact final arrival did not dispatch Cruise activation");
+        Require(commands.calls.size() == 2 &&
+                commands.calls[1].command == RecordedCommand::PressCruise &&
+                commands.calls[1].operationId == operationId,
+            "final arrival did not issue one correlated Cruise press");
+
+        Require(runtime.OnCruiseChanged(true).Succeeded(),
+            "remote Cruise activation did not dispatch the final course request");
+        Require(commands.calls.size() == 3 &&
+                commands.calls[2].command == RecordedCommand::RequestCourse &&
+                commands.calls[2].courseId == JemisonId &&
+                commands.calls[2].operationId == operationId,
+            "remote lifecycle requested a waypoint or lost correlation");
+        Require(runtime.OnCourseLockChanged(JemisonId).Succeeded(),
+            "exact remote final lock was rejected");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::CourseLocked &&
+                !runtime.CurrentNavigationState().remoteOperation,
+            "completed remote lifecycle retained asynchronous ownership");
+    }
+
     void RunTests()
     {
         TestFullTapFlow();
@@ -657,6 +758,7 @@ namespace
         TestMapCloseTimeoutRecoversCurrentSelectionAndRejectsStaleIdentity();
         TestCruiseActivationTimeoutFallsBackAndRejectsLateObservation();
         TestCourseLockTimeoutRequiresExactCourseAndFallsBack();
+        TestRemoteTapRunsOneCorrelatedLifecycle();
     }
 }
 

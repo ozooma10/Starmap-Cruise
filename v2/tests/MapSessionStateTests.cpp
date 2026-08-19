@@ -36,6 +36,7 @@ namespace
 
     void PopulateExactPlanet(::MapSessionState& state)
     {
+        Require(state.CaptureCurrentSystemForm(CurrentIdentity, 0x1000), "current STDT was not captured");
         Require(state.SetView(CurrentIdentity, ::MapView::System), "system-view update was rejected");
 
         Require(
@@ -64,7 +65,8 @@ namespace
                 },
                 ::ResolvedBody {
                     .id = 0x10,
-                    .systemId = 0x100,
+                    .system = {.starFormId = 0x1000, .numericId = 0x100},
+                    .remotePlan = ::RemoteTargetPlan {},
                 }
             ),
             "dossier update was rejected"
@@ -86,7 +88,7 @@ namespace
 
         Require(selection.destination->targetId == 0x10, "selection retained the wrong target");
 
-        Require(selection.destination->systemId == ::FormID {0x100}, "selection retained the wrong system");
+        Require(selection.destination->system.numericId == ::FormID {0x100}, "selection retained the wrong system");
     }
 
     void TestStaleSessionUpdateIsIgnored()
@@ -163,7 +165,8 @@ namespace
                 },
                 ::ResolvedBody {
                     .id = 0x20,
-                    .systemId = 0x100,
+                    .system = {.starFormId = 0x1000, .numericId = 0x100},
+                    .remotePlan = ::RemoteTargetPlan {},
                 }
             ),
             "replacement dossier update was rejected"

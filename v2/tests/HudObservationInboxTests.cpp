@@ -1,6 +1,7 @@
 #include "Starfield/HudObservationInbox.h"
 #include "TestSuites.h"
 
+#include <array>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -75,6 +76,33 @@ namespace
         Require(observations.course->generation == observations.movie->generation, "movie and course generations disagreed");
         Require(observations.course->courseId == 0x5678, "replacement course retained the wrong body");
     }
+
+    void TestCoursePublicationCopiesRowsRevisionAndOverflow()
+    {
+        HudObservationInbox inbox;
+        inbox.RecordMovieCreated(100);
+        const auto generation = inbox.Drain().movie->generation;
+
+        std::array<FormID, HudObservationInbox::MaxCourseRows> rows {};
+        rows[0] = 0x1000;
+        rows[1] = 0x2000;
+        inbox.RecordCourse(generation, 0x2000, rows, 2, false);
+
+        const auto first = inbox.Drain().course;
+        Require(first.has_value(), "course-row publication was not recorded");
+        Require(first->rowCount == 2 && first->rows[0] == 0x1000 && first->rows[1] == 0x2000,
+            "course-row publication did not copy exact IDs");
+        Require(!first->overflowed, "bounded course-row publication reported overflow");
+        Require(first->revision != 0 && first->publishedTicks != 0,
+            "course-row publication lacked freshness identity");
+
+        inbox.RecordCourse(generation, 0, rows, rows.size() + 1, false);
+        const auto second = inbox.Drain().course;
+        Require(second.has_value() && second->overflowed,
+            "oversized course-row publication did not fail closed");
+        Require(second->rowCount == rows.size(), "oversized row count escaped the copied bound");
+        Require(second->revision > first->revision, "course publication revision was not monotonic");
+    }
 }
 
 void RunHudObservationInboxTests()
@@ -83,4 +111,5 @@ void RunHudObservationInboxTests()
     TestLatestCourseReplacesStaleValue();
     TestReplacementRejectsOldGenerationBeforeDrain();
     TestCurrentReplacementCourseSurvivesDrain();
+    TestCoursePublicationCopiesRowsRevisionAndOverflow();
 }

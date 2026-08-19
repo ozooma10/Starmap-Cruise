@@ -29,7 +29,11 @@ struct TargetObservation
 struct ResolvedBody
 {
     FormID id {0};
-    FormID systemId {0};
+    SystemIdentity system;
+
+    // A missing plan means the native parent contract was unavailable. An
+    // empty present plan is valid for a direct planet/root body.
+    std::optional<RemoteTargetPlan> remotePlan;
 };
 
 struct SelectionSnapshot
@@ -41,7 +45,7 @@ struct SelectionSnapshot
     bool systemView {false};
 
     std::optional<FormID> currentSystemId;
-    // Scaleform's current/player system identity (STDT FormID).
+    // Map-independent player system identity (STDT FormID).
     std::optional<FormID> currentSystemFormId;
 
     std::size_t highlightedMarkerCount {0};
@@ -79,6 +83,7 @@ struct SelectionDecision
     SelectionReason reason {SelectionReason::InactiveContext};
 
     std::optional<Destination> destination;
+    bool requiresTravel {false};
 
     bool IsEligible() const
     {

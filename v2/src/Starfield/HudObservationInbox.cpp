@@ -1,5 +1,7 @@
 #include "Starfield/HudObservationInbox.h"
 
+#include <algorithm>
+#include <chrono>
 #include <utility>
 
 void HudObservationInbox::RecordMovieCreated(std::int64_t bornTicks)
@@ -19,16 +21,33 @@ void HudObservationInbox::RecordMovieCreated(std::int64_t bornTicks)
 }
 
 void HudObservationInbox::RecordCourse(std::uint32_t generation, FormID courseId)
+
+{
+    RecordCourse(generation, courseId, {}, 0, false);
+}
+
+void HudObservationInbox::RecordCourse(std::uint32_t generation, FormID courseId, const std::array<FormID, MaxCourseRows>& rows, std::size_t rowCount, bool overflowed)
 {
     std::lock_guard lock {m_mutex};
     if (generation == 0 || generation != m_generation) {
         return;
     }
 
-    m_course = CourseObservation {
+    ++m_revision;
+    if (m_revision == 0) {
+        ++m_revision;
+    }
+
+    CourseObservation observation {
         .generation = generation,
         .courseId = courseId,
+        .rowCount = std::min(rowCount, rows.size()),
+        .overflowed = overflowed || rowCount > rows.size(),
+        .revision = m_revision,
+        .publishedTicks = std::chrono::steady_clock::now().time_since_epoch().count(),
     };
+    std::copy_n(rows.begin(), observation.rowCount, observation.rows.begin());
+    m_course = std::move(observation);
 }
 
 bool HudObservationInbox::IsCurrentGeneration(std::uint32_t generation)

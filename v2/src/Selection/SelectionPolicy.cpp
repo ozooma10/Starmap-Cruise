@@ -67,6 +67,11 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
             return Disabled(SelectionReason::RemoteSystem);
         }
 
+        const SystemIdentity currentSystem {
+            .starFormId = *snapshot.currentSystemFormId,
+            .numericId = *snapshot.currentSystemId,
+        };
+
         return {
             .availability = SelectionAvailability::Eligible,
             .reason = SelectionReason::Eligible,
@@ -74,7 +79,7 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
                 .kind = DestinationKind::Station,
                 .targetId = snapshot.marker.resolvedTargetId,
                 .courseId = snapshot.marker.resolvedCourseId,
-                .systemId = snapshot.currentSystemId,
+                .system = currentSystem,
                 .displayName = snapshot.marker.displayName,
             },
         };
@@ -92,15 +97,30 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
         return Disabled(SelectionReason::TargetSystemUnavailable);
     }
 
-    if (snapshot.resolvedBody->systemId != *snapshot.currentSystemId) {
-        return Disabled(SelectionReason::RemoteSystem);
+    if (!snapshot.currentSystemFormId || *snapshot.currentSystemFormId == 0) {
+        return Disabled(SelectionReason::CurrentSystemUnavailable);
+    }
+
+    const SystemIdentity currentSystem {
+        .starFormId = *snapshot.currentSystemFormId,
+        .numericId = *snapshot.currentSystemId,
+    };
+
+    if (!snapshot.resolvedBody->system.IsValid()) {
+        return Disabled(SelectionReason::TargetSystemUnavailable);
+    }
+
+    const bool requiresTravel = snapshot.resolvedBody->system != currentSystem;
+    if (requiresTravel && !snapshot.resolvedBody->remotePlan) {
+        return Disabled(SelectionReason::TargetSystemUnavailable);
     }
 
     Destination destination {
         .kind = ToDestinationKind(snapshot.dossier.kind),
         .targetId = snapshot.dossier.id,
         .courseId = snapshot.dossier.id,
-        .systemId = snapshot.resolvedBody->systemId,
+        .system = snapshot.resolvedBody->system,
+        .remotePlan = snapshot.resolvedBody->remotePlan.value_or(RemoteTargetPlan {}),
         .displayName = snapshot.dossier.displayName.empty() ? snapshot.marker.displayName : snapshot.dossier.displayName,
     };
 
@@ -108,5 +128,6 @@ SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
         .availability = SelectionAvailability::Eligible,
         .reason = SelectionReason::Eligible,
         .destination = std::move(destination),
+        .requiresTravel = requiresTravel,
     };
 }
