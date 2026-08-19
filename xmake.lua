@@ -10,7 +10,6 @@ add_rules("mode.debug", "mode.releasedbg")
 add_rules("plugin.vsxmake.autoupdate")
 
 target("Starmap Cruise")
-    set_basename("CruiseFromStarmap")
     add_rules("commonlibsf.plugin", {
         name = "Starmap Cruise",
         author = "ozooma10",
