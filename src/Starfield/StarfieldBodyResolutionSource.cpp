@@ -23,17 +23,12 @@ namespace
     constexpr std::size_t MaxAncestryDepth = 8;
     constexpr FormID MissingFormId = std::numeric_limits<FormID>::max();
 
-    constexpr auto AcquiringWrapperPattern = REL::Pattern<
-        "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 56 41 57 48 83 EC 30">();
-    constexpr auto CurrentBodyPattern = REL::Pattern<
-        "40 53 48 83 EC 40 48 8B D9 48 8B 0D 10 0B 76 04">();
-    constexpr auto NumericInnerPattern = REL::Pattern<
-        "48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 40 48">();
+    constexpr auto AcquiringWrapperPattern = REL::Pattern<"48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 56 41 57 48 83 EC 30">();
+    constexpr auto CurrentBodyPattern = REL::Pattern<"40 53 48 83 EC 40 48 8B D9 48 8B 0D 10 0B 76 04">();
+    constexpr auto NumericInnerPattern = REL::Pattern<"48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 40 48">();
     constexpr auto NumericInnerCallPattern = REL::Pattern<"E8 DC FE FF FF">();
-    constexpr auto SatelliteLookupPattern = REL::Pattern<
-        "48 83 EC 48 44 0F B7 05 F4 86 EA 03 48 8B 09 49 C1 E0 20 48 81 C1 68 02">();
-    constexpr auto ResolveBodyBySystemOrdinalPattern = REL::Pattern<
-        "48 89 5C 24 10 48 89 6C 24 18 56 57 41 55 41 56">();
+    constexpr auto SatelliteLookupPattern = REL::Pattern<"48 83 EC 48 44 0F B7 05 F4 86 EA 03 48 8B 09 49 C1 E0 20 48 81 C1 68 02">();
+    constexpr auto ResolveBodyBySystemOrdinalPattern = REL::Pattern<"48 89 5C 24 10 48 89 6C 24 18 56 57 41 55 41 56">();
 
     using ResolveNumericInnerFunction = FormID* (*)(FormID*, std::uintptr_t*, FormID);
     using LookupSatelliteFunction = const void* (*)(std::uintptr_t*, FormID);
@@ -69,8 +64,7 @@ namespace
 
     FormID* ResolveNumericInnerThunk(FormID* output, std::uintptr_t* databaseContext, FormID bodyId) noexcept
     {
-        const bool capture = g_captureTls.armed && !g_captureTls.reentrant &&
-            g_captureTls.expectedBodyId == bodyId;
+        const bool capture = g_captureTls.armed && !g_captureTls.reentrant && g_captureTls.expectedBodyId == bodyId;
         if (capture) {
             g_captureTls.reentrant = true;
         }
@@ -147,8 +141,7 @@ namespace
 
     std::optional<RemoteTargetPlan> BuildPlan(const SystemIdentity& system, ComponentCopy child)
     {
-        if (!g_remotePlanningAvailable.load(std::memory_order_acquire) || !child.satellitePresent ||
-            child.numericSystemId != system.numericId) {
+        if (!g_remotePlanningAvailable.load(std::memory_order_acquire) || !child.satellitePresent || child.numericSystemId != system.numericId) {
             return std::nullopt;
         }
 
@@ -163,9 +156,7 @@ namespace
             }
 
             const auto resolvedParentId = RE::BSGalaxy::GetBodyFormID(system.numericId, child.parentOrdinal);
-            if (!resolvedParentId || !IsLiveFormType(*resolvedParentId, RE::FormType::kPNDT) ||
-                std::find(visited.begin(), visited.begin() + visitedCount, *resolvedParentId) !=
-                    visited.begin() + visitedCount) {
+            if (!resolvedParentId || !IsLiveFormType(*resolvedParentId, RE::FormType::kPNDT) || std::find(visited.begin(), visited.begin() + visitedCount, *resolvedParentId) != visited.begin() + visitedCount) {
                 return std::nullopt;
             }
             const FormID parentId = *resolvedParentId;
@@ -173,10 +164,8 @@ namespace
             FormID parentStar = MissingFormId;
             FormID parentNumeric = MissingFormId;
             ComponentCopy parent;
-            if (!ResolveSystemForm(parentId, parentStar) || parentStar != system.starFormId ||
-                !ResolveNumeric(parentId, parentNumeric, &parent) || !parent.satellitePresent ||
-                parent.bodyId != parentId || parent.numericSystemId != system.numericId ||
-                parentNumeric != system.numericId || parent.planetOrdinal != child.parentOrdinal) {
+            if (!ResolveSystemForm(parentId, parentStar) || parentStar != system.starFormId || !ResolveNumeric(parentId, parentNumeric, &parent) || !parent.satellitePresent || parent.bodyId != parentId ||
+                parent.numericSystemId != system.numericId || parentNumeric != system.numericId || parent.planetOrdinal != child.parentOrdinal) {
                 return std::nullopt;
             }
 
@@ -202,15 +191,29 @@ bool StarfieldBodyResolutionSource::InitializeRemotePlanning()
     const auto satelliteAddress = LookupSatelliteRowId.address();
     const auto callSite = numericAddress + NumericOuterInnerCallOffset;
 
-    if (!CurrentBodyPattern.match(currentAddress) ||
-        !AcquiringWrapperPattern.match(systemAddress) ||
-        !AcquiringWrapperPattern.match(numericAddress) ||
-        !NumericInnerPattern.match(innerAddress) ||
-        !ResolveBodyBySystemOrdinalPattern.match(reverseAddress) ||
-        !SatelliteLookupPattern.match(satelliteAddress) ||
-        !NumericInnerCallPattern.match(callSite) ||
-        REL::ASM::CALL5::TARGET(callSite) != innerAddress) {
-        REX::ERROR("StarfieldBodyResolutionSource: 1.16.244 planetary identity fingerprint failed; remote routing disabled");
+    const bool currentMatches = CurrentBodyPattern.match(currentAddress);
+    const bool systemMatches = AcquiringWrapperPattern.match(systemAddress);
+    const bool numericMatches = AcquiringWrapperPattern.match(numericAddress);
+    const bool innerMatches = NumericInnerPattern.match(innerAddress);
+    const bool reverseMatches = ResolveBodyBySystemOrdinalPattern.match(reverseAddress);
+    const bool satelliteMatches = SatelliteLookupPattern.match(satelliteAddress);
+    const bool callMatches = NumericInnerCallPattern.match(callSite);
+    const bool callTargetMatches = callMatches && REL::ASM::CALL5::TARGET(callSite) == innerAddress;
+
+    if (!currentMatches || !systemMatches || !numericMatches || !innerMatches || !reverseMatches || !satelliteMatches || !callMatches || !callTargetMatches) {
+        REX::ERROR(
+            "StarfieldBodyResolutionSource: 1.16.244 planetary identity fingerprint failed "
+            "(current={} system={} numeric={} inner={} reverse={} satellite={} call={} callTarget={}); "
+            "remote routing disabled",
+            currentMatches,
+            systemMatches,
+            numericMatches,
+            innerMatches,
+            reverseMatches,
+            satelliteMatches,
+            callMatches,
+            callTargetMatches
+        );
         return false;
     }
 
@@ -273,8 +276,7 @@ std::optional<SystemIdentity> StarfieldBodyResolutionSource::ResolveSystemIdenti
     if (!ResolveNumeric(formId, identity.numericId, &component) || !identity.IsValid()) {
         return std::nullopt;
     }
-    if (type == RE::FormType::kPNDT &&
-        (!component.satellitePresent || component.bodyId != formId || component.numericSystemId != identity.numericId)) {
+    if (type == RE::FormType::kPNDT && (!component.satellitePresent || component.bodyId != formId || component.numericSystemId != identity.numericId)) {
         return std::nullopt;
     }
 

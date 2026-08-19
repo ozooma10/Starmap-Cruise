@@ -116,6 +116,7 @@ struct RemoteArrivalObservation
     bool settledFlight {false};
     bool flying {false};
     bool freshHudPublication {false};
+    bool courseRowsComplete {false};
     std::vector<FormID> courseRows;
 };
 

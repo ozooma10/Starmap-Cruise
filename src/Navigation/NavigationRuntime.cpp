@@ -111,6 +111,11 @@ TransitionResult NavigationRuntime::ObserveRemoteArrival(RemoteArrivalObservatio
         return {};
     }
 
+    if (!observation.courseRowsComplete) {
+        Reset();
+        return {.handled = true};
+    }
+
     const auto finalCount = static_cast<std::size_t>(std::count(observation.courseRows.begin(), observation.courseRows.end(), operation.destination.courseId));
     if (finalCount > 1) {
         Reset();
