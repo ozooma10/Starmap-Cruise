@@ -64,6 +64,15 @@ if (-not $SkipBuild) {
     }
 }
 
+Push-Location $projectRoot
+try {
+    Invoke-Checked 'xmake' @('build', '-y', 'CruiseFromStarmapTests')
+    Invoke-Checked 'xmake' @('test', '-v')
+}
+finally {
+    Pop-Location
+}
+
 $pluginRoot = Join-Path $releaseData 'SFSE\Plugins'
 $expectedRelativeFiles = @(
     'SFSE/Plugins/CruiseFromStarmap.dll',
