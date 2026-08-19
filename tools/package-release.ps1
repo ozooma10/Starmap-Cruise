@@ -75,8 +75,8 @@ finally {
 
 $pluginRoot = Join-Path $releaseData 'SFSE\Plugins'
 $expectedRelativeFiles = @(
-    'SFSE/Plugins/CruiseFromStarmap.dll',
-    'SFSE/Plugins/CruiseFromStarmap.pdb'
+    'SFSE/Plugins/Starmap Cruise.dll',
+    'SFSE/Plugins/Starmap Cruise.pdb'
 )
 $actualRelativeFiles = @(
     Get-ChildItem -LiteralPath $releaseData -File -Recurse -ErrorAction Stop |
@@ -91,10 +91,10 @@ if ($allowlistDifference) {
     throw "Release payload differs from the DLL/PDB allowlist:`n$detail"
 }
 
-$builtDll = Join-Path $projectRoot 'build\windows\x64\releasedbg\CruiseFromStarmap.dll'
-$builtPdb = Join-Path $projectRoot 'build\windows\x64\releasedbg\CruiseFromStarmap.pdb'
-$stagedDll = Join-Path $pluginRoot 'CruiseFromStarmap.dll'
-$stagedPdb = Join-Path $pluginRoot 'CruiseFromStarmap.pdb'
+$builtDll = Join-Path $projectRoot 'build\windows\x64\releasedbg\Starmap Cruise.dll'
+$builtPdb = Join-Path $projectRoot 'build\windows\x64\releasedbg\Starmap Cruise.pdb'
+$stagedDll = Join-Path $pluginRoot 'Starmap Cruise.dll'
+$stagedPdb = Join-Path $pluginRoot 'Starmap Cruise.pdb'
 
 $builtVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($builtDll)
 if ($builtVersion.FileMajorPart -lt 0 -or $builtVersion.FileMinorPart -lt 0 -or
@@ -156,8 +156,8 @@ Copy-Item -LiteralPath $stagedDll -Destination $mainPlugins -Force
 Copy-Item -LiteralPath $stagedPdb -Destination $symbolsPlugins -Force
 
 New-Item -ItemType Directory -Path $distRoot -Force | Out-Null
-$mainArchive = Join-Path $distRoot "CruiseFromStarmap-$Version.zip"
-$symbolsArchive = Join-Path $distRoot "CruiseFromStarmap-$Version-symbols.zip"
+$mainArchive = Join-Path $distRoot "Starmap Cruise-$Version.zip"
+$symbolsArchive = Join-Path $distRoot "Starmap Cruise-$Version-symbols.zip"
 foreach ($archive in @($mainArchive, $symbolsArchive)) {
     if (Test-Path -LiteralPath $archive) {
         Remove-Item -LiteralPath (Assert-ProjectChildPath $archive) -Force

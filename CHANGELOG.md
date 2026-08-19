@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.0 - Unreleased
+## 1.0.0 - 2026-08-19
 
 - Added guarded remote-system navigation for planets and moons using Starfield's stock route and jump flow.
 - Added same-system station resolution and target assignment.

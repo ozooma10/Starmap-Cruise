@@ -29,8 +29,13 @@ The active payload should contain:
 Data/
   SFSE/
     Plugins/
-      CruiseFromStarmap.dll
+      Starmap Cruise.dll
 ```
+
+When updating from a pre-1.0 release, remove
+`Data\SFSE\Plugins\CruiseFromStarmap.dll` before installing v1.0.0. The plugin
+file was renamed to `Starmap Cruise.dll`; leaving both files installed would
+load two copies of the plugin.
 
 
 ## Supported targets and limitations
