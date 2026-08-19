@@ -1020,16 +1020,14 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         if (inputDevice) {
             environment.inputDevice = *inputDevice == static_cast<std::uint32_t>(RE::InputEvent::DeviceType::kGamepad) ? NavigationInputDevice::Gamepad : NavigationInputDevice::KeyboardMouse;
         }
-        const bool holdOwned = holdRequested && inputDevice.has_value();
-        if (holdOwned) {
+        if (holdRequested) {
             gesture = MapActionGesture::HoldCompleted;
             m_pendingCruiseInputDevice = inputDevice;
         } else {
             m_pendingCruiseInputDevice.reset();
         }
-        const bool rejectedUnownedHold = holdRequested && !holdOwned;
-        if (rejectedUnownedHold) {
-            REX::WARN("StarfieldCruiseAdapter: completed map hold had no matching physical control; handling it as a tap");
+        if (holdRequested && !inputDevice) {
+            REX::INFO("StarfieldCruiseAdapter: completed map hold outlived physical input tracking; using the active input presentation");
         }
         const auto previousRemoteOperationId = m_runtime.CurrentNavigationState().remoteOperation ? m_runtime.CurrentNavigationState().remoteOperation->id : 0;
         if (previousRemoteOperationId != 0) {
@@ -1845,7 +1843,7 @@ void StarfieldCruiseAdapter::ProcessInputEvents(RE::BSInputEventReceiver* receiv
 
             const bool modifierReady = button->deviceType != RE::InputEvent::DeviceType::kKeyboard || !down || modifier < 0 || (::GetAsyncKeyState(modifier) & 0x8000) != 0;
             if (binding >= 0 && button->idCode == binding && modifierReady) {
-                if (first) {
+                if (down) {
                     m_mapActionInput.Begin(device, button->idCode);
                 }
                 routedEvents[routedCount++] = {

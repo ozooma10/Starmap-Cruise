@@ -20,6 +20,7 @@ private:
         std::int32_t idCode {0};
         bool claimed {false};
         bool released {false};
+        bool releaseGraceUsed {false};
     };
 
     std::mutex m_mutex;

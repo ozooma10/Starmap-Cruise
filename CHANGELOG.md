@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed completed map holds being downgraded to taps when Starfield delivered the validated UI callback after native release tracking had expired.
+
 ## 1.0.0 - 2026-08-19
 
 - Added guarded remote-system navigation for planets and moons using Starfield's stock route and jump flow.

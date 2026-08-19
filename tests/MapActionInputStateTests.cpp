@@ -29,14 +29,25 @@ namespace
         Require(!state.AcceptAction(), "released control was accepted twice");
     }
 
-    void TestReleasedControlExpiresAfterActionDrain()
+    void TestReleasedControlSurvivesOneEmptyActionDrain()
     {
         MapActionInputState state;
         state.Begin(Keyboard, CruiseKey);
 
         Require(!state.Filter(Keyboard, CruiseKey, false), "unaccepted map release was filtered");
         state.ExpireReleased();
-        Require(!state.AcceptAction(), "released control survived beyond its action drain");
+        Require(state.AcceptAction() == Keyboard, "released control did not survive one delayed action drain");
+    }
+
+    void TestReleasedControlExpiresAfterGraceDrain()
+    {
+        MapActionInputState state;
+        state.Begin(Keyboard, CruiseKey);
+
+        Require(!state.Filter(Keyboard, CruiseKey, false), "unaccepted map release was filtered");
+        state.ExpireReleased();
+        state.ExpireReleased();
+        Require(!state.AcceptAction(), "released control survived beyond its grace drain");
     }
 
     void TestFrameExpirationPreservesPressedControl()
@@ -123,7 +134,8 @@ namespace
 void RunMapActionInputStateTests()
 {
     TestReleasedControlRemainsAcceptableThroughActionDrain();
-    TestReleasedControlExpiresAfterActionDrain();
+    TestReleasedControlSurvivesOneEmptyActionDrain();
+    TestReleasedControlExpiresAfterGraceDrain();
     TestFrameExpirationPreservesPressedControl();
     TestAcceptedControlIsClaimedThroughRelease();
     TestReleaseBeforeCloseEndsTheClaim();

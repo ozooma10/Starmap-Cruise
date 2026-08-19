@@ -48,7 +48,11 @@ void MapActionInputState::ExpireReleased()
 {
     std::lock_guard lock {m_mutex};
     if (m_state && m_state->released) {
-        m_state.reset();
+        if (m_state->releaseGraceUsed) {
+            m_state.reset();
+        } else {
+            m_state->releaseGraceUsed = true;
+        }
     }
 }
 
