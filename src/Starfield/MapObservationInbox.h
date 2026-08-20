@@ -72,7 +72,7 @@ public:
     void RecordMapData(const MapSessionIdentity& identity, MapView view, FormID currentSystemFormId);
     void RecordMarkers(const MapSessionIdentity& identity, MarkerUpdate update);
     void RecordDossier(const MapSessionIdentity& identity, TargetObservation target);
-    void RecordAction(const MapSessionIdentity& identity, Action action);
+    bool RecordAction(const MapSessionIdentity& identity, Action action);
     Observations Drain();
 
 private:

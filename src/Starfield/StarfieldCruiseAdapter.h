@@ -93,6 +93,9 @@ private:
         std::int32_t keyboardModifier {-1};
         std::int32_t mouse {-1};
         std::int32_t gamepad {-1};
+        std::string keyboardMouseGlyph;
+        std::string xboxGamepadGlyph;
+        std::string playStationGamepadGlyph;
     };
 
     using Clock = std::chrono::steady_clock;

@@ -9,6 +9,7 @@
 #include "RE/Starfield.h"
 #include "REL/Pattern.h"
 #include "REX/REX.h"
+#include "SFSE/InputMap.h"
 #include "SFSE/SFSE.h"
 
 #include <Windows.h>
@@ -50,6 +51,75 @@ namespace
     constexpr std::uint32_t PlanetType = 2;
     constexpr std::uint32_t MoonType = 3;
     constexpr std::uint32_t StationType = 4;
+    constexpr std::uint32_t PlayStationController = 3;
+
+    std::string KeyboardMouseGlyph(const CFS::Input::CruiseBindings& bindings)
+    {
+        if (bindings.keyboard.code >= 0) {
+            const auto keyCode = SFSE::InputMap::VirtualKeyToKeycode(static_cast<std::uint32_t>(bindings.keyboard.code));
+            const auto key = SFSE::InputMap::GetKeyboardKeyName(keyCode);
+            if (bindings.keyboard.modifier < 0) {
+                return key;
+            }
+
+            const auto modifierCode = SFSE::InputMap::VirtualKeyToKeycode(static_cast<std::uint32_t>(bindings.keyboard.modifier));
+            const auto modifier = SFSE::InputMap::GetKeyboardKeyName(modifierCode);
+            if (modifier.empty()) {
+                return key;
+            }
+            if (key.empty()) {
+                return modifier;
+            }
+            return modifier + " + " + key;
+        }
+
+        switch (bindings.mouse.code) {
+        case 0:
+            return "LMB";
+        case 1:
+            return "RMB";
+        case 2:
+            return "MMB";
+        case 3:
+            return "M4";
+        case 4:
+            return "M5";
+        case 5:
+            return "M6";
+        case 6:
+            return "M7";
+        case 7:
+            return "M8";
+        case 8:
+            return "WHEEL UP";
+        case 9:
+            return "WHEEL DOWN";
+        default:
+            return {};
+        }
+    }
+
+    std::string GamepadGlyph(std::int32_t binding, bool playStation)
+    {
+        if (binding < 0) {
+            return {};
+        }
+
+        constexpr std::array xboxGlyphs {
+            'W', 'V', 'T', 'U', 'O', 'E', 'H', 'M', 'G', 'L', 'A', 'B', 'C', 'D', 'I', 'N',
+        };
+        constexpr std::array playStationGlyphs {
+            'w', 'v', 't', 'u', 'p', 'z', 'f', 'l', 'g', 'm', 'a', 'd', 'c', 'b', 'j', 'o',
+        };
+
+        const auto keyCode = SFSE::InputMap::GamepadMaskToKeycode(static_cast<std::uint32_t>(binding));
+        if (keyCode < SFSE::InputMap::kMacro_GamepadOffset || keyCode >= SFSE::InputMap::kMaxMacros) {
+            return {};
+        }
+
+        const auto index = keyCode - SFSE::InputMap::kMacro_GamepadOffset;
+        return std::string(1, playStation ? playStationGlyphs[index] : xboxGlyphs[index]);
+    }
 
     std::uintptr_t PackIdentity(const MapSessionIdentity& identity)
     {
@@ -450,11 +520,26 @@ class StarfieldCruiseAdapter::MapActionSurface final : public ::MapActionView
         {
             const auto identity = m_owner.m_activeMapIdentity;
             const auto* root = params.movie && params.movie->asMovieRoot ? params.movie->asMovieRoot.get() : nullptr;
+            const char* gesture = m_action == MapObservationInbox::Action::HoldCompleted ? "hold" : "tap";
             if (!m_owner.IsCurrentMapMovie(root, identity)) {
+                REX::WARN(
+                    "StarfieldCruiseAdapter: ignored stale map {} callback session={} generation={} root-present={}",
+                    gesture,
+                    identity.session,
+                    identity.generation,
+                    root != nullptr
+                );
                 return;
             }
 
-            m_owner.m_mapObservations.RecordAction(identity, m_action);
+            const bool queued = m_owner.m_mapObservations.RecordAction(identity, m_action);
+            REX::INFO(
+                "StarfieldCruiseAdapter: map {} callback session={} generation={} queued={}",
+                gesture,
+                identity.session,
+                identity.generation,
+                queued
+            );
         }
 
     private:
@@ -468,6 +553,7 @@ public:
     void Present(const ActionDecision& decision)
     {
         m_presenter.Present(decision, *this);
+        RefreshBindingGlyph(decision.control);
     }
 
     void InvalidateMovie()
@@ -482,6 +568,8 @@ public:
         m_tapButton = Value {};
         m_tapKeyboardData = Value {};
         m_tapGamepadData = Value {};
+        m_glyphLayoutPasses = 0;
+        m_glyphFailureLogged = false;
         m_owner.m_mapActionInteractive.store(false, std::memory_order_release);
     }
 
@@ -527,6 +615,9 @@ public:
         }
 
         buttonBar.Invoke("RefreshButtons");
+        if (showTap || showCombo) {
+            m_glyphLayoutPasses = 2;
+        }
 
         const bool desiredApplied = presentation.control == ActionControl::Hidden || (showTap && tapApplied) || (showCombo && comboApplied);
         m_owner.m_mapActionInteractive.store(desiredApplied && presentation.enabled, std::memory_order_release);
@@ -679,6 +770,63 @@ private:
         return applied;
     }
 
+    void RefreshBindingGlyph(ActionControl control)
+    {
+        Value* button = nullptr;
+        if (control == ActionControl::TapOnly && m_tapReady) {
+            button = &m_tapButton;
+        } else if (control == ActionControl::TapAndHold && m_comboReady) {
+            button = &m_comboButton;
+        } else {
+            return;
+        }
+
+        RE::Scaleform::GFx::ASMovieRootBase* root = nullptr;
+        Value vanillaData;
+        Value buttonBar;
+        if (!Resolve(root, vanillaData, buttonBar)) {
+            return;
+        }
+
+        const bool gamepad = m_owner.m_presentedInputWasGamepad;
+        const auto controller = CFS::ScaleformValue::UIntMember(*button, "uiController");
+        const auto& glyph = gamepad ?
+            (controller == PlayStationController ? m_owner.m_inputBindings.playStationGamepadGlyph : m_owner.m_inputBindings.xboxGamepadGlyph) :
+            m_owner.m_inputBindings.keyboardMouseGlyph;
+        if (glyph.empty()) {
+            return;
+        }
+
+        Value buttonClip;
+        Value buttonInstance;
+        const char* clipName = gamepad ? "ConsoleButton_mc" : "PCButton_mc";
+        if (!button->GetMember(clipName, &buttonClip) || !(buttonClip.IsObject() || buttonClip.IsDisplayObject()) ||
+            !buttonClip.GetMember("ButtonInstance_mc", &buttonInstance) || !(buttonInstance.IsObject() || buttonInstance.IsDisplayObject())) {
+            if (!m_glyphFailureLogged) {
+                REX::WARN("StarfieldCruiseAdapter: resolved Cruise binding glyph could not reach the active map button");
+                m_glyphFailureLogged = true;
+            }
+            return;
+        }
+
+        Value text;
+        root->CreateString(&text, glyph.c_str());
+        if (!buttonInstance.Invoke("SetText", nullptr, &text, 1)) {
+            if (!m_glyphFailureLogged) {
+                REX::WARN("StarfieldCruiseAdapter: resolved Cruise binding glyph could not update the active map button");
+                m_glyphFailureLogged = true;
+            }
+            return;
+        }
+
+        buttonInstance.SetMember("visible", Value {true});
+        m_glyphFailureLogged = false;
+        if (m_glyphLayoutPasses > 0) {
+            buttonBar.Invoke("RefreshButtons");
+            --m_glyphLayoutPasses;
+        }
+    }
+
     StarfieldCruiseAdapter& m_owner;
     ::ActionPresenter m_presenter;
     Handler m_tapHandler;
@@ -693,6 +841,8 @@ private:
     Value m_tapButton;
     Value m_tapKeyboardData;
     Value m_tapGamepadData;
+    std::uint8_t m_glyphLayoutPasses {0};
+    bool m_glyphFailureLogged {false};
 };
 
 StarfieldCruiseAdapter& StarfieldCruiseAdapter::GetSingleton()
@@ -915,14 +1065,23 @@ void StarfieldCruiseAdapter::DrainMapObservations()
             }
 
             REX::INFO(
-                "StarfieldCruiseAdapter: map open session={} generation={} shipboard={} piloting={} stable={} cruise-state={} cruise-source={} current-STDT={:08X} current-numeric={:08X} accepted={}",
+                "StarfieldCruiseAdapter: map open session={} generation={} ship={:08X} shipboard={} piloting={} in-space={} landed={} docked={} loading={} jumping={} combat={} stable={} can-start={} cruise-state={} cruise-source={} engage={} current-STDT={:08X} current-numeric={:08X} accepted={}",
                 observation.identity.session,
                 observation.identity.generation,
+                shipContext.shipId,
                 flying,
                 shipContext.playerPiloting,
+                shipContext.inSpace,
+                shipContext.landed,
+                shipContext.docked,
+                shipContext.loading,
+                shipContext.jumpInProgress,
+                shipContext.playerActorInCombat,
                 shipContext.flightSettled,
+                shipContext.CanStartCruise(),
                 CruiseStateName(cruiseState),
                 static_cast<std::uint32_t>(cruise.source),
+                cruise.engageAvailable,
                 currentSystem ? currentSystem->starFormId : 0,
                 currentSystem ? currentSystem->numericId : 0,
                 accepted
@@ -1544,7 +1703,9 @@ ShipContext StarfieldCruiseAdapter::ReadShipContext() const
         .docked = ship->IsSpaceshipDocked(),
         .loading = m_loadingMenuOpen,
         .jumpInProgress = m_playerJumpState.InProgress(),
-        .inCombat = player->IsInCombat(),
+        // Actor combat can remain latched while the player roams a ship and is not a
+        // reliable ship-flight combat gate. Retain it for diagnostics only.
+        .playerActorInCombat = player->IsInCombat(),
         .flightSettled = m_lastFlightTransition != Clock::time_point {} && now - m_lastFlightTransition >= RemoteWorldSettleTime,
     };
 }
@@ -1837,6 +1998,9 @@ void StarfieldCruiseAdapter::ResolveInputBindings()
         .keyboardModifier = bindings.keyboard.modifier,
         .mouse = bindings.mouse.modifier < 0 ? bindings.mouse.code : -1,
         .gamepad = bindings.gamepad.modifier < 0 ? bindings.gamepad.code : -1,
+        .keyboardMouseGlyph = KeyboardMouseGlyph(bindings),
+        .xboxGamepadGlyph = GamepadGlyph(bindings.gamepad.code, false),
+        .playStationGamepadGlyph = GamepadGlyph(bindings.gamepad.code, true),
     };
 
     REX::INFO("StarfieldCruiseAdapter: Cruise bindings keyboard={} modifier={} mouse={} gamepad={}", m_inputBindings.keyboard, m_inputBindings.keyboardModifier, m_inputBindings.mouse, m_inputBindings.gamepad);
@@ -1944,7 +2108,20 @@ void StarfieldCruiseAdapter::ProcessInputEvents(RE::BSInputEventReceiver* receiv
             }
 
             const bool modifierReady = button->deviceType != RE::InputEvent::DeviceType::kKeyboard || !down || modifier < 0 || (::GetAsyncKeyState(modifier) & 0x8000) != 0;
-            if (binding >= 0 && button->idCode == binding && modifierReady) {
+            const bool boundInput = binding >= 0 && button->idCode == binding;
+            if (boundInput && (first || !down)) {
+                REX::INFO(
+                    "StarfieldCruiseAdapter: observed map action input edge={} device={} code={} event='{}' disabled={} modifier={} modifier-ready={}",
+                    down ? "press" : "release",
+                    device,
+                    button->idCode,
+                    button->strUserEvent.c_str() ? button->strUserEvent.c_str() : "",
+                    button->disabled,
+                    modifier,
+                    modifierReady
+                );
+            }
+            if (boundInput && modifierReady) {
                 if (down) {
                     m_mapActionInput.Begin(device, button->idCode);
                 }
@@ -1955,8 +2132,14 @@ void StarfieldCruiseAdapter::ProcessInputEvents(RE::BSInputEventReceiver* receiv
                 };
                 button->strUserEvent = RE::BSFixedString {userEvent};
                 button->disabled = false;
-                if (first) {
-                    REX::INFO("StarfieldCruiseAdapter: routed map action input device={} code={} was-disabled={}", device, button->idCode, routedEvents[routedCount - 1].originalDisabled);
+                if (first || !down) {
+                    REX::INFO(
+                        "StarfieldCruiseAdapter: routed map action input edge={} device={} code={} as='{}'",
+                        down ? "press" : "release",
+                        device,
+                        button->idCode,
+                        userEvent
+                    );
                 }
             }
         }

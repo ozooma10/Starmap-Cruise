@@ -140,7 +140,7 @@ namespace
             .docked = false,
             .loading = false,
             .jumpInProgress = false,
-            .inCombat = false,
+            .playerActorInCombat = false,
             .flightSettled = true,
         };
         Require(ready.IsShipboard(), "ready free-roam context was not shipboard");
@@ -163,8 +163,8 @@ namespace
         changed.jumpInProgress = true;
         Require(!changed.CanStartCruise(), "grav jump could start Cruise");
         changed = ready;
-        changed.inCombat = true;
-        Require(!changed.CanStartCruise(), "combat context could start Cruise");
+        changed.playerActorInCombat = true;
+        Require(changed.CanStartCruise(), "stale player-actor combat state blocked shipboard Cruise");
         changed = ready;
         changed.flightSettled = false;
         Require(!changed.CanStartCruise(), "unsettled flight could start Cruise");

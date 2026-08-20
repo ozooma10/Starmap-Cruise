@@ -118,24 +118,25 @@ void MapObservationInbox::RecordDossier(const MapSessionIdentity& identity, Targ
     };
 }
 
-void MapObservationInbox::RecordAction(const MapSessionIdentity& identity, Action action)
+bool MapObservationInbox::RecordAction(const MapSessionIdentity& identity, Action action)
 {
     std::lock_guard lock {m_mutex};
 
     if (!identity.IsValid() || identity != m_currentIdentity || m_actionOverflowed) {
-        return;
+        return false;
     }
 
     if (m_action) {
         m_action.reset();
         m_actionOverflowed = true;
-        return;
+        return false;
     }
 
     m_action = ActionObservation {
         .identity = identity,
         .action = action,
     };
+    return true;
 }
 
 MapObservationInbox::Observations MapObservationInbox::Drain()

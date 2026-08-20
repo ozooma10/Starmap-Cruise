@@ -240,7 +240,7 @@ namespace
         MapObservationInbox inbox;
         const auto identity = OpenMap(inbox);
 
-        inbox.RecordAction(identity, MapObservationInbox::Action::Tap);
+        Require(inbox.RecordAction(identity, MapObservationInbox::Action::Tap), "current map action was not queued");
         const auto tap = inbox.Drain();
 
         Require(tap.action.has_value(), "map action was not recorded");
@@ -248,8 +248,8 @@ namespace
         Require(tap.action->action == MapObservationInbox::Action::Tap, "map action retained the wrong gesture");
         Require(!tap.actionOverflowed, "single map action reported overflow");
 
-        inbox.RecordAction(identity, MapObservationInbox::Action::Tap);
-        inbox.RecordAction(identity, MapObservationInbox::Action::HoldCompleted);
+        Require(inbox.RecordAction(identity, MapObservationInbox::Action::Tap), "first conflicting action was not queued");
+        Require(!inbox.RecordAction(identity, MapObservationInbox::Action::HoldCompleted), "second conflicting action reported that it was queued");
         const auto conflict = inbox.Drain();
 
         Require(!conflict.action, "conflicting map actions retained an arbitrary gesture");

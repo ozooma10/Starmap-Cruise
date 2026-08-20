@@ -12,7 +12,7 @@ struct ShipContext
     bool docked {false};
     bool loading {false};
     bool jumpInProgress {false};
-    bool inCombat {false};
+    bool playerActorInCombat {false};
     bool flightSettled {false};
 
     [[nodiscard]] bool IsShipboard() const noexcept
@@ -22,7 +22,7 @@ struct ShipContext
 
     [[nodiscard]] bool CanStartCruise() const noexcept
     {
-        return IsShipboard() && !loading && !jumpInProgress && !inCombat && flightSettled;
+        return IsShipboard() && !loading && !jumpInProgress && flightSettled;
     }
 
     [[nodiscard]] bool SameShipAs(const ShipContext& other) const noexcept
