@@ -8,7 +8,7 @@ While piloting your ship in space, open the system map and highlight a supported
 
 - **Tap** to close the map and mark the highlighted destination as your Cruise target. If Cruise is already active, the new course is requested immediately.
 - **Hold** while Cruise is inactive to close the map, engage Cruise, and lock the highlighted destination as the course.
-- For a planet or moon in another system, use **JUMP THEN CRUISE**. The mod follows Starfield's vanilla route and jump flow, then engages Cruise after the ship reaches the destination system and flight has settled.
+- For a planet or moon in another system, use **JUMP THEN CRUISE**. The mod follows Starfield's vanilla route and jump flow, then engages Cruise after the ship reaches the destination system and flight has settled. If the jump places the ship directly at the selected body, the trip completes without engaging Cruise.
 
 The hold option is shown only when Cruise can be engaged. During a cooldown, while Cruise state is unavailable, or while Cruise is already active, the safe tap action may be the only option.
 

@@ -287,11 +287,26 @@ std::optional<SystemIdentity> StarfieldBodyResolutionSource::ResolveSystemIdenti
     return identity;
 }
 
-std::optional<SystemIdentity> StarfieldBodyResolutionSource::ResolveCurrentSystem() const
+std::optional<CurrentBodyLocation> StarfieldBodyResolutionSource::ResolveCurrentLocation() const
 {
     const auto bodyId = RE::BGSPlanet::GetCurrentBodyFormID();
     if (!bodyId) {
         return std::nullopt;
     }
-    return ResolveSystemIdentity(*bodyId);
+
+    const auto system = ResolveSystemIdentity(*bodyId);
+    if (!system) {
+        return std::nullopt;
+    }
+
+    return CurrentBodyLocation {
+        .bodyId = *bodyId,
+        .system = *system,
+    };
+}
+
+std::optional<SystemIdentity> StarfieldBodyResolutionSource::ResolveCurrentSystem() const
+{
+    const auto location = ResolveCurrentLocation();
+    return location ? std::optional<SystemIdentity> {location->system} : std::nullopt;
 }

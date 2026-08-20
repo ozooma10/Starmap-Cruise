@@ -685,6 +685,7 @@ namespace
 
         ::RemoteArrivalObservation intermediate {
             .operationId = operationId,
+            .currentBodyId = MarsId,
             .currentSystem = {.starFormId = AlphaCentauriFormId, .numericId = AlphaCentauriId},
             .mapClosed = true,
             .loadingMenuClosed = true,
@@ -699,6 +700,7 @@ namespace
 
         ::RemoteArrivalObservation finalArrival {
             .operationId = operationId,
+            .currentBodyId = ChawlaParentId,
             .currentSystem = {.starFormId = CheyenneFormId, .numericId = CheyenneId},
             .mapClosed = true,
             .loadingMenuClosed = true,
@@ -744,6 +746,7 @@ namespace
     {
         return {
             .operationId = operationId,
+            .currentBodyId = ChawlaParentId,
             .currentSystem = {.starFormId = CheyenneFormId, .numericId = CheyenneId},
             .mapClosed = true,
             .loadingMenuClosed = true,
@@ -754,6 +757,28 @@ namespace
             .courseRowsComplete = true,
             .courseRows = {JemisonId},
         };
+    }
+
+    void TestRemoteDirectArrivalSkipsCruiseCommands()
+    {
+        FakeBodyResolutionSource bodySource;
+        ConfigureRemoteBody(bodySource);
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        const auto operationId = ActivateRemote(runtime, commands);
+        Require(runtime.OnRemoteRouteCommitted(operationId, CurrentIdentity).Succeeded(), "direct-arrival setup did not commit its route");
+
+        auto arrival = ReadyRemoteArrival(operationId);
+        arrival.currentBodyId = JemisonId;
+        arrival.freshHudPublication = false;
+        arrival.courseRowsComplete = false;
+        arrival.courseRows.clear();
+        Require(runtime.OnRemoteArrival(std::move(arrival)).Succeeded(), "direct arrival without HUD proof was not completed");
+        Require(commands.calls.size() == 1 && commands.calls[0].command == RecordedCommand::BeginRemoteRoute, "direct arrival dispatched a Cruise command");
+        Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::Idle, "direct arrival did not return navigation to Idle");
+        Require(!runtime.CurrentNavigationState().destination && !runtime.CurrentNavigationState().remoteOperation, "direct arrival retained navigation ownership");
     }
 
     void TestDisabledActiveActionDoesNotDispatch()
@@ -932,6 +957,7 @@ namespace
         TestCruiseActivationTimeoutFallsBackAndRejectsLateObservation();
         TestCourseLockTimeoutRequiresExactCourseAndFallsBack();
         TestRemoteTapRunsOneCorrelatedLifecycle();
+        TestRemoteDirectArrivalSkipsCruiseCommands();
         TestDisabledActiveActionDoesNotDispatch();
         TestFailedRemoteRouteDispatchRecoversAutomatically();
         TestRemoteFailureAndCancellationCallbacksAreCorrelated();

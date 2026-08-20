@@ -2,6 +2,12 @@
 
 #include "Application/BodyResolutionSource.h"
 
+struct CurrentBodyLocation
+{
+    FormID bodyId {0};
+    SystemIdentity system;
+};
+
 class StarfieldBodyResolutionSource final : public BodyResolutionSource
 {
 public:
@@ -11,5 +17,6 @@ public:
 
     std::optional<ResolvedBody> ResolveBody(FormID bodyId) const override;
     std::optional<SystemIdentity> ResolveSystemIdentity(FormID formId) const;
+    std::optional<CurrentBodyLocation> ResolveCurrentLocation() const;
     std::optional<SystemIdentity> ResolveCurrentSystem() const;
 };

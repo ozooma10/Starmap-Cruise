@@ -109,6 +109,8 @@ struct TransitionResult
 struct RemoteArrivalObservation
 {
     OperationId operationId {0};
+    // The validated body whose orbit currently contains the player ship.
+    FormID currentBodyId {0};
     SystemIdentity currentSystem;
     bool mapClosed {false};
     bool loadingMenuClosed {false};

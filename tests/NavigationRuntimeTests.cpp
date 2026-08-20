@@ -74,6 +74,7 @@ namespace
     {
         return {
             .operationId = operationId,
+            .currentBodyId = 0x0005E313,
             .currentSystem = {.starFormId = 0x0005E60A, .numericId = 0x00011720},
             .mapClosed = true,
             .loadingMenuClosed = true,
@@ -496,6 +497,10 @@ namespace
         Require(!runtime.ObserveRemoteArrival(observation).handled, "non-flight arrival was accepted");
 
         observation = ReadyArrival(operationId, {0x0005E313});
+        observation.currentBodyId = 0;
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "arrival without a current body was accepted");
+
+        observation = ReadyArrival(operationId, {0x0005E313});
         observation.freshHudPublication = false;
         Require(!runtime.ObserveRemoteArrival(observation).handled, "stale HUD arrival was accepted");
 
@@ -505,6 +510,47 @@ namespace
 
         Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "rejected travel proof discarded the owned operation");
         Require(runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313})).handled, "complete fresh travel proof was rejected");
+    }
+
+    void TestRemoteArrivalAtSelectedBodySkipsCruiseAndHudProofs()
+    {
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+
+            auto premature = ReadyArrival(operationId, {});
+            premature.currentBodyId = Chawla().targetId;
+            premature.completedPlayerJump = false;
+            premature.freshHudPublication = false;
+            premature.courseRowsComplete = false;
+            Require(!runtime.ObserveRemoteArrival(premature).handled, "selected-body arrival bypassed completed-travel proof");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "premature selected-body arrival discarded remote ownership");
+
+            premature.completedPlayerJump = true;
+            premature.currentSystem = {.starFormId = 0x0005E607, .numericId = 0x00011AF0};
+            Require(!runtime.ObserveRemoteArrival(premature).handled, "selected-body arrival bypassed exact-system proof");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "wrong-system selected-body arrival discarded remote ownership");
+
+            premature.currentSystem = Chawla().system;
+            const auto arrived = runtime.ObserveRemoteArrival(std::move(premature));
+            Require(arrived.handled && !arrived.effect, "selected-body arrival emitted an engine effect without HUD proof");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "selected-body arrival did not complete navigation");
+            Require(!runtime.CurrentState().destination && !runtime.CurrentState().remoteOperation, "selected-body arrival retained navigation ownership");
+        }
+
+        {
+            ::NavigationRuntime runtime;
+            const auto operationId = StartRemote(runtime);
+            runtime.RemoteRouteCommitted(operationId, RemoteSource);
+
+            auto overflowed = ReadyArrival(operationId, {Chawla().courseId, Chawla().courseId});
+            overflowed.currentBodyId = Chawla().targetId;
+            overflowed.courseRowsComplete = false;
+            const auto arrived = runtime.ObserveRemoteArrival(std::move(overflowed));
+            Require(arrived.handled && !arrived.effect, "selected-body arrival did not take precedence over incomplete HUD rows");
+            Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "selected-body arrival with HUD overflow did not complete navigation");
+        }
     }
 
     void TestReplacementJumpCompletionIsExplicitArrivalProof()
@@ -732,6 +778,7 @@ namespace
         TestRemoteSelectionRejectsUnsafeContexts();
         TestRemoteFailureCancellationAndLoadResetAreCorrelated();
         TestRemoteArrivalRequiresEveryFreshTravelProof();
+        TestRemoteArrivalAtSelectedBodySkipsCruiseAndHudProofs();
         TestReplacementJumpCompletionIsExplicitArrivalProof();
         TestIncompleteHudRowsFailOnlyAtProvenFinalArrival();
         TestRemoteWaypointEvidenceMustBeUniqueAndOrdered();

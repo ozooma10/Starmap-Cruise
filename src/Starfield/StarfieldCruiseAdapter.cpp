@@ -1348,32 +1348,40 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
     const bool cruiseCanEngage = hud.cruiseState == ObservedCruiseState::Inactive && hud.engageAvailable;
     const bool completedReplacementJump = m_ftlReplacementJumpLoaded && m_playerJumpState.Started() && !m_playerJumpState.Completed() && cruiseCanEngage;
     const bool completedPlayerTravel = m_playerJumpState.Completed() || completedReplacementJump;
-    if (m_activeMapIdentity.IsValid() || m_loadingMenuOpen || !completedPlayerTravel || !cruiseCanEngage || !flying || m_lastRemoteUnsettled == Clock::time_point {} || now - m_lastRemoteUnsettled < RemoteWorldSettleTime || !m_lastHudCourse ||
-        m_lastHudCourse->generation != m_hudMovieGeneration || m_lastHudCourse->publishedTicks <= m_lastTravelTicks) {
+    if (m_activeMapIdentity.IsValid() || m_loadingMenuOpen || !completedPlayerTravel || !flying || m_lastRemoteUnsettled == Clock::time_point {} || now - m_lastRemoteUnsettled < RemoteWorldSettleTime) {
         return;
     }
 
-    const auto currentSystem = m_bodySource.ResolveCurrentSystem();
-    if (!currentSystem) {
+    const auto currentLocation = m_bodySource.ResolveCurrentLocation();
+    if (!currentLocation) {
+        return;
+    }
+
+    const bool arrivedAtDestination = currentLocation->bodyId == navigation.remoteOperation->destination.targetId;
+    const bool freshHudPublication = m_lastHudCourse && m_lastHudCourse->generation == m_hudMovieGeneration && m_lastHudCourse->publishedTicks > m_lastTravelTicks;
+    if (!arrivedAtDestination && (!cruiseCanEngage || !freshHudPublication)) {
         return;
     }
 
     const auto operationId = navigation.remoteOperation->id;
     RemoteArrivalObservation observation {
         .operationId = operationId,
-        .currentSystem = *currentSystem,
+        .currentBodyId = currentLocation->bodyId,
+        .currentSystem = currentLocation->system,
         .mapClosed = true,
         .loadingMenuClosed = true,
         .completedPlayerJump = m_playerJumpState.Completed(),
         .completedReplacementJump = completedReplacementJump,
         .settledFlight = true,
         .flying = true,
-        .freshHudPublication = true,
-        .courseRowsComplete = !m_lastHudCourse->overflowed,
+        .freshHudPublication = freshHudPublication,
+        .courseRowsComplete = freshHudPublication && !m_lastHudCourse->overflowed,
     };
-    observation.courseRows.reserve(m_lastHudCourse->rowCount);
-    for (std::size_t index = 0; index < m_lastHudCourse->rowCount; ++index) {
-        observation.courseRows.push_back(m_lastHudCourse->rows[index]);
+    if (freshHudPublication) {
+        observation.courseRows.reserve(m_lastHudCourse->rowCount);
+        for (std::size_t index = 0; index < m_lastHudCourse->rowCount; ++index) {
+            observation.courseRows.push_back(m_lastHudCourse->rows[index]);
+        }
     }
 
     const bool courseRowsComplete = observation.courseRowsComplete;
@@ -1382,11 +1390,14 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
         ClearRemoteDispatchState(operationId);
         REX::ERROR("StarfieldCruiseAdapter: final-system remote activation failed to dispatch");
     } else if (result.handled) {
-        if (m_runtime.CurrentNavigationState().phase == NavigationPhase::PreparingRemoteTarget) {
-            REX::INFO(
-                "StarfieldCruiseAdapter: operation={} accepted exact final-system arrival via {} and dispatched one stock Cruise press",
-                operationId,
-                completedReplacementJump ? "FTL replacement completion" : "vanilla grav-jump completion"
+        if (arrivedAtDestination && m_runtime.CurrentNavigationState().phase == NavigationPhase::Idle) {
+            ClearRemoteDispatchState(operationId);
+            REX::INFO("StarfieldCruiseAdapter: operation={} completed at destination body {:08X} via {}; Cruise activation skipped", 
+                operationId, currentLocation->bodyId, completedReplacementJump ? "FTL replacement completion" : "vanilla grav-jump completion"
+            );
+        } else if (m_runtime.CurrentNavigationState().phase == NavigationPhase::PreparingRemoteTarget) {
+            REX::INFO("StarfieldCruiseAdapter: operation={} accepted exact final-system arrival via {} and dispatched one stock Cruise press",
+                operationId, completedReplacementJump ? "FTL replacement completion" : "vanilla grav-jump completion"
             );
         } else if (!courseRowsComplete) {
             REX::WARN("StarfieldCruiseAdapter: operation={} cancelled after proven final-system arrival because the HUD course row snapshot exceeded its fixed bound", operationId);
