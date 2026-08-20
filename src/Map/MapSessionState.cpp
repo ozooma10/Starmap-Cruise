@@ -20,6 +20,7 @@ bool MapSessionState::Open(const MapOpenContext& context)
     m_identity = context.identity;
 
     m_flyingAtOpen = context.flying;
+    m_shipContextWhenOpened = context.shipContext;
     m_cruiseStateWhenOpened = context.cruiseState;
     m_currentSystemId = context.currentSystemId;
 
@@ -130,6 +131,11 @@ ObservedCruiseState MapSessionState::CruiseStateWhenOpened() const
     return m_open ? m_cruiseStateWhenOpened : ObservedCruiseState::Unknown;
 }
 
+ShipContext MapSessionState::ShipContextWhenOpened() const
+{
+    return m_open ? m_shipContextWhenOpened : ShipContext {};
+}
+
 bool MapSessionState::IsActive(const MapSessionIdentity& identity) const
 {
     return Accepts(identity);
@@ -154,6 +160,7 @@ void MapSessionState::ResetSession()
     m_identity = {};
 
     m_flyingAtOpen = false;
+    m_shipContextWhenOpened = {};
     m_cruiseStateWhenOpened = ObservedCruiseState::Unknown;
     m_currentSystemId.reset();
     m_currentSystemFormId.reset();

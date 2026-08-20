@@ -6,6 +6,7 @@
 #include "Starfield/MapActionInputState.h"
 #include "Starfield/MapObservationInbox.h"
 #include "Starfield/RemoteRouteBridge.h"
+#include "Starfield/ShipboardCruiseBridge.h"
 #include "Starfield/StationTargetBridge.h"
 #include "Starfield/StarfieldBodyResolutionSource.h"
 #include "Starfield/TravelObservationInbox.h"
@@ -79,6 +80,13 @@ private:
         bool engageAvailable {false};
     };
 
+    enum class CourseConfirmationSource : std::uint8_t
+    {
+        None,
+        Hud,
+        Native,
+    };
+
     struct InputBindings
     {
         std::int32_t keyboard {-1};
@@ -107,7 +115,7 @@ private:
     void TraceCurrentSelection();
     void TrySubscribeMapFeeds();
     void TrySubscribeHudFeed();
-    void UpdateHudRuntime();
+    void UpdateCruiseRuntime();
     void RefreshInputPresentation();
     void UpdateMapAction();
     void UpdateTimeouts();
@@ -119,6 +127,8 @@ private:
     void ResetMapActionInput();
 
     MapActionEnvironment ReadMapActionEnvironment();
+    ShipContext ReadShipContext() const;
+    CruiseControlSnapshot ReadCruiseControlSnapshot(const ShipContext& openedContext);
     HudSnapshot ReadHudSnapshot();
     bool InvokeHudCruiseUserEvent(const char* userEvent, bool down);
     bool DispatchCourse(FormID courseId, OperationId operationId);
@@ -129,6 +139,7 @@ private:
 
     StarfieldBodyResolutionSource m_bodySource;
     RemoteRouteBridge m_remoteRoute;
+    ShipboardCruiseBridge m_shipboardCruise;
     StationTargetBridge m_stationTargets;
     Commands m_commands;
     CruiseRuntime m_runtime;
@@ -164,6 +175,8 @@ private:
     std::optional<std::uint32_t> m_pendingCruiseInputDevice;
 
     std::optional<bool> m_lastCruiseActive;
+    std::optional<FormID> m_lastNativeCourse;
+    CruiseControlSnapshot m_cruiseSnapshot;
     HudSnapshot m_hudSnapshot;
     Clock::time_point m_nextHudPoll;
     bool m_hudCruisePressed {false};
@@ -171,11 +184,15 @@ private:
     OperationId m_hudCruiseOperationId {0};
     std::string m_hudCruiseUserEvent;
     Clock::time_point m_hudCruiseStarted;
+    bool m_nativeCruiseRequested {false};
+    OperationId m_nativeCruiseOperationId {0};
+    Clock::time_point m_nativeCruiseStarted;
 
     MapSessionIdentity m_pendingMapCloseIdentity;
     Clock::time_point m_mapCloseStarted;
     FormID m_pendingCourseId {0};
     OperationId m_pendingCourseOperationId {0};
+    CourseConfirmationSource m_pendingCourseSource {CourseConfirmationSource::None};
     Clock::time_point m_courseRequestStarted;
 
     bool m_remoteRoutingAvailable {false};
@@ -184,6 +201,7 @@ private:
     PlayerJumpState m_playerJumpState;
     std::int64_t m_lastTravelTicks {0};
     Clock::time_point m_lastRemoteUnsettled;
+    Clock::time_point m_lastFlightTransition;
     Clock::time_point m_invalidFlightSince;
     Clock::time_point m_remoteCruiseInactiveSince;
     std::optional<HudObservationInbox::CourseObservation> m_lastHudCourse;

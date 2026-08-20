@@ -31,6 +31,7 @@ public:
 
     [[nodiscard]] bool Started() const noexcept { return m_started; }
     [[nodiscard]] bool Completed() const noexcept { return m_completed; }
+    [[nodiscard]] bool InProgress() const noexcept { return m_started && !m_completed; }
 
 private:
     std::uint8_t m_progress {0};

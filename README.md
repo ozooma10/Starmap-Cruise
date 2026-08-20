@@ -4,13 +4,15 @@ Starmap Cruise adds a Cruise action to Starfield's system map.
 
 ## Usage
 
-While piloting your ship in space, open the system map and highlight a supported destination. The added action uses the same keyboard or gamepad control that you have bound to Cruise:
+While aboard your ship in space, open the system map from the pilot seat, a navigation console, or your personal starmap and highlight a supported destination. The added action uses the same keyboard or gamepad control that you have bound to Cruise:
 
 - **Tap** to close the map and mark the highlighted destination as your Cruise target. If Cruise is already active, the new course is requested immediately.
 - **Hold** while Cruise is inactive to close the map, engage Cruise, and lock the highlighted destination as the course.
-- For a planet or moon in another system, use **JUMP THEN CRUISE**. The mod follows Starfield's vanilla route and jump flow, then engages Cruise after the ship reaches the destination system and flight has settled. If the jump places the ship directly at the selected body, the trip completes without engaging Cruise.
+- For a planet or moon in another system while piloting, use **JUMP THEN CRUISE**. The mod follows Starfield's vanilla route and jump flow, then engages Cruise after the ship reaches the destination system and flight has settled. If the jump places the ship directly at the selected body, the trip completes without engaging Cruise.
 
-The hold option is shown only when Cruise can be engaged. During a cooldown, while Cruise state is unavailable, or while Cruise is already active, the safe tap action may be the only option.
+When roaming your ship, same-system planets, moons, and stations retain the same tap and hold behavior. Free-roam activation is rejected while the ship is landed, docked, loading, grav jumping, in combat, or still settling after travel.
+
+The hold option is shown only when Cruise can be engaged. During a cooldown, while Cruise state is unavailable, or while Cruise is already active, the safe tap action may be the only option. Remote **JUMP THEN CRUISE** remains available only from the pilot seat.
 
 ## Supported targets and limitations
 

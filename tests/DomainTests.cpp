@@ -1,6 +1,8 @@
 #include "Domain/Destination.h"
 #include "Domain/NonzeroCounter.h"
 #include "Domain/PlayerJumpState.h"
+#include "Domain/ShipContext.h"
+#include "Domain/ShipboardCruisePolicy.h"
 #include "TestSuites.h"
 
 #include <limits>
@@ -124,6 +126,93 @@ namespace
         state.Observe(1);
         state.Observe(2);
         Require(state.Started() && state.Completed(), "exact vanilla jump sequence did not complete");
+        Require(!state.InProgress(), "completed jump remained in progress");
+    }
+
+    void TestShipContextRequiresEveryFreeRoamSafetyGuard()
+    {
+        const ShipContext ready {
+            .shipId = 0x10,
+            .aboardPlayerShip = true,
+            .inSpace = true,
+            .playerPiloting = false,
+            .landed = false,
+            .docked = false,
+            .loading = false,
+            .jumpInProgress = false,
+            .inCombat = false,
+            .flightSettled = true,
+        };
+        Require(ready.IsShipboard(), "ready free-roam context was not shipboard");
+        Require(ready.CanStartCruise(), "ready free-roam context could not start Cruise");
+        Require(ready.SameShipAs(ready), "same ship identity did not match");
+
+        auto changed = ready;
+        changed.inSpace = false;
+        Require(!changed.CanStartCruise(), "non-space ship could start Cruise");
+        changed = ready;
+        changed.landed = true;
+        Require(!changed.CanStartCruise(), "landed ship could start Cruise");
+        changed = ready;
+        changed.docked = true;
+        Require(!changed.CanStartCruise(), "docked ship could start Cruise");
+        changed = ready;
+        changed.loading = true;
+        Require(!changed.CanStartCruise(), "loading transition could start Cruise");
+        changed = ready;
+        changed.jumpInProgress = true;
+        Require(!changed.CanStartCruise(), "grav jump could start Cruise");
+        changed = ready;
+        changed.inCombat = true;
+        Require(!changed.CanStartCruise(), "combat context could start Cruise");
+        changed = ready;
+        changed.flightSettled = false;
+        Require(!changed.CanStartCruise(), "unsettled flight could start Cruise");
+        changed = ready;
+        changed.shipId++;
+        Require(!ready.SameShipAs(changed), "different ship identities matched");
+    }
+
+    void TestShipboardCruisePolicySelectsCommandAndActivationPaths()
+    {
+        const ShipContext freeRoam {
+            .shipId = 0x10,
+            .aboardPlayerShip = true,
+            .inSpace = true,
+            .playerPiloting = false,
+            .flightSettled = true,
+        };
+        auto piloting = freeRoam;
+        piloting.playerPiloting = true;
+
+        Require(SelectCruiseCommandPath(piloting, true, true) == CruiseCommandPath::Hud, "pilot context did not prefer the HUD path");
+        Require(SelectCruiseCommandPath(piloting, false, true) == CruiseCommandPath::Unavailable, "pilot context fell back to native commands without a HUD");
+        Require(SelectCruiseCommandPath(freeRoam, true, true) == CruiseCommandPath::Native, "free-roam context did not select the native path");
+        Require(SelectCruiseCommandPath(freeRoam, true, false) == CruiseCommandPath::Unavailable, "free-roam context selected an unavailable native path");
+
+        Require(
+            DecideShipboardActivation(freeRoam, freeRoam, false, true, true) == ShipboardActivationMode::VanillaEligible,
+            "normal native eligibility did not select the vanilla start mode");
+        Require(
+            DecideShipboardActivation(freeRoam, freeRoam, false, false, true) == ShipboardActivationMode::GuardedFreeRoam,
+            "free-roam-only rejection did not select the guarded fallback");
+        Require(
+            DecideShipboardActivation(piloting, piloting, false, false, true) == ShipboardActivationMode::Rejected,
+            "pilot context bypassed a failed vanilla eligibility check");
+        Require(
+            DecideShipboardActivation(freeRoam, freeRoam, true, true, true) == ShipboardActivationMode::Rejected,
+            "active Cruise accepted another activation");
+
+        auto unsafe = freeRoam;
+        unsafe.loading = true;
+        Require(
+            DecideShipboardActivation(freeRoam, unsafe, false, false, true) == ShipboardActivationMode::Rejected,
+            "live safety failure accepted the guarded fallback");
+        unsafe = freeRoam;
+        unsafe.shipId++;
+        Require(
+            DecideShipboardActivation(freeRoam, unsafe, false, true, true) == ShipboardActivationMode::Rejected,
+            "changed ship identity accepted activation");
     }
 }
 
@@ -135,4 +224,6 @@ void RunDomainTests()
     TestDestinationIdentityIgnoresOnlyPresentationName();
     TestNonzeroCounterCoversInitialAdvanceAndRollover();
     TestPlayerJumpStatePreservesReplacementJumpInitiation();
+    TestShipContextRequiresEveryFreeRoamSafetyGuard();
+    TestShipboardCruisePolicySelectsCommandAndActivationPaths();
 }

@@ -294,6 +294,30 @@ namespace
         Require(state.CruiseStateWhenOpened() == ::ObservedCruiseState::Unknown, "closed session retained its Cruise state");
     }
 
+    void TestShipContextIsCapturedAndReset()
+    {
+        ::MapSessionState state;
+        state.BeginMovie(CurrentIdentity.generation);
+        const ::ShipContext ship {
+            .shipId = 0x1234,
+            .aboardPlayerShip = true,
+            .inSpace = true,
+            .playerPiloting = false,
+            .flightSettled = true,
+        };
+
+        Require(state.Open({
+            .identity = CurrentIdentity,
+            .flying = true,
+            .shipContext = ship,
+            .cruiseState = ::ObservedCruiseState::Inactive,
+            .currentSystemId = 0x100,
+        }), "shipboard session was not opened");
+        Require(state.ShipContextWhenOpened() == ship, "map session lost its ship context");
+        Require(state.Close(CurrentIdentity), "shipboard session was not closed");
+        Require(state.ShipContextWhenOpened() == ::ShipContext {}, "closed session retained its ship context");
+    }
+
     void TestInvalidOpenContextsAreRejected()
     {
         ::MapSessionState state;
@@ -404,6 +428,7 @@ namespace
         TestCurrentSystemFormIsCapturedOnce();
         TestMovieReplacementInvalidatesSession();
         TestCruiseStateIsCapturedAndReset();
+        TestShipContextIsCapturedAndReset();
         TestInvalidOpenContextsAreRejected();
         TestInactiveAndStaleOperationsAreRejected();
         TestCloseResetsCompleteSnapshot();
