@@ -158,3 +158,23 @@ bool ShipboardCruiseBridge::SetCourse(FormID courseId) const
     setCourse(courseId);
     return true;
 }
+
+bool ShipboardCruiseBridge::RefreshCourse(FormID courseId) const
+{
+    if (!m_available || courseId == 0 || ReadState() != ObservedCruiseState::Active) {
+        return false;
+    }
+    if (ReadCurrentCourse() != courseId) {
+        return SetCourse(courseId);
+    }
+
+    // Starfield treats an exact repeated course as the Autopilot-off toggle.
+    // Clear that inherited lock first, then establish it as a fresh course.
+    static REL::Relocation<SetCourseFunction> setCourse {SetCourseId};
+    setCourse(0);
+    if (ReadCurrentCourse() != 0) {
+        return false;
+    }
+    setCourse(courseId);
+    return true;
+}

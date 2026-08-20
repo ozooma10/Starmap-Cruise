@@ -17,7 +17,7 @@ public:
     virtual bool BeginRemoteRoute(const ::BeginRemoteRoute& effect) = 0;
     virtual bool AssignStationTarget(FormID targetId) = 0;
     virtual bool PressCruise(OperationId operationId) = 0;
-    virtual bool RequestCourse(FormID courseId, OperationId operationId) = 0;
+    virtual bool RequestCourse(FormID courseId, OperationId operationId, bool followsCruiseActivation) = 0;
 };
 
 struct EffectDispatchResult

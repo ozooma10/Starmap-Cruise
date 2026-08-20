@@ -108,7 +108,11 @@ TransitionResult NavigationRuntime::ObserveRemoteArrival(RemoteArrivalObservatio
     }
 
     auto& operation = *m_state.remoteOperation;
-    if (!observation.mapClosed || !observation.loadingMenuClosed || (!observation.completedPlayerJump && !observation.completedReplacementJump) || !observation.settledFlight || !observation.flying || observation.currentBodyId == 0 ||
+    const bool nativeShipboardRoute = m_state.shipContext.IsShipboard() && !m_state.shipContext.playerPiloting;
+    const bool completedTravel = observation.completedPlayerJump || observation.completedReplacementJump || (nativeShipboardRoute && observation.completedStandingTravel);
+    const bool nativeShipContextValid = !nativeShipboardRoute ||
+        (m_state.shipContext.CanStartCruise() && observation.liveShipContext.CanStartCruise() && m_state.shipContext.SameShipAs(observation.liveShipContext));
+    if (!observation.mapClosed || !observation.loadingMenuClosed || !completedTravel || !observation.settledFlight || !observation.flying || !nativeShipContextValid || observation.currentBodyId == 0 ||
         observation.currentSystem != operation.destination.system) {
         return {};
     }
@@ -116,6 +120,18 @@ TransitionResult NavigationRuntime::ObserveRemoteArrival(RemoteArrivalObservatio
     if (observation.currentBodyId == operation.destination.targetId) {
         Reset();
         return {.handled = true};
+    }
+
+    if (nativeShipboardRoute) {
+        if (!observation.postTravelCruiseReady) {
+            return {};
+        }
+        operation.nextWaypointIndex = operation.destination.remotePlan.allowedWaypointIds.size();
+        m_state.phase = NavigationPhase::PreparingRemoteTarget;
+        return {
+            .handled = true,
+            .effect = PressCruise {.operationId = operation.id},
+        };
     }
 
     if (!observation.freshHudPublication) {
@@ -176,6 +192,7 @@ TransitionResult NavigationRuntime::CruiseChanged(bool active)
             .effect = RequestCourse {
                 .courseId = m_state.destination->courseId,
                 .operationId = m_state.remoteOperation->id,
+                .followsCruiseActivation = true,
             },
         };
     }
@@ -184,7 +201,10 @@ TransitionResult NavigationRuntime::CruiseChanged(bool active)
         m_state.phase = NavigationPhase::AwaitingCourseLock;
         return {
             .handled = true,
-            .effect = RequestCourse {.courseId = m_state.destination->courseId},
+            .effect = RequestCourse {
+                .courseId = m_state.destination->courseId,
+                .followsCruiseActivation = true,
+            },
         };
     }
 

@@ -68,7 +68,7 @@ private:
         bool BeginRemoteRoute(const ::BeginRemoteRoute& effect) override;
         bool AssignStationTarget(FormID targetId) override;
         bool PressCruise(OperationId operationId) override;
-        bool RequestCourse(FormID courseId, OperationId operationId) override;
+        bool RequestCourse(FormID courseId, OperationId operationId, bool followsCruiseActivation) override;
 
     private:
         StarfieldCruiseAdapter& m_owner;
@@ -134,7 +134,7 @@ private:
     CruiseControlSnapshot ReadCruiseControlSnapshot(const ShipContext& openedContext);
     HudSnapshot ReadHudSnapshot();
     bool InvokeHudCruiseUserEvent(const char* userEvent, bool down);
-    bool DispatchCourse(FormID courseId, OperationId operationId);
+    bool DispatchCourse(FormID courseId, OperationId operationId, bool followsCruiseActivation);
     bool DispatchMapClose();
 
     bool IsCurrentMapMovie(const void* root, const MapSessionIdentity& identity);
@@ -203,6 +203,7 @@ private:
     bool m_loadingMenuOpen {false};
     PlayerJumpState m_playerJumpState;
     std::int64_t m_lastTravelTicks {0};
+    bool m_remoteLoadingObserved {false};
     Clock::time_point m_lastRemoteUnsettled;
     Clock::time_point m_lastFlightTransition;
     Clock::time_point m_invalidFlightSince;

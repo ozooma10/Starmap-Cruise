@@ -98,6 +98,8 @@ struct RequestCourse
 {
     FormID courseId {0};
     OperationId operationId {0};
+    // A just-activated Cruise session cannot use the persistent native course slot as proof that Autopilot is engaged.
+    bool followsCruiseActivation {false};
 };
 
 using Effect = std::variant<CloseMap, BeginRemoteRoute, PressCruise, RequestCourse>;
@@ -118,8 +120,12 @@ struct RemoteArrivalObservation
     bool loadingMenuClosed {false};
     bool completedPlayerJump {false};
     bool completedReplacementJump {false};
+    // Vanilla can resolve a route executed from a shipboard starmap through a loading transition without publishing the cockpit grav-jump sequence.
+    bool completedStandingTravel {false};
     bool settledFlight {false};
     bool flying {false};
+    bool postTravelCruiseReady {false};
+    ShipContext liveShipContext;
     bool freshHudPublication {false};
     bool courseRowsComplete {false};
     std::vector<FormID> courseRows;

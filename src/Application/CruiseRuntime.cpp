@@ -31,7 +31,7 @@ namespace
 
         bool operator()(const ::RequestCourse& effect) const
         {
-            return commands.RequestCourse(effect.courseId, effect.operationId);
+            return commands.RequestCourse(effect.courseId, effect.operationId, effect.followsCruiseActivation);
         }
     };
 }

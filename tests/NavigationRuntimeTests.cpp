@@ -87,6 +87,17 @@ namespace
         };
     }
 
+    ::ShipContext ReadyFreeRoamShip(::FormID shipId = 0x1234)
+    {
+        return {
+            .shipId = shipId,
+            .aboardPlayerShip = true,
+            .inSpace = true,
+            .playerPiloting = false,
+            .flightSettled = true,
+        };
+    }
+
     void TestTapMarksDestination()
     {
         ::NavigationRuntime runtime;
@@ -208,6 +219,7 @@ namespace
         Require(runtime.CurrentState().phase == ::NavigationPhase::AwaitingCourseLock, "Cruise activation did not await course confirmation");
         Require(course != nullptr, "Cruise activation did not request the course");
         Require(course->courseId == Jemison().courseId, "Cruise activation requested the wrong course");
+        Require(course->followsCruiseActivation, "new Cruise activation did not require a fresh Autopilot request");
 
         const auto unrelated = runtime.CourseLockChanged(0xDEADBEEF);
 
@@ -239,6 +251,7 @@ namespace
         Require(FindEffect<::PressCruise>(closed) == nullptr, "active-Cruise selection emitted another Cruise press");
         Require(course != nullptr, "active-Cruise selection did not request a course");
         Require(course->courseId == Mars().courseId, "active-Cruise selection requested the wrong course");
+        Require(!course->followsCruiseActivation, "already-active Cruise selection discarded an existing Autopilot lock");
     }
 
     void TestInvalidDestinationFailsClosed()
@@ -364,6 +377,7 @@ namespace
         const auto* request = FindEffect<::RequestCourse>(activated);
         Require(request && request->operationId == operationId, "remote Cruise activation lost operation correlation");
         Require(request->courseId == Chawla().courseId, "remote Cruise requested the waypoint instead of the final moon");
+        Require(request->followsCruiseActivation, "remote Cruise accepted a pre-jump course slot as an Autopilot lock");
         Require(!runtime.CourseLockChanged(0).handled, "empty delayed lock cancelled the operation");
         Require(runtime.CourseLockChanged(0x0005E313).handled, "ordered parent lock was rejected");
         Require(runtime.CourseLockChanged(0x0005E313).handled, "repeated parent lock was not idempotent");
@@ -590,6 +604,45 @@ namespace
         Require(runtime.CurrentState().phase == ::NavigationPhase::PreparingRemoteTarget, "completed replacement jump did not enter PreparingRemoteTarget");
     }
 
+    void TestFreeRoamRemoteArrivalUsesNativeCruiseWithoutHud()
+    {
+        ::NavigationRuntime runtime;
+        const auto openedShip = ReadyFreeRoamShip();
+        const auto selected = runtime.SelectDestination(
+            Chawla(),
+            ::SelectionIntent::StartRemoteCruise,
+            false,
+            {.source = RemoteSource},
+            openedShip);
+        const auto* begin = FindEffect<::BeginRemoteRoute>(selected);
+        Require(begin != nullptr, "free-roam remote selection did not start routing");
+        Require(runtime.RemoteRouteCommitted(begin->operationId, RemoteSource).handled, "free-roam route did not commit");
+
+        auto arrival = ReadyArrival(begin->operationId, {});
+        arrival.completedPlayerJump = false;
+        arrival.completedStandingTravel = true;
+        arrival.freshHudPublication = false;
+        arrival.courseRowsComplete = false;
+        arrival.courseRows.clear();
+        arrival.postTravelCruiseReady = true;
+        arrival.liveShipContext = ReadyFreeRoamShip(openedShip.shipId + 1);
+        Require(!runtime.ObserveRemoteArrival(arrival).handled, "changed player ship accepted native remote Cruise");
+
+        arrival.liveShipContext = openedShip;
+        arrival.liveShipContext.loading = true;
+        Require(!runtime.ObserveRemoteArrival(arrival).handled, "loading ship accepted native remote Cruise");
+
+        arrival.liveShipContext = openedShip;
+        arrival.postTravelCruiseReady = false;
+        Require(!runtime.ObserveRemoteArrival(arrival).handled, "unavailable native Cruise path accepted free-roam arrival");
+
+        arrival.postTravelCruiseReady = true;
+        const auto accepted = runtime.ObserveRemoteArrival(std::move(arrival));
+        const auto* press = FindEffect<::PressCruise>(accepted);
+        Require(press && press->operationId == begin->operationId, "exact free-roam arrival did not emit correlated native Cruise activation");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::PreparingRemoteTarget, "free-roam arrival entered the wrong phase");
+    }
+
     void TestIncompleteHudRowsFailOnlyAtProvenFinalArrival()
     {
         {
@@ -802,6 +855,7 @@ namespace
         TestRemoteArrivalRequiresEveryFreshTravelProof();
         TestRemoteArrivalAtSelectedBodySkipsCruiseAndHudProofs();
         TestReplacementJumpCompletionIsExplicitArrivalProof();
+        TestFreeRoamRemoteArrivalUsesNativeCruiseWithoutHud();
         TestIncompleteHudRowsFailOnlyAtProvenFinalArrival();
         TestRemoteWaypointEvidenceMustBeUniqueAndOrdered();
         TestLocalCallbacksArePhaseSensitiveAndIdempotent();

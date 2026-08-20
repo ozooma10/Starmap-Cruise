@@ -33,6 +33,7 @@ public:
 
     bool Start(const ShipContext& opened, const ShipContext& live, bool& usedGuardedFallback) const;
     bool SetCourse(FormID courseId) const;
+    bool RefreshCourse(FormID courseId) const;
 
 private:
     std::uintptr_t m_currentCourseAddress {0};

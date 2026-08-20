@@ -185,10 +185,32 @@ namespace
         auto piloting = freeRoam;
         piloting.playerPiloting = true;
 
+        Require(!SelectCruiseCommandContext(freeRoam, piloting, false).playerPiloting, "local command discarded the captured free-roam source");
+        Require(SelectCruiseCommandContext(freeRoam, piloting, true).playerPiloting, "post-travel command ignored vanilla cockpit relocation");
         Require(SelectCruiseCommandPath(piloting, true, true) == CruiseCommandPath::Hud, "pilot context did not prefer the HUD path");
         Require(SelectCruiseCommandPath(piloting, false, true) == CruiseCommandPath::Unavailable, "pilot context fell back to native commands without a HUD");
         Require(SelectCruiseCommandPath(freeRoam, true, true) == CruiseCommandPath::Native, "free-roam context did not select the native path");
         Require(SelectCruiseCommandPath(freeRoam, true, false) == CruiseCommandPath::Unavailable, "free-roam context selected an unavailable native path");
+
+        constexpr FormID requestedCourse = 0x1234;
+        Require(
+            SelectCourseDispatchPath(piloting, true, true, true, requestedCourse, 0, requestedCourse) == CourseDispatchPath::HudRefresh,
+            "post-activation pilot course trusted the stale native course slot");
+        Require(
+            SelectCourseDispatchPath(piloting, true, true, false, requestedCourse, 0, requestedCourse) == CourseDispatchPath::HudRefresh,
+            "pilot course without a HUD lock trusted the native course slot");
+        Require(
+            SelectCourseDispatchPath(piloting, true, true, false, requestedCourse, requestedCourse, requestedCourse) == CourseDispatchPath::AlreadyLocked,
+            "exact active HUD Autopilot lock was not preserved");
+        Require(
+            SelectCourseDispatchPath(freeRoam, true, true, true, requestedCourse, requestedCourse, requestedCourse) == CourseDispatchPath::NativeRefresh,
+            "post-activation native course reused a persistent course slot");
+        Require(
+            SelectCourseDispatchPath(freeRoam, true, true, false, requestedCourse, 0, requestedCourse) == CourseDispatchPath::AlreadyLocked,
+            "stable native Autopilot course was needlessly dispatched again");
+        Require(
+            SelectCourseDispatchPath(piloting, false, true, true, requestedCourse, 0, requestedCourse) == CourseDispatchPath::Unavailable,
+            "pilot course bypassed an inactive HUD Cruise state");
 
         Require(
             DecideShipboardActivation(freeRoam, freeRoam, false, true, true) == ShipboardActivationMode::VanillaEligible,

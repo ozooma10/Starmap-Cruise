@@ -92,13 +92,15 @@ namespace
             return Record(RecordedCommand::AssignStationTarget, targetId);
         }
 
-        bool RequestCourse(::FormID courseId, ::OperationId operationId) override
+        bool RequestCourse(::FormID courseId, ::OperationId operationId, bool followsCruiseActivation) override
         {
+            lastCourseFollowedActivation = followsCruiseActivation;
             return Record(RecordedCommand::RequestCourse, courseId, operationId);
         }
 
         std::optional<RecordedCommand> failOn;
         std::vector<RecordedCall> calls;
+        bool lastCourseFollowedActivation {false};
 
     private:
         bool Record(RecordedCommand command, ::FormID courseId = 0, ::OperationId operationId = 0)
@@ -411,6 +413,7 @@ namespace
         Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, ReadyEnvironment()).Succeeded(), "completed hold did not close the map");
         Require(runtime.OnMapClosed(CurrentIdentity).Succeeded(), "map close did not dispatch Cruise activation");
         Require(runtime.OnCruiseChanged(true).Succeeded(), "Cruise activation did not dispatch the course request");
+        Require(commands.lastCourseFollowedActivation, "Cruise runtime did not preserve the post-activation Autopilot requirement");
 
         Require(commands.calls.size() == 3, "hold flow issued the wrong number of commands");
         Require(commands.calls[0].command == RecordedCommand::CloseMap, "hold flow did not close the map first");
@@ -453,6 +456,7 @@ namespace
         Require(runtime.CurrentMapAction(ReadyEnvironment()).control == ::ActionControl::TapOnly, "active Cruise did not reduce the action to tap-only");
         Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "active-Cruise tap did not close the map");
         Require(runtime.OnMapClosed(CurrentIdentity).Succeeded(), "active-Cruise map close did not request the course");
+        Require(!commands.lastCourseFollowedActivation, "active-Cruise map close incorrectly forced an Autopilot toggle");
 
         Require(commands.calls.size() == 2, "active-Cruise flow issued the wrong number of commands");
         Require(commands.calls[0].command == RecordedCommand::CloseMap, "active-Cruise flow did not close the map first");
@@ -707,6 +711,8 @@ namespace
             .completedPlayerJump = true,
             .settledFlight = true,
             .flying = true,
+            .postTravelCruiseReady = true,
+            .liveShipContext = runtime.CurrentNavigationState().shipContext,
             .freshHudPublication = true,
             .courseRowsComplete = true,
             .courseRows = {JemisonId},
@@ -722,6 +728,8 @@ namespace
             .completedPlayerJump = true,
             .settledFlight = true,
             .flying = true,
+            .postTravelCruiseReady = true,
+            .liveShipContext = runtime.CurrentNavigationState().shipContext,
             .freshHudPublication = true,
             .courseRowsComplete = true,
             .courseRows = {JemisonId},
@@ -783,6 +791,14 @@ namespace
             .completedPlayerJump = true,
             .settledFlight = true,
             .flying = true,
+            .postTravelCruiseReady = true,
+            .liveShipContext = {
+                .shipId = 0x1234,
+                .aboardPlayerShip = true,
+                .inSpace = true,
+                .playerPiloting = false,
+                .flightSettled = true,
+            },
             .freshHudPublication = true,
             .courseRowsComplete = true,
             .courseRows = {JemisonId},
