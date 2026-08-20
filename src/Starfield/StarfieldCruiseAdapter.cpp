@@ -1802,6 +1802,7 @@ void StarfieldCruiseAdapter::ProcessInputEvents(RE::BSInputEventReceiver* receiv
     {
         RE::ButtonEvent* event {nullptr};
         RE::BSFixedString originalName;
+        bool originalDisabled {false};
     };
 
     std::array<Fix, 16> fixes;
@@ -1832,7 +1833,7 @@ void StarfieldCruiseAdapter::ProcessInputEvents(RE::BSInputEventReceiver* receiv
 
         drop = m_mapActionInput.Filter(device, button->idCode, down);
 
-        if (!drop && m_mapActionInteractive.load(std::memory_order_acquire) && !button->disabled && routedCount < routedEvents.size()) {
+        if (!drop && m_mapActionInteractive.load(std::memory_order_acquire) && routedCount < routedEvents.size()) {
             std::int32_t binding = -1;
             std::int32_t modifier = -1;
             const char* userEvent = CruiseUserEvent;
@@ -1860,8 +1861,13 @@ void StarfieldCruiseAdapter::ProcessInputEvents(RE::BSInputEventReceiver* receiv
                 routedEvents[routedCount++] = {
                     .event = button,
                     .originalName = button->strUserEvent,
+                    .originalDisabled = button->disabled,
                 };
                 button->strUserEvent = RE::BSFixedString {userEvent};
+                button->disabled = false;
+                if (first) {
+                    REX::INFO("StarfieldCruiseAdapter: routed map action input device={} code={} was-disabled={}", device, button->idCode, routedEvents[routedCount - 1].originalDisabled);
+                }
             }
         }
 
@@ -1888,6 +1894,7 @@ void StarfieldCruiseAdapter::ProcessInputEvents(RE::BSInputEventReceiver* receiv
 
     for (std::size_t index = routedCount; index-- > 0;) {
         routedEvents[index].event->strUserEvent = routedEvents[index].originalName;
+        routedEvents[index].event->disabled = routedEvents[index].originalDisabled;
     }
 }
 
