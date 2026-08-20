@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Domain/Destination.h"
+#include "Domain/ShipContext.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -74,6 +75,7 @@ struct NavigationState
     NavigationPhase phase {NavigationPhase::Idle};
     std::optional<Destination> destination;
     std::optional<RemoteCruiseOperation> remoteOperation;
+    ShipContext shipContext;
 };
 
 struct CloseMap
@@ -126,7 +128,7 @@ struct RemoteArrivalObservation
 class NavigationRuntime
 {
 public:
-    TransitionResult SelectDestination(Destination destination, SelectionIntent intent, bool cruiseAlreadyActive, RemoteSelectionContext remote = {});
+    TransitionResult SelectDestination(Destination destination, SelectionIntent intent, bool cruiseAlreadyActive, RemoteSelectionContext remote = {}, ShipContext shipContext = {});
     TransitionResult MapClosed();
     TransitionResult RemoteRouteCommitted(OperationId operationId, RemoteOperationSource source);
     TransitionResult RemoteRouteFailed(OperationId operationId, RemoteOperationSource source);

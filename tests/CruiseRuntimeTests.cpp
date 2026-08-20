@@ -146,6 +146,13 @@ namespace
             runtime.OnMapOpened({
                 .identity = CurrentIdentity,
                 .flying = true,
+                .shipContext = {
+                    .shipId = 0x1234,
+                    .aboardPlayerShip = true,
+                    .inSpace = true,
+                    .playerPiloting = false,
+                    .flightSettled = true,
+                },
                 .cruiseState = cruiseState,
                 .currentSystemId = currentSystemId,
             }),
@@ -182,6 +189,13 @@ namespace
             runtime.OnMapOpened({
                 .identity = CurrentIdentity,
                 .flying = true,
+                .shipContext = {
+                    .shipId = 0x1234,
+                    .aboardPlayerShip = true,
+                    .inSpace = true,
+                    .playerPiloting = false,
+                    .flightSettled = true,
+                },
                 .cruiseState = cruiseState,
                 .currentSystemId = AlphaCentauriId,
             }),
@@ -242,6 +256,7 @@ namespace
         OpenStationMap(runtime, ::ObservedCruiseState::Active);
 
         Require(runtime.CurrentMapAction(ReadyEnvironment()).CanHandleInput(), "resolved station did not produce an action");
+        Require(!runtime.CurrentMapShipContext().playerPiloting && runtime.CurrentMapShipContext().CanStartCruise(), "station action did not retain a ready free-roam ship context");
         Require(bodySource.calls == 0, "station selection queried the planetary body resolver");
         Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::Tap, ReadyEnvironment()).Succeeded(), "station tap did not close the map");
 
@@ -723,6 +738,21 @@ namespace
         Require(runtime.CurrentNavigationState().phase == ::NavigationPhase::CourseLocked && !runtime.CurrentNavigationState().remoteOperation, "completed remote lifecycle retained asynchronous ownership");
     }
 
+    void TestRuntimeCarriesMapShipContextIntoCruiseCommands()
+    {
+        FakeBodyResolutionSource bodySource;
+        FakeCruiseCommands commands;
+        ::CruiseRuntime runtime {bodySource, commands};
+        OpenMap(runtime);
+
+        const auto mapContext = runtime.CurrentMapShipContext();
+        Require(mapContext.shipId == 0x1234 && !mapContext.playerPiloting, "runtime did not expose the free-roam map context");
+        Require(runtime.ActivateMapAction(CurrentIdentity, ::MapActionGesture::HoldCompleted, ReadyEnvironment()).Succeeded(), "free-roam hold did not close the map");
+        Require(runtime.CurrentNavigationState().shipContext == mapContext, "navigation did not retain the map ship context");
+        Require(runtime.OnMapClosed(CurrentIdentity).Succeeded(), "free-roam close did not issue Cruise activation");
+        Require(runtime.CurrentNavigationState().shipContext == mapContext, "Cruise command lost the retained ship context");
+    }
+
     void ConfigureRemoteBody(FakeBodyResolutionSource& bodySource)
     {
         bodySource.result = ::ResolvedBody {
@@ -944,6 +974,7 @@ namespace
         TestMovieReplacementCancelsOnlyPendingMapSelection();
         TestCurrentSelectionReportsAndInvalidatesReadOnlyState();
         TestFullHoldFlow();
+        TestRuntimeCarriesMapShipContextIntoCruiseCommands();
         TestTapOnlyRejectsHold();
         TestAlreadyCruisingRequestsCourseAfterClose();
         TestUnknownCruiseStateCanOnlyMark();

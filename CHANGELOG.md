@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Added same-system Cruise targeting and activation from navigation consoles or the personal starmap while roaming aboard the player's ship.
+
 ### Fixed
 
-- Fixed keyboard Cruise bindings displayed in the starmap not responding to tap or hold input.
+- Fixed the starmap Cruise action not recognizing keyboard bindings after an incorrect key-code conversion.
 - Skipped the brief Cruise activation after a grav jump places the ship directly at the selected planet or moon.
 
 ## 1.0 - 2026-08-19

@@ -66,15 +66,6 @@ namespace
         };
     }
 
-    bool IsPlayerFlying()
-    {
-        static_assert(RE::ID::TESObjectREFR::IsInSpace.id() == 63482);
-
-        const auto player = RE::PlayerCharacter::GetSingleton();
-        const auto ship = player ? player->GetSpaceship() : nullptr;
-        return ship && ship->IsInSpace(false);
-    }
-
     template <class Files> bool ContainsPlugin(const Files& files, const char* name)
     {
         for (const auto* file : files) {
@@ -105,39 +96,6 @@ namespace
 
         auto* source = binding.Get();
         return binding.Matches(source) ? source : nullptr;
-    }
-
-    ObservedCruiseState ReadCruiseState()
-    {
-        const auto ui = RE::UI::GetSingleton();
-        const RE::BSFixedString hudName {HudMenuName};
-        if (!ui || !ui->IsMenuOpen(hudName)) {
-            return ObservedCruiseState::Unknown;
-        }
-
-        const auto menu = ui->GetMenu(hudName);
-        if (!menu || !menu->uiMovie || !menu->uiMovie->asMovieRoot) {
-            return ObservedCruiseState::Unknown;
-        }
-
-        auto* root = menu->uiMovie->asMovieRoot.get();
-        const char* rootPath = menu->GetRootPath();
-        const std::string reticlePath = std::string {rootPath ? rootPath : "root"} + ".Reticle_mc";
-
-        RE::Scaleform::GFx::Value reticle;
-        RE::Scaleform::GFx::Value cruiseActive;
-        if (!root->GetVariable(&reticle, reticlePath.c_str()) || !reticle.IsObject() || !reticle.GetMember("CruiseModeHUDActive", &cruiseActive) || !cruiseActive.IsBoolean()) {
-            return ObservedCruiseState::Unknown;
-        }
-
-        const bool active = cruiseActive.GetBoolean();
-
-        const auto currentMenu = ui->GetMenu(hudName);
-        if (!ui->IsMenuOpen(hudName) || !currentMenu || !currentMenu->uiMovie || !currentMenu->uiMovie->asMovieRoot || currentMenu->uiMovie->asMovieRoot.get() != root) {
-            return ObservedCruiseState::Unknown;
-        }
-
-        return active ? ObservedCruiseState::Active : ObservedCruiseState::Inactive;
     }
 
     MapView ReadMapView(RE::Scaleform::GFx::Value& data)
@@ -782,6 +740,8 @@ bool StarfieldCruiseAdapter::Initialize()
 
     menus->Register(&OnMovieCreated);
     ui->RegisterSink<RE::MenuOpenCloseEvent>(m_mapLifecycleSink.get());
+    m_lastFlightTransition = Clock::now();
+    const bool shipboardCruiseReady = m_shipboardCruise.Initialize();
     const bool planetaryIdentityReady = m_bodySource.InitializeRemotePlanning();
     const bool routeReady = planetaryIdentityReady && m_remoteRoute.Initialize(m_bodySource);
     const bool travelReady = InitializeTravelObservers();
@@ -789,6 +749,9 @@ bool StarfieldCruiseAdapter::Initialize()
     m_remoteRoutingAvailable = planetaryIdentityReady && routeReady && travelReady;
     if (!m_remoteRoutingAvailable) {
         REX::WARN("StarfieldCruiseAdapter: remote planet/moon routing disabled because one or more native guards failed; same-system Cruise remains enabled");
+    }
+    if (!shipboardCruiseReady) {
+        REX::WARN("StarfieldCruiseAdapter: native shipboard Cruise unavailable; cockpit HUD behavior remains enabled");
     }
     if (m_ftlReplacementJumpLoaded) {
         REX::INFO("StarfieldCruiseAdapter: FTL replacement-jump compatibility enabled");
@@ -851,7 +814,7 @@ void StarfieldCruiseAdapter::OnUiSafeFrame()
         adapter.m_mapActionInput.ExpireReleased();
         adapter.TrySubscribeMapFeeds();
         adapter.TrySubscribeHudFeed();
-        adapter.UpdateHudRuntime();
+        adapter.UpdateCruiseRuntime();
         adapter.HandleRemoteRouteResult(adapter.m_remoteRoute.Tick(adapter.m_activeMapIdentity));
         adapter.EvaluateRemoteArrival();
         adapter.UpdateTimeouts();
@@ -934,12 +897,15 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         const auto& observation = observations.lifecycle[index];
 
         if (observation.opening) {
-            const bool flying = IsPlayerFlying();
-            const auto cruiseState = ReadCruiseState();
+            const auto shipContext = ReadShipContext();
+            const auto cruise = ReadCruiseControlSnapshot(shipContext);
+            const bool flying = shipContext.IsShipboard();
+            const auto cruiseState = cruise.cruiseState;
             const auto currentSystem = m_bodySource.ResolveCurrentSystem();
             const bool accepted = m_runtime.OnMapOpened({
                 .identity = observation.identity,
                 .flying = flying,
+                .shipContext = shipContext,
                 .cruiseState = cruiseState,
                 .currentSystemId = currentSystem ? std::optional<FormID> {currentSystem->numericId} : std::nullopt,
             });
@@ -949,11 +915,14 @@ void StarfieldCruiseAdapter::DrainMapObservations()
             }
 
             REX::INFO(
-                "StarfieldCruiseAdapter: map open session={} generation={} flying={} cruise-state={} current-STDT={:08X} current-numeric={:08X} accepted={}",
+                "StarfieldCruiseAdapter: map open session={} generation={} shipboard={} piloting={} stable={} cruise-state={} cruise-source={} current-STDT={:08X} current-numeric={:08X} accepted={}",
                 observation.identity.session,
                 observation.identity.generation,
                 flying,
+                shipContext.playerPiloting,
+                shipContext.flightSettled,
                 CruiseStateName(cruiseState),
+                static_cast<std::uint32_t>(cruise.source),
                 currentSystem ? currentSystem->starFormId : 0,
                 currentSystem ? currentSystem->numericId : 0,
                 accepted
@@ -1225,9 +1194,10 @@ void StarfieldCruiseAdapter::DrainHudObservations()
                 cancelledRemoteOperation = operationId;
             }
         }
-        if (m_pendingCourseId != 0) {
+        if (m_pendingCourseId != 0 && m_pendingCourseSource == CourseConfirmationSource::Hud) {
             const auto courseId = std::exchange(m_pendingCourseId, 0);
             const auto operationId = std::exchange(m_pendingCourseOperationId, 0);
+            m_pendingCourseSource = CourseConfirmationSource::None;
             m_courseRequestStarted = {};
             if (operationId != 0) {
                 m_runtime.OnRemoteOperationCancelled(operationId);
@@ -1265,6 +1235,7 @@ void StarfieldCruiseAdapter::DrainHudObservations()
     if (exactPendingCourse) {
         m_pendingCourseId = 0;
         m_pendingCourseOperationId = 0;
+        m_pendingCourseSource = CourseConfirmationSource::None;
         m_courseRequestStarted = {};
         REX::INFO("StarfieldCruiseAdapter: HUD confirmed exact course {:08X}", courseId);
     }
@@ -1284,9 +1255,18 @@ void StarfieldCruiseAdapter::DrainTravelObservations()
             m_hudCruisePressed = false;
         }
         m_hudCruiseOperationId = 0;
+        m_nativeCruiseRequested = false;
+        m_nativeCruiseOperationId = 0;
+        m_nativeCruiseStarted = {};
         m_pendingCourseId = 0;
         m_pendingCourseOperationId = 0;
+        m_pendingCourseSource = CourseConfirmationSource::None;
         m_courseRequestStarted = {};
+        m_lastCruiseActive.reset();
+        m_lastNativeCourse.reset();
+        m_cruiseSnapshot = {};
+        m_hudSnapshot = {};
+        m_lastFlightTransition = Clock::now();
         ResetRemoteTravelState();
         REX::ERROR("StarfieldCruiseAdapter: travel observation queue overflowed; navigation reset");
         return;
@@ -1302,6 +1282,7 @@ void StarfieldCruiseAdapter::DrainTravelObservations()
             m_mapCloseStarted = {};
             m_pendingCourseId = 0;
             m_pendingCourseOperationId = 0;
+            m_pendingCourseSource = CourseConfirmationSource::None;
             m_courseRequestStarted = {};
             if (m_hudCruisePressed && InvokeHudCruiseUserEvent(m_hudCruiseUserEvent.c_str(), false)) {
                 m_hudCruisePressed = false;
@@ -1310,6 +1291,14 @@ void StarfieldCruiseAdapter::DrainTravelObservations()
             m_hudCruiseOperationId = 0;
             m_hudCruiseUserEvent.clear();
             m_hudCruiseStarted = {};
+            m_nativeCruiseRequested = false;
+            m_nativeCruiseOperationId = 0;
+            m_nativeCruiseStarted = {};
+            m_lastCruiseActive.reset();
+            m_lastNativeCourse.reset();
+            m_cruiseSnapshot = {};
+            m_hudSnapshot = {};
+            m_lastFlightTransition = Clock::now();
             ResetRemoteTravelState();
             REX::INFO("StarfieldCruiseAdapter: TESLoadGameEvent performed one complete navigation reset");
             continue;
@@ -1317,6 +1306,7 @@ void StarfieldCruiseAdapter::DrainTravelObservations()
 
         m_lastTravelTicks = observation.ticks;
         m_lastRemoteUnsettled = Clock::time_point {Clock::duration {observation.ticks}};
+        m_lastFlightTransition = m_lastRemoteUnsettled;
         if (observation.kind == TravelObservationInbox::Kind::LoadingMenu) {
             m_loadingMenuOpen = observation.opening;
             continue;
@@ -1342,7 +1332,7 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
     }
 
     const auto now = Clock::now();
-    const bool flying = IsPlayerFlying();
+    const bool flying = ReadShipContext().IsShipboard();
 
     const auto hud = ReadHudSnapshot();
     const bool cruiseCanEngage = hud.cruiseState == ObservedCruiseState::Inactive && hud.engageAvailable;
@@ -1453,6 +1443,7 @@ void StarfieldCruiseAdapter::ClearRemoteDispatchState(OperationId operationId)
     if (m_pendingCourseOperationId == operationId) {
         m_pendingCourseId = 0;
         m_pendingCourseOperationId = 0;
+        m_pendingCourseSource = CourseConfirmationSource::None;
         m_courseRequestStarted = {};
     }
     ResetRemoteTravelState();
@@ -1530,6 +1521,55 @@ bool StarfieldCruiseAdapter::IsCurrentHudMovie(const void* root, std::uint32_t g
     return menu && menu->uiMovie && menu->uiMovie->asMovieRoot && static_cast<const void*>(menu->uiMovie->asMovieRoot.get()) == root;
 }
 
+ShipContext StarfieldCruiseAdapter::ReadShipContext() const
+{
+    static_assert(RE::ID::TESObjectREFR::IsInSpace.id() == 63482);
+    static_assert(RE::ID::TESObjectREFR::GetSpaceshipPilot.id() == 119876);
+    static_assert(RE::ID::TESObjectREFR::IsSpaceshipDocked.id() == 120230);
+    static_assert(RE::ID::TESObjectREFR::IsSpaceshipLanded.id() == 119909);
+
+    const auto player = RE::PlayerCharacter::GetSingleton();
+    const auto ship = player ? player->GetSpaceship() : nullptr;
+    if (!player || !ship || ship->IsDeleted()) {
+        return {};
+    }
+
+    const auto now = Clock::now();
+    return {
+        .shipId = ship->GetFormID(),
+        .aboardPlayerShip = true,
+        .inSpace = ship->IsInSpace(false),
+        .playerPiloting = ship->GetSpaceshipPilot() == player,
+        .landed = ship->IsSpaceshipLanded(),
+        .docked = ship->IsSpaceshipDocked(),
+        .loading = m_loadingMenuOpen,
+        .jumpInProgress = m_playerJumpState.InProgress(),
+        .inCombat = player->IsInCombat(),
+        .flightSettled = m_lastFlightTransition != Clock::time_point {} && now - m_lastFlightTransition >= RemoteWorldSettleTime,
+    };
+}
+
+CruiseControlSnapshot StarfieldCruiseAdapter::ReadCruiseControlSnapshot(const ShipContext& openedContext)
+{
+    const auto hud = ReadHudSnapshot();
+    m_hudSnapshot = hud;
+    if (openedContext.playerPiloting && hud.cruiseState != ObservedCruiseState::Unknown) {
+        return {
+            .cruiseState = hud.cruiseState,
+            .engageAvailable = hud.engageAvailable,
+            .currentCourseId = m_shipboardCruise.ReadCurrentCourse(),
+            .source = CruiseControlSource::Hud,
+        };
+    }
+
+    auto native = m_shipboardCruise.Read(openedContext, ReadShipContext());
+    if (openedContext.playerPiloting) {
+        // A missing cockpit HUD must never silently change the proven pilot-seat command path.
+        native.engageAvailable = false;
+    }
+    return native;
+}
+
 StarfieldCruiseAdapter::HudSnapshot StarfieldCruiseAdapter::ReadHudSnapshot()
 {
     const auto generation = m_hudMovieGeneration;
@@ -1571,11 +1611,12 @@ StarfieldCruiseAdapter::HudSnapshot StarfieldCruiseAdapter::ReadHudSnapshot()
     };
 }
 
-void StarfieldCruiseAdapter::UpdateHudRuntime()
+void StarfieldCruiseAdapter::UpdateCruiseRuntime()
 {
     const auto now = Clock::now();
-    const bool navigationActive = m_runtime.CurrentNavigationState().phase != NavigationPhase::Idle;
-    if (!m_activeMapIdentity.IsValid() && !navigationActive && !m_hudCruisePressed && m_pendingCourseId == 0) {
+    const auto& navigationBefore = m_runtime.CurrentNavigationState();
+    const bool navigationActive = navigationBefore.phase != NavigationPhase::Idle;
+    if (!m_activeMapIdentity.IsValid() && !navigationActive && !m_hudCruisePressed && !m_nativeCruiseRequested && m_pendingCourseId == 0) {
         return;
     }
     if (m_nextHudPoll != Clock::time_point {} && now < m_nextHudPoll) {
@@ -1583,18 +1624,25 @@ void StarfieldCruiseAdapter::UpdateHudRuntime()
     }
     m_nextHudPoll = now + HudPollInterval;
 
-    m_hudSnapshot = ReadHudSnapshot();
-    if (m_hudSnapshot.cruiseState == ObservedCruiseState::Unknown) {
+    const auto openedContext = navigationActive ? navigationBefore.shipContext : m_runtime.CurrentMapShipContext();
+    m_cruiseSnapshot = ReadCruiseControlSnapshot(openedContext);
+    if (m_cruiseSnapshot.cruiseState == ObservedCruiseState::Unknown) {
         return;
     }
 
-    const bool active = m_hudSnapshot.cruiseState == ObservedCruiseState::Active;
+    const bool active = m_cruiseSnapshot.cruiseState == ObservedCruiseState::Active;
     if (m_hudCruisePressed && active && InvokeHudCruiseUserEvent(m_hudCruiseUserEvent.c_str(), false)) {
         m_hudCruisePressed = false;
         m_hudCruiseTimedOut = false;
         m_hudCruiseOperationId = 0;
         m_hudCruiseUserEvent.clear();
         m_hudCruiseStarted = {};
+    }
+    if (m_nativeCruiseRequested && active) {
+        REX::INFO("StarfieldCruiseAdapter: native Cruise activation confirmed operation={}", m_nativeCruiseOperationId);
+        m_nativeCruiseRequested = false;
+        m_nativeCruiseOperationId = 0;
+        m_nativeCruiseStarted = {};
     }
 
     if (!m_lastCruiseActive || *m_lastCruiseActive != active) {
@@ -1608,6 +1656,31 @@ void StarfieldCruiseAdapter::UpdateHudRuntime()
             REX::ERROR("StarfieldCruiseAdapter: Cruise state transition failed to dispatch its next effect");
         }
         m_mapActionSurface->InvalidatePresentation();
+    }
+
+    if (m_pendingCourseId != 0 && m_pendingCourseSource == CourseConfirmationSource::Native) {
+        const auto courseId = m_shipboardCruise.ReadCurrentCourse();
+        if (courseId == m_pendingCourseId) {
+            const auto expected = std::exchange(m_pendingCourseId, 0);
+            const auto remoteOperationBefore = m_runtime.CurrentNavigationState().remoteOperation ? m_runtime.CurrentNavigationState().remoteOperation->id : 0;
+            m_pendingCourseOperationId = 0;
+            m_pendingCourseSource = CourseConfirmationSource::None;
+            m_courseRequestStarted = {};
+            m_lastNativeCourse = courseId;
+            m_runtime.OnCourseLockChanged(courseId);
+            if (remoteOperationBefore != 0 && !m_runtime.CurrentNavigationState().remoteOperation) {
+                ClearRemoteDispatchState(remoteOperationBefore);
+            }
+            REX::INFO("StarfieldCruiseAdapter: native state confirmed exact course {:08X}", expected);
+        }
+    }
+
+    if (active && m_cruiseSnapshot.source == CruiseControlSource::Native) {
+        const auto courseId = m_cruiseSnapshot.currentCourseId;
+        if (!m_lastNativeCourse || *m_lastNativeCourse != courseId) {
+            m_lastNativeCourse = courseId;
+            m_runtime.OnCourseLockChanged(courseId);
+        }
     }
 
     const auto& navigation = m_runtime.CurrentNavigationState();
@@ -1641,6 +1714,8 @@ void StarfieldCruiseAdapter::RefreshInputPresentation()
 MapActionEnvironment StarfieldCruiseAdapter::ReadMapActionEnvironment()
 {
     const bool controlBound = m_presentedInputWasGamepad ? m_inputBindings.gamepad >= 0 : m_inputBindings.keyboard >= 0 || m_inputBindings.mouse >= 0;
+    const auto openedContext = m_runtime.CurrentMapShipContext();
+    const auto cruise = ReadCruiseControlSnapshot(openedContext);
 
     bool vanillaActionEnabled = false;
     const auto identity = m_activeMapIdentity;
@@ -1663,9 +1738,9 @@ MapActionEnvironment StarfieldCruiseAdapter::ReadMapActionEnvironment()
 
     return {
         .cruiseControlBound = controlBound,
-        .cruiseEngageAvailable = m_hudSnapshot.engageAvailable,
+        .cruiseEngageAvailable = cruise.engageAvailable,
         .vanillaActionEnabled = vanillaActionEnabled,
-        .remoteRoutingAvailable = m_remoteRoutingAvailable,
+        .remoteRoutingAvailable = m_remoteRoutingAvailable && openedContext.playerPiloting,
         .inputDevice = m_presentedInputWasGamepad ? NavigationInputDevice::Gamepad : NavigationInputDevice::KeyboardMouse,
     };
 }
@@ -1685,14 +1760,14 @@ void StarfieldCruiseAdapter::UpdateTimeouts()
     const auto now = Clock::now();
 
     const auto& navigation = m_runtime.CurrentNavigationState();
-    if (navigation.remoteOperation && navigation.phase != NavigationPhase::RoutingRemote && !m_loadingMenuOpen && !IsPlayerFlying()) {
+    if (navigation.remoteOperation && navigation.phase != NavigationPhase::RoutingRemote && !m_loadingMenuOpen && !ReadShipContext().IsShipboard()) {
         if (m_invalidFlightSince == Clock::time_point {}) {
             m_invalidFlightSince = now;
         } else if (now - m_invalidFlightSince >= RemoteWorldSettleTime) {
             const auto operationId = navigation.remoteOperation->id;
             if (m_runtime.OnRemoteFlightInvalidated()) {
                 ClearRemoteDispatchState(operationId);
-                REX::WARN("StarfieldCruiseAdapter: remote operation={} cancelled after settled landing, docking, or pilot exit", operationId);
+                REX::WARN("StarfieldCruiseAdapter: remote operation={} cancelled after the player ship left valid space flight", operationId);
             }
         }
     } else {
@@ -1730,8 +1805,23 @@ void StarfieldCruiseAdapter::UpdateTimeouts()
         m_hudCruiseStarted = {};
     }
 
+    if (m_nativeCruiseRequested && m_nativeCruiseStarted != Clock::time_point {} && now - m_nativeCruiseStarted > CruisePressTimeout) {
+        const auto operationId = m_nativeCruiseOperationId;
+        m_nativeCruiseRequested = false;
+        m_nativeCruiseOperationId = 0;
+        m_nativeCruiseStarted = {};
+        const bool recovered = m_runtime.OnCruiseActivationTimedOut(operationId);
+        if (operationId != 0 && recovered) {
+            ClearRemoteDispatchState(operationId);
+            REX::WARN("StarfieldCruiseAdapter: native remote Cruise activation timed out; operation={} cancelled", operationId);
+        } else {
+            REX::WARN("StarfieldCruiseAdapter: native Cruise activation timed out; retained destination as a mark");
+        }
+    }
+
     if (m_pendingCourseId != 0 && m_pendingCourseOperationId == 0 && m_courseRequestStarted != Clock::time_point {} && now - m_courseRequestStarted > CourseLockTimeout) {
         const auto courseId = std::exchange(m_pendingCourseId, 0);
+        m_pendingCourseSource = CourseConfirmationSource::None;
         m_courseRequestStarted = {};
         if (m_runtime.OnCourseLockTimedOut(courseId)) {
             REX::WARN("StarfieldCruiseAdapter: course {:08X} did not lock in time; destination retained as a mark", courseId);
@@ -1966,7 +2056,49 @@ bool StarfieldCruiseAdapter::InvokeHudCruiseUserEvent(const char* userEvent, boo
 
 bool StarfieldCruiseAdapter::DispatchCourse(FormID courseId, OperationId operationId)
 {
-    if (courseId == 0 || ReadHudSnapshot().cruiseState != ObservedCruiseState::Active) {
+    if (courseId == 0 || m_pendingCourseId != 0) {
+        return false;
+    }
+
+    const auto& navigation = m_runtime.CurrentNavigationState();
+    const auto openedContext = navigation.shipContext;
+    const auto liveContext = ReadShipContext();
+    const auto currentSystem = m_bodySource.ResolveCurrentSystem();
+    if (!openedContext.IsShipboard() || !openedContext.SameShipAs(liveContext) || !navigation.destination || navigation.destination->courseId != courseId || !currentSystem || navigation.destination->system != *currentSystem) {
+        return false;
+    }
+    if (operationId != 0 && (!navigation.remoteOperation || navigation.remoteOperation->id != operationId || !openedContext.playerPiloting)) {
+        return false;
+    }
+
+    const auto currentCourse = m_shipboardCruise.ReadCurrentCourse();
+    if (currentCourse == courseId) {
+        m_pendingCourseId = courseId;
+        m_pendingCourseOperationId = operationId;
+        m_pendingCourseSource = CourseConfirmationSource::Native;
+        m_courseRequestStarted = Clock::now();
+        REX::INFO("StarfieldCruiseAdapter: course {:08X} already locked; awaiting native confirmation operation={}", courseId, operationId);
+        return true;
+    }
+
+    if (!openedContext.playerPiloting) {
+        if (!openedContext.CanStartCruise() || !liveContext.CanStartCruise()) {
+            return false;
+        }
+        const auto cruise = m_shipboardCruise.Read(openedContext, liveContext);
+        if (cruise.cruiseState != ObservedCruiseState::Active || !m_shipboardCruise.SetCourse(courseId)) {
+            return false;
+        }
+
+        m_pendingCourseId = courseId;
+        m_pendingCourseOperationId = operationId;
+        m_pendingCourseSource = CourseConfirmationSource::Native;
+        m_courseRequestStarted = Clock::now();
+        REX::INFO("StarfieldCruiseAdapter: dispatched native shipboard course {:08X} operation={}", courseId, operationId);
+        return true;
+    }
+
+    if (ReadHudSnapshot().cruiseState != ObservedCruiseState::Active) {
         return false;
     }
 
@@ -1992,6 +2124,7 @@ bool StarfieldCruiseAdapter::DispatchCourse(FormID courseId, OperationId operati
 
     m_pendingCourseId = courseId;
     m_pendingCourseOperationId = operationId;
+    m_pendingCourseSource = CourseConfirmationSource::Hud;
     m_courseRequestStarted = Clock::now();
     REX::INFO("StarfieldCruiseAdapter: dispatched course request uBodyID={:08X} operation={}", courseId, operationId);
     return true;
@@ -2020,7 +2153,8 @@ bool StarfieldCruiseAdapter::Commands::CloseMap()
 
 bool StarfieldCruiseAdapter::Commands::BeginRemoteRoute(const ::BeginRemoteRoute& effect)
 {
-    return m_owner.m_remoteRoutingAvailable && m_owner.m_remoteRoute.Begin(effect, m_owner.m_activeMapIdentity);
+    const auto context = m_owner.m_runtime.CurrentNavigationState().shipContext;
+    return context.playerPiloting && m_owner.m_remoteRoutingAvailable && m_owner.m_remoteRoute.Begin(effect, m_owner.m_activeMapIdentity);
 }
 
 bool StarfieldCruiseAdapter::Commands::AssignStationTarget(FormID targetId)
@@ -2030,14 +2164,49 @@ bool StarfieldCruiseAdapter::Commands::AssignStationTarget(FormID targetId)
 
 bool StarfieldCruiseAdapter::Commands::PressCruise(OperationId operationId)
 {
+    const auto& navigation = m_owner.m_runtime.CurrentNavigationState();
+    const auto openedContext = navigation.shipContext;
+    if (m_owner.m_hudCruisePressed || m_owner.m_nativeCruiseRequested || !navigation.destination || !openedContext.IsShipboard()) {
+        return false;
+    }
+
     const auto hud = m_owner.ReadHudSnapshot();
-    if (m_owner.m_hudCruisePressed || hud.cruiseState != ObservedCruiseState::Inactive || !hud.engageAvailable) {
+    const auto commandPath = SelectCruiseCommandPath(
+        openedContext,
+        hud.cruiseState != ObservedCruiseState::Unknown,
+        m_owner.m_shipboardCruise.Available());
+
+    if (commandPath == CruiseCommandPath::Native) {
+        if (operationId != 0 || navigation.remoteOperation) {
+            return false;
+        }
+
+        const auto currentSystem = m_owner.m_bodySource.ResolveCurrentSystem();
+        const auto liveContext = m_owner.ReadShipContext();
+        if (!currentSystem || navigation.destination->system != *currentSystem || !openedContext.SameShipAs(liveContext)) {
+            return false;
+        }
+
+        bool usedGuardedFallback = false;
+        if (!m_owner.m_shipboardCruise.Start(openedContext, liveContext, usedGuardedFallback)) {
+            REX::WARN("StarfieldCruiseAdapter: native shipboard Cruise start rejected by live safety guards");
+            return false;
+        }
+
+        m_owner.m_pendingCruiseInputDevice.reset();
+        m_owner.m_nativeCruiseRequested = true;
+        m_owner.m_nativeCruiseOperationId = 0;
+        m_owner.m_nativeCruiseStarted = Clock::now();
+        REX::INFO("StarfieldCruiseAdapter: accepted free-roam Cruise start ship={:08X} guarded-fallback={}", liveContext.shipId, usedGuardedFallback);
+        return true;
+    }
+
+    if (commandPath != CruiseCommandPath::Hud || hud.cruiseState != ObservedCruiseState::Inactive || !hud.engageAvailable) {
         return false;
     }
 
     bool gamepad = m_owner.m_presentedInputWasGamepad;
     if (operationId != 0) {
-        const auto& navigation = m_owner.m_runtime.CurrentNavigationState();
         if (!navigation.remoteOperation || navigation.remoteOperation->id != operationId) {
             return false;
         }

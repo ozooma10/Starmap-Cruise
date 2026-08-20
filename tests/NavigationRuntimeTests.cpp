@@ -512,6 +512,27 @@ namespace
         Require(runtime.ObserveRemoteArrival(ReadyArrival(operationId, {0x0005E313})).handled, "complete fresh travel proof was rejected");
     }
 
+    void TestSelectionRetainsShipContextThroughNativeWork()
+    {
+        ::NavigationRuntime runtime;
+        const ::ShipContext ship {
+            .shipId = 0x1234,
+            .aboardPlayerShip = true,
+            .inSpace = true,
+            .playerPiloting = false,
+            .flightSettled = true,
+        };
+
+        runtime.SelectDestination(Jemison(), ::SelectionIntent::StartCruise, false, {}, ship);
+        Require(runtime.CurrentState().shipContext == ship, "selection lost its ship context before map close");
+        runtime.MapClosed();
+        Require(runtime.CurrentState().shipContext == ship, "Cruise request lost its ship context after map close");
+        runtime.CruiseChanged(true);
+        Require(runtime.CurrentState().shipContext == ship, "course request lost its ship context");
+        runtime.Reset();
+        Require(runtime.CurrentState().shipContext == ::ShipContext {}, "navigation reset retained its ship context");
+    }
+
     void TestRemoteArrivalAtSelectedBodySkipsCruiseAndHudProofs()
     {
         {
@@ -764,6 +785,7 @@ namespace
         TestMapSelectionInvalidationCancelsIncompleteClose();
         TestMapSelectionInvalidationPreservesPostMapWork();
         TestCompletedHoldUsesExactCourseLock();
+        TestSelectionRetainsShipContextThroughNativeWork();
         TestAlreadyCruisingSkipsCruisePress();
         TestInvalidDestinationFailsClosed();
         TestSolDestinationIsValid();

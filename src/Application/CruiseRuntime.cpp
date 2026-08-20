@@ -129,6 +129,11 @@ ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& envir
     return EvaluateAction(CurrentSelection(), context);
 }
 
+ShipContext CruiseRuntime::CurrentMapShipContext() const
+{
+    return m_map.ShipContextWhenOpened();
+}
+
 EffectDispatchResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& identity, MapActionGesture gesture, const MapActionEnvironment& environment)
 {
     if (!m_map.IsActive(identity)) {
@@ -159,7 +164,7 @@ EffectDispatchResult CruiseRuntime::ActivateMapAction(const MapSessionIdentity& 
                 .movieGeneration = identity.generation,
             },
             .inputDevice = environment.inputDevice,
-        }));
+        }, m_map.ShipContextWhenOpened()));
 }
 
 EffectDispatchResult CruiseRuntime::OnRemoteRouteCommitted(OperationId operationId, const MapSessionIdentity& identity)

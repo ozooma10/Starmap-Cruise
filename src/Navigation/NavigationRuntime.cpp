@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <utility>
 
-TransitionResult NavigationRuntime::SelectDestination(Destination destination, SelectionIntent intent, bool cruiseAlreadyActive, RemoteSelectionContext remote)
+TransitionResult NavigationRuntime::SelectDestination(Destination destination, SelectionIntent intent, bool cruiseAlreadyActive, RemoteSelectionContext remote, ShipContext shipContext)
 {
     TransitionResult result;
     if (!destination.IsValid()) {
@@ -35,6 +35,7 @@ TransitionResult NavigationRuntime::SelectDestination(Destination destination, S
         m_cruiseWasActiveWhenSelected = false;
         m_state.destination = destination;
         m_state.remoteOperation = operation;
+        m_state.shipContext = shipContext;
         m_state.phase = NavigationPhase::RoutingRemote;
         result.effect = BeginRemoteRoute {
             .operationId = operation.id,
@@ -47,6 +48,7 @@ TransitionResult NavigationRuntime::SelectDestination(Destination destination, S
 
     m_state.destination = std::move(destination);
     m_state.remoteOperation.reset();
+    m_state.shipContext = shipContext;
     m_state.phase = NavigationPhase::ClosingMap;
     m_pendingIntent = intent;
     m_cruiseWasActiveWhenSelected = cruiseAlreadyActive;

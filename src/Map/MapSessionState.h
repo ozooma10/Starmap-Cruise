@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Domain/ShipContext.h"
 #include "Selection/SelectionPolicy.h"
 
 #include <cstddef>
@@ -39,6 +40,7 @@ struct MapOpenContext
     MapSessionIdentity identity;
 
     bool flying {false};
+    ShipContext shipContext;
     ObservedCruiseState cruiseState {ObservedCruiseState::Unknown};
 
     std::optional<FormID> currentSystemId;
@@ -73,6 +75,7 @@ public:
     SelectionSnapshot Snapshot() const;
 
     ObservedCruiseState CruiseStateWhenOpened() const;
+    ShipContext ShipContextWhenOpened() const;
     bool IsActive(const MapSessionIdentity& identity) const;
 
 private:
@@ -87,6 +90,7 @@ private:
     MapSessionIdentity m_identity;
 
     bool m_flyingAtOpen {false};
+    ShipContext m_shipContextWhenOpened;
     ObservedCruiseState m_cruiseStateWhenOpened {ObservedCruiseState::Unknown};
     std::optional<FormID> m_currentSystemId;
     std::optional<FormID> m_currentSystemFormId;
