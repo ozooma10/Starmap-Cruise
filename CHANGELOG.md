@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1 - 2026-08-20
+
 ### Added
 
 - Added same-system Cruise targeting and activation from navigation consoles or the personal starmap while roaming aboard the player's ship.
