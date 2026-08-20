@@ -1,7 +1,6 @@
 #include "Input/CruiseBindingResolver.h"
 
 #include "RE/Starfield.h"
-#include "SFSE/InputMap.h"
 
 #include <array>
 #include <cstddef>
@@ -94,15 +93,8 @@ namespace CFS::Input
                             continue;
                         }
 
-                        // Keyboard mappings are stored as Win32 virtual-key codes, while ButtonEvent::idCode uses DirectInput set-1 scan codes. 
-                        // Modifiers remain virtual-key codes because the input hook checks them with GetAsyncKeyState.
-                        const auto inputCode = a_device == Device::Keyboard ? SFSE::InputMap::VirtualKeyToKeycode(mapping.keyCode) : mapping.keyCode;
-                        if (a_device == Device::Keyboard && inputCode == 0) {
-                            continue;
-                        }
-
                         return {
-                            .code = static_cast<std::int32_t>(inputCode),
+                            .code = static_cast<std::int32_t>(mapping.keyCode),
                             .modifier = IsUnbound(mapping.modifierCode) ? -1 : static_cast<std::int32_t>(mapping.modifierCode),
                         };
                     }
