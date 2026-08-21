@@ -30,5 +30,10 @@ struct ShipContext
         return shipId != 0 && shipId == other.shipId;
     }
 
+    [[nodiscard]] bool EnteredCombatSince(const ShipContext& previous) const noexcept
+    {
+        return previous.SameShipAs(*this) && !previous.playerActorInCombat && playerActorInCombat;
+    }
+
     friend bool operator==(const ShipContext&, const ShipContext&) = default;
 };

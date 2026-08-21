@@ -643,6 +643,69 @@ namespace
         Require(runtime.CurrentState().phase == ::NavigationPhase::PreparingRemoteTarget, "free-roam arrival entered the wrong phase");
     }
 
+    void TestFreshCombatArrivalCancelsBeforeCruise()
+    {
+        ::NavigationRuntime runtime;
+        const auto openedShip = ReadyFreeRoamShip();
+        const auto selected = runtime.SelectDestination(
+            Chawla(),
+            ::SelectionIntent::StartRemoteCruise,
+            false,
+            {.source = RemoteSource},
+            openedShip);
+        const auto* begin = FindEffect<::BeginRemoteRoute>(selected);
+        Require(begin != nullptr, "combat-arrival setup did not start routing");
+        Require(runtime.RemoteRouteCommitted(begin->operationId, RemoteSource).handled, "combat-arrival route did not commit");
+
+        auto arrival = ReadyArrival(begin->operationId, {});
+        arrival.currentBodyId = 0;
+        arrival.currentSystem = {};
+        arrival.completedPlayerJump = false;
+        arrival.completedStandingTravel = false;
+        arrival.freshHudPublication = false;
+        arrival.courseRowsComplete = false;
+        arrival.liveShipContext = openedShip;
+        arrival.liveShipContext.playerActorInCombat = true;
+
+        Require(!runtime.ObserveRemoteArrival(arrival).handled, "combat without completed travel cancelled the remote operation");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::PendingRemoteArrival, "premature combat discarded pending travel");
+
+        arrival.completedStandingTravel = true;
+        const auto cancelled = runtime.ObserveRemoteArrival(std::move(arrival));
+        Require(cancelled.handled && !cancelled.effect, "fresh arrival combat emitted a Cruise effect");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::Idle, "fresh arrival combat retained navigation state");
+        Require(!runtime.CurrentState().destination && !runtime.CurrentState().remoteOperation, "fresh arrival combat retained remote ownership");
+    }
+
+    void TestStaleCombatFlagDoesNotCancelRemoteArrival()
+    {
+        ::NavigationRuntime runtime;
+        auto openedShip = ReadyFreeRoamShip();
+        openedShip.playerActorInCombat = true;
+        const auto selected = runtime.SelectDestination(
+            Chawla(),
+            ::SelectionIntent::StartRemoteCruise,
+            false,
+            {.source = RemoteSource},
+            openedShip);
+        const auto* begin = FindEffect<::BeginRemoteRoute>(selected);
+        Require(begin != nullptr, "stale-combat setup did not start routing");
+        Require(runtime.RemoteRouteCommitted(begin->operationId, RemoteSource).handled, "stale-combat route did not commit");
+
+        auto arrival = ReadyArrival(begin->operationId, {});
+        arrival.completedPlayerJump = false;
+        arrival.completedStandingTravel = true;
+        arrival.postTravelCruiseReady = true;
+        arrival.freshHudPublication = false;
+        arrival.courseRowsComplete = false;
+        arrival.liveShipContext = openedShip;
+
+        const auto accepted = runtime.ObserveRemoteArrival(std::move(arrival));
+        const auto* press = FindEffect<::PressCruise>(accepted);
+        Require(press && press->operationId == begin->operationId, "pre-existing combat flag blocked peaceful remote arrival");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::PreparingRemoteTarget, "stale combat flag changed the remote arrival phase");
+    }
+
     void TestIncompleteHudRowsFailOnlyAtProvenFinalArrival()
     {
         {
@@ -856,6 +919,8 @@ namespace
         TestRemoteArrivalAtSelectedBodySkipsCruiseAndHudProofs();
         TestReplacementJumpCompletionIsExplicitArrivalProof();
         TestFreeRoamRemoteArrivalUsesNativeCruiseWithoutHud();
+        TestFreshCombatArrivalCancelsBeforeCruise();
+        TestStaleCombatFlagDoesNotCancelRemoteArrival();
         TestIncompleteHudRowsFailOnlyAtProvenFinalArrival();
         TestRemoteWaypointEvidenceMustBeUniqueAndOrdered();
         TestLocalCallbacksArePhaseSensitiveAndIdempotent();

@@ -110,10 +110,18 @@ TransitionResult NavigationRuntime::ObserveRemoteArrival(RemoteArrivalObservatio
     auto& operation = *m_state.remoteOperation;
     const bool nativeShipboardRoute = m_state.shipContext.IsShipboard() && !m_state.shipContext.playerPiloting;
     const bool completedTravel = observation.completedPlayerJump || observation.completedReplacementJump || (nativeShipboardRoute && observation.completedStandingTravel);
-    const bool nativeShipContextValid = !nativeShipboardRoute ||
-        (m_state.shipContext.CanStartCruise() && observation.liveShipContext.CanStartCruise() && m_state.shipContext.SameShipAs(observation.liveShipContext));
-    if (!observation.mapClosed || !observation.loadingMenuClosed || !completedTravel || !observation.settledFlight || !observation.flying || !nativeShipContextValid || observation.currentBodyId == 0 ||
-        observation.currentSystem != operation.destination.system) {
+    const bool nativeShipContextValid = !nativeShipboardRoute || (m_state.shipContext.CanStartCruise() && observation.liveShipContext.CanStartCruise() && m_state.shipContext.SameShipAs(observation.liveShipContext));
+    if (!observation.mapClosed || !observation.loadingMenuClosed || !completedTravel || !observation.settledFlight || !observation.flying || !nativeShipContextValid) {
+        return {};
+    }
+
+    // The actor flag can be stale while roaming a ship, so only a fresh false -> true  transition on the same ship is accepted as arrival-combat evidence.
+    if (observation.liveShipContext.EnteredCombatSince(m_state.shipContext)) {
+        Reset();
+        return {.handled = true};
+    }
+
+    if (observation.currentBodyId == 0 || observation.currentSystem != operation.destination.system) {
         return {};
     }
 

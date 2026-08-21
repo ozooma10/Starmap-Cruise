@@ -165,6 +165,11 @@ namespace
         changed = ready;
         changed.playerActorInCombat = true;
         Require(changed.CanStartCruise(), "stale player-actor combat state blocked shipboard Cruise");
+        Require(changed.EnteredCombatSince(ready), "fresh same-ship combat transition was not detected");
+        Require(!ready.EnteredCombatSince(changed), "combat exit was mistaken for combat entry");
+        auto otherShip = changed;
+        ++otherShip.shipId;
+        Require(!otherShip.EnteredCombatSince(ready), "different-ship combat state was correlated to the selected ship");
         changed = ready;
         changed.flightSettled = false;
         Require(!changed.CanStartCruise(), "unsettled flight could start Cruise");

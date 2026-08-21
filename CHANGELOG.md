@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Fixed
+
+- Cancelled a pending post-jump Cruise before activation when remote travel enters ship combat.
+
 ## 1.1 - 2026-08-20
 
 ### Added

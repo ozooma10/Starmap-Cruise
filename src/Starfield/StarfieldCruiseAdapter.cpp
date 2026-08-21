@@ -1516,6 +1516,26 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
         return;
     }
 
+    const auto operationId = navigation.remoteOperation->id;
+    if (liveShipContext.EnteredCombatSince(navigation.shipContext)) {
+        const auto result = m_runtime.OnRemoteArrival({
+            .operationId = operationId,
+            .mapClosed = true,
+            .loadingMenuClosed = true,
+            .completedPlayerJump = m_playerJumpState.Completed(),
+            .completedReplacementJump = completedReplacementJump,
+            .completedStandingTravel = completedStandingTravel,
+            .settledFlight = true,
+            .flying = true,
+            .liveShipContext = liveShipContext,
+        });
+        if (result.handled) {
+            ClearRemoteDispatchState(operationId);
+            REX::WARN("StarfieldCruiseAdapter: operation={} cancelled because combat began during remote travel", operationId);
+        }
+        return;
+    }
+
     const auto currentLocation = m_bodySource.ResolveCurrentLocation();
     if (!currentLocation) {
         return;
@@ -1527,7 +1547,6 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
         return;
     }
 
-    const auto operationId = navigation.remoteOperation->id;
     RemoteArrivalObservation observation {
         .operationId = operationId,
         .currentBodyId = currentLocation->bodyId,
