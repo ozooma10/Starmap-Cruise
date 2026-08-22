@@ -604,6 +604,28 @@ namespace
         Require(runtime.CurrentState().phase == ::NavigationPhase::PreparingRemoteTarget, "completed replacement jump did not enter PreparingRemoteTarget");
     }
 
+    void TestCorrelatedExternalArrivalDoesNotRequireHudCoursePublication()
+    {
+        ::NavigationRuntime runtime;
+        const auto operationId = StartRemote(runtime);
+        runtime.RemoteRouteCommitted(operationId, RemoteSource);
+
+        auto observation = ReadyArrival(operationId, {});
+        observation.completedPlayerJump = false;
+        observation.completedReplacementJump = true;
+        observation.completedCorrelatedExternalTravel = true;
+        observation.freshHudPublication = false;
+        observation.courseRowsComplete = false;
+        observation.postTravelCruiseReady = false;
+        Require(!runtime.ObserveRemoteArrival(observation).handled, "unready correlated external arrival started Cruise");
+
+        observation.postTravelCruiseReady = true;
+        const auto arrived = runtime.ObserveRemoteArrival(std::move(observation));
+        const auto* press = FindEffect<::PressCruise>(arrived);
+        Require(press && press->operationId == operationId, "correlated external arrival waited for a HUD course publication");
+        Require(runtime.CurrentState().phase == ::NavigationPhase::PreparingRemoteTarget, "correlated external arrival entered the wrong phase");
+    }
+
     void TestFreeRoamRemoteArrivalUsesNativeCruiseWithoutHud()
     {
         ::NavigationRuntime runtime;
@@ -918,6 +940,7 @@ namespace
         TestRemoteArrivalRequiresEveryFreshTravelProof();
         TestRemoteArrivalAtSelectedBodySkipsCruiseAndHudProofs();
         TestReplacementJumpCompletionIsExplicitArrivalProof();
+        TestCorrelatedExternalArrivalDoesNotRequireHudCoursePublication();
         TestFreeRoamRemoteArrivalUsesNativeCruiseWithoutHud();
         TestFreshCombatArrivalCancelsBeforeCruise();
         TestStaleCombatFlagDoesNotCancelRemoteArrival();

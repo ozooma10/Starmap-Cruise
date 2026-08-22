@@ -120,6 +120,9 @@ struct RemoteArrivalObservation
     bool loadingMenuClosed {false};
     bool completedPlayerJump {false};
     bool completedReplacementJump {false};
+    // A known external travel lifecycle emitted both start and end, and the
+    // adapter independently proved that the ship reached the selected system.
+    bool completedCorrelatedExternalTravel {false};
     // Vanilla can resolve a route executed from a shipboard starmap through a loading transition without publishing the cockpit grav-jump sequence.
     bool completedStandingTravel {false};
     bool settledFlight {false};

@@ -1590,8 +1590,15 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
 
     const bool arrivedAtDestination = currentLocation->bodyId == navigation.remoteOperation->destination.targetId;
     const bool freshHudPublication = m_lastHudCourse && m_lastHudCourse->generation == m_hudMovieGeneration && m_lastHudCourse->publishedTicks > m_lastTravelTicks;
-    if (!arrivedAtDestination && (!cruiseCanEngage || (!nativeShipboardRoute && !freshHudPublication))) {
+    if (!arrivedAtDestination &&
+        (!cruiseCanEngage || (!nativeShipboardRoute && !completedAstrogateTravel && !freshHudPublication))) {
         return;
+    }
+    if (!arrivedAtDestination && completedAstrogateTravel && !freshHudPublication) {
+        REX::INFO(
+            "StarfieldCruiseAdapter: operation={} continuing correlated Astrogate handoff without a post-travel HUD course publication",
+            operationId
+        );
     }
 
     RemoteArrivalObservation observation {
@@ -1602,11 +1609,15 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
         .loadingMenuClosed = true,
         .completedPlayerJump = m_playerJumpState.Completed(),
         .completedReplacementJump = completedReplacementJump,
+        .completedCorrelatedExternalTravel = completedAstrogateTravel,
         .completedStandingTravel = completedStandingTravel,
         .settledFlight = true,
         .flying = true,
-        .postTravelCruiseReady = nativeShipboardRoute && cruiseCanEngage &&
-            (cruise.source == CruiseControlSource::Native || (liveShipContext.playerPiloting && cruise.source == CruiseControlSource::Hud)),
+        .postTravelCruiseReady = cruiseCanEngage &&
+            ((nativeShipboardRoute &&
+                 (cruise.source == CruiseControlSource::Native ||
+                     (liveShipContext.playerPiloting && cruise.source == CruiseControlSource::Hud))) ||
+                (completedAstrogateTravel && liveShipContext.playerPiloting && cruise.source == CruiseControlSource::Hud)),
         .liveShipContext = liveShipContext,
         .freshHudPublication = freshHudPublication,
         .courseRowsComplete = freshHudPublication && !m_lastHudCourse->overflowed,

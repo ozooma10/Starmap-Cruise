@@ -130,7 +130,7 @@ TransitionResult NavigationRuntime::ObserveRemoteArrival(RemoteArrivalObservatio
         return {.handled = true};
     }
 
-    if (nativeShipboardRoute) {
+    if (nativeShipboardRoute || observation.completedCorrelatedExternalTravel) {
         if (!observation.postTravelCruiseReady) {
             return {};
         }

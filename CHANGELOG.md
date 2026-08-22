@@ -9,6 +9,7 @@
 ### Fixed
 
 - Cancelled a pending post-jump Cruise before activation when remote travel enters ship combat.
+- Fixed Astrogate handoff stalling until the starmap was reopened by accepting its correlated travel end after exact destination-system, settled-flight, and Cruise-readiness proof.
 
 ## 1.1 - 2026-08-20
 
