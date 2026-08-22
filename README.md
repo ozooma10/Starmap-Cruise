@@ -14,6 +14,12 @@ When roaming your ship, same-system planets, moons, and stations retain the same
 
 The hold option is shown only when Cruise can be engaged. During a cooldown, while Cruise state is unavailable, or while Cruise is already active, the safe tap action may be the only option. A remote route started while roaming uses vanilla's menu travel/loading flow; it does not add a walkable grav-jump duration.
 
+## Compatibility
+
+- Astrogate: When `Astrogate.esm` is loaded, observe Astrogate's `RI_AutopilotState` and correlate one complete activity cycle with the pending remote route. Cruise handoff requires settled flight and the selected destination system/body.
+
+Astrogate exposes the same inactive state for arrival and early disengage. So an ended trip inside the selected destination system is marked as arrival and an ended trip outside it as cancellation. An intentional disengage after Astrogate has already crossed into the destination system is treated as arrival and proceeds to  normal Cruise handoff.
+
 ## Supported targets and limitations
 
 Supported:

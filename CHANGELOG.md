@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Better Astrogate support
+
 ### Fixed
 
 - Cancelled a pending post-jump Cruise before activation when remote travel enters ship combat.

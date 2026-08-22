@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Application/CruiseRuntime.h"
+#include "Domain/ExternalTravelLifecycle.h"
 #include "Domain/PlayerJumpState.h"
 #include "Starfield/HudObservationInbox.h"
 #include "Starfield/MapActionInputState.h"
@@ -23,6 +24,7 @@ namespace RE
     class BSInputEventReceiver;
     class IMenu;
     class InputEvent;
+    class TESGlobal;
 }
 
 class StarfieldCruiseAdapter final
@@ -114,7 +116,7 @@ private:
     void EvaluateRemoteArrival();
     void HandleRemoteRouteResult(RemoteRouteResult result);
     void ClearRemoteDispatchState(OperationId operationId);
-    void ResetRemoteTravelState();
+    void ResetRemoteTravelState(bool preserveExternalTravel = false);
     void TraceCurrentSelection();
     void TrySubscribeMapFeeds();
     void TrySubscribeHudFeed();
@@ -123,6 +125,7 @@ private:
     void UpdateMapAction();
     void UpdateTimeouts();
     bool InitializeTravelObservers();
+    void InitializeAstrogateTravelObserver();
 
     bool InstallInput();
     void ResolveInputBindings();
@@ -133,6 +136,7 @@ private:
     ShipContext ReadShipContext() const;
     CruiseControlSnapshot ReadCruiseControlSnapshot(const ShipContext& openedContext);
     HudSnapshot ReadHudSnapshot();
+    bool IsAstrogateAutopilotActive() const;
     bool InvokeHudCruiseUserEvent(const char* userEvent, bool down);
     bool DispatchCourse(FormID courseId, OperationId operationId, bool followsCruiseActivation);
     bool DispatchMapClose();
@@ -200,6 +204,8 @@ private:
 
     bool m_remoteRoutingAvailable {false};
     bool m_ftlReplacementJumpLoaded {false};
+    RE::TESGlobal* m_astrogateAutopilotState {nullptr};
+    ExternalTravelLifecycle m_astrogateTravel;
     bool m_loadingMenuOpen {false};
     PlayerJumpState m_playerJumpState;
     std::int64_t m_lastTravelTicks {0};

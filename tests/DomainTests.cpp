@@ -1,4 +1,5 @@
 #include "Domain/Destination.h"
+#include "Domain/ExternalTravelLifecycle.h"
 #include "Domain/NonzeroCounter.h"
 #include "Domain/PlayerJumpState.h"
 #include "Domain/ShipContext.h"
@@ -129,6 +130,46 @@ namespace
         Require(!state.InProgress(), "completed jump remained in progress");
     }
 
+    void TestExternalTravelLifecycleCorrelatesOneActivityCycle()
+    {
+        ExternalTravelLifecycle lifecycle;
+        constexpr std::uint64_t operationId = 41;
+
+        lifecycle.BeginOperation(operationId, false);
+        Require(lifecycle.Observe(operationId, false) == ExternalTravelTransition::None,
+            "inactive Astrogate baseline produced a transition");
+        Require(lifecycle.Observe(operationId, true) == ExternalTravelTransition::Started,
+            "Astrogate activity did not start");
+        Require(lifecycle.Observe(operationId, true) == ExternalTravelTransition::None,
+            "duplicate Astrogate start produced another transition");
+        Require(lifecycle.Observe(operationId, false) == ExternalTravelTransition::Ended,
+            "correlated Astrogate activity end was not accepted");
+        Require(lifecycle.Ended(operationId), "Astrogate end did not remain latched while destination guards settled");
+        Require(lifecycle.Observe(operationId, true) == ExternalTravelTransition::None,
+            "a second Astrogate cycle replaced the correlated trip");
+
+        lifecycle.Reset();
+        Require(!lifecycle.Ended(operationId), "external travel reset retained a terminal outcome");
+    }
+
+    void TestExternalTravelLifecycleRejectsPreexistingAndWrongOperationActivity()
+    {
+        ExternalTravelLifecycle lifecycle;
+        constexpr std::uint64_t operationId = 90;
+        lifecycle.BeginOperation(operationId, true);
+
+        Require(lifecycle.Observe(operationId, true) == ExternalTravelTransition::None,
+            "preexisting Astrogate activity was accepted as a new trip");
+        Require(lifecycle.Observe(operationId, false) == ExternalTravelTransition::None,
+            "the end of preexisting Astrogate activity was accepted");
+        Require(lifecycle.Observe(operationId + 1, true) == ExternalTravelTransition::None,
+            "Astrogate activity from another operation was accepted");
+        Require(lifecycle.Observe(operationId, true) == ExternalTravelTransition::Started,
+            "new Astrogate activity after an inactive sample did not start");
+        Require(lifecycle.Observe(operationId, false) == ExternalTravelTransition::Ended,
+            "new Astrogate activity after a preexisting trip did not end");
+    }
+
     void TestShipContextRequiresEveryFreeRoamSafetyGuard()
     {
         const ShipContext ready {
@@ -251,6 +292,8 @@ void RunDomainTests()
     TestDestinationIdentityIgnoresOnlyPresentationName();
     TestNonzeroCounterCoversInitialAdvanceAndRollover();
     TestPlayerJumpStatePreservesReplacementJumpInitiation();
+    TestExternalTravelLifecycleCorrelatesOneActivityCycle();
+    TestExternalTravelLifecycleRejectsPreexistingAndWrongOperationActivity();
     TestShipContextRequiresEveryFreeRoamSafetyGuard();
     TestShipboardCruisePolicySelectsCommandAndActivationPaths();
 }
