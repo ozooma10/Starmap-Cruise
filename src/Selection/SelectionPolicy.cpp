@@ -37,7 +37,7 @@ namespace
 
 SelectionDecision EvaluateSelection(const SelectionSnapshot& snapshot)
 {
-    if (!snapshot.sessionValid || !snapshot.flying || !snapshot.systemView) {
+    if (!snapshot.sessionValid || !snapshot.flying || (!snapshot.systemView && !snapshot.planetView)) {
         return Hidden(SelectionReason::InactiveContext);
     }
 

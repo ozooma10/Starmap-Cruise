@@ -123,6 +123,7 @@ ActionDecision CruiseRuntime::CurrentMapAction(const MapActionEnvironment& envir
         .cruiseStateWhenMapOpened = m_map.CruiseStateWhenOpened(),
         .cruiseEngageAvailable = environment.cruiseEngageAvailable,
         .vanillaActionEnabled = environment.vanillaActionEnabled,
+        .planetView = environment.planetView,
         .remoteRoutingAvailable = environment.remoteRoutingAvailable,
     };
 

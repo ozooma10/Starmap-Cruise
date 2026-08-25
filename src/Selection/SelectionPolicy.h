@@ -42,6 +42,7 @@ struct SelectionSnapshot
 
     bool flying {false};
     bool systemView {false};
+    bool planetView {false};
 
     std::optional<FormID> currentSystemId;
     // Map-independent player system identity (STDT FormID).

@@ -44,8 +44,16 @@ bool MapSessionState::SetView(const MapSessionIdentity& identity, MapView view)
     }
 
     if (m_view != view) {
+        const bool enteringSelectedPlanet = m_view == MapView::System && view == MapView::Planet &&
+            m_highlightedMarkerCount == 1 &&
+            (m_marker.kind == ObservedTargetKind::Planet || m_marker.kind == ObservedTargetKind::Moon) &&
+            m_marker.id != 0 && m_dossier.id == m_marker.id && m_dossier.kind == m_marker.kind &&
+            m_resolvedBody && m_resolvedBody->id == m_dossier.id;
+
         m_view = view;
-        ClearTargetObservations();
+        if (!enteringSelectedPlanet) {
+            ClearTargetObservations();
+        }
     }
 
     return true;
@@ -55,6 +63,12 @@ bool MapSessionState::SetMarkers(const MapSessionIdentity& identity, MarkerUpdat
 {
     if (!Accepts(identity)) {
         return false;
+    }
+
+    // Planet view republishes surface/location markers. They do not replace
+    // the exact planet or moon selected in system view.
+    if (m_view == MapView::Planet) {
+        return true;
     }
 
     m_highlightedMarkerCount = update.highlightedCount;
@@ -72,6 +86,12 @@ bool MapSessionState::SetDossier(const MapSessionIdentity& identity, TargetObser
 {
     if (!Accepts(identity)) {
         return false;
+    }
+
+    // Keep the immutable system-view target proof while the user inspects its
+    // planet view. Surface dossier churn is not a new Cruise destination.
+    if (m_view == MapView::Planet) {
+        return true;
     }
 
     m_dossier = std::move(dossier);
@@ -117,6 +137,7 @@ SelectionSnapshot MapSessionState::Snapshot() const
         .sessionValid = sessionValid,
         .flying = m_flyingAtOpen,
         .systemView = m_view == MapView::System,
+        .planetView = m_view == MapView::Planet,
         .currentSystemId = m_currentSystemId,
         .currentSystemFormId = m_currentSystemFormId,
         .highlightedMarkerCount = m_highlightedMarkerCount,

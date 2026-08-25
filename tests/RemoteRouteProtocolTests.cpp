@@ -101,6 +101,27 @@ namespace
         Require(!protocol.Tick(GalaxyInput(), 120).failed && protocol.CurrentPhase() == RemoteRouteProtocol::Phase::EstablishSelection, "the exact destination STDT did not complete the galaxy gate");
     }
 
+    void TestPlanetViewRequestsSecondStockBack()
+    {
+        RemoteRouteProtocol protocol;
+        protocol.Begin(DestinationRoot, 0, MapView::Planet, 100);
+        Require(protocol.CurrentPhase() == RemoteRouteProtocol::Phase::AwaitSystem, "planet-view route did not wait for system view");
+
+        RemoteRouteProtocol::TickInput planet {
+            .mapReadable = true,
+            .view = MapView::Planet,
+        };
+        Require(protocol.Tick(planet, 110).command == RemoteRouteProtocol::Command::None, "planet view dispatched the second Back before reaching system view");
+
+        auto system = planet;
+        system.view = MapView::System;
+        Require(protocol.Tick(system, 120).command == RemoteRouteProtocol::Command::DispatchBack, "system view did not request the second stock Back");
+        Require(protocol.CurrentPhase() == RemoteRouteProtocol::Phase::AwaitGalaxy, "second Back request entered the wrong phase");
+
+        Require(protocol.Tick(GalaxyInput(), 130).command == RemoteRouteProtocol::Command::None, "galaxy transition emitted an unexpected command");
+        Require(protocol.CurrentPhase() == RemoteRouteProtocol::Phase::EstablishSelection, "planet-view route did not reach normal galaxy selection");
+    }
+
     void TestFocusSuspendsDeadlineAndClearsReadinessDwell()
     {
         RemoteRouteProtocol protocol;
@@ -331,6 +352,7 @@ void RunRemoteRouteProtocolTests()
     TestHappyPathRequiresEveryCoarsePhase();
     TestWrongAndPreexistingRoutesFailClosed();
     TestGalaxyGateRequiresTheSystemFormRatherThanTheDisplayedBody();
+    TestPlanetViewRequestsSecondStockBack();
     TestFocusSuspendsDeadlineAndClearsReadinessDwell();
     TestExecuteRequiresEventAndTimelyMatchingClose();
     TestCorrelationAndOwnershipFailuresStopTheProtocol();

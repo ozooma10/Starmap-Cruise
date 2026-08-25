@@ -158,6 +158,7 @@ private:
 
     std::int64_t m_mapMovieBornTicks {0};
     MapSessionIdentity m_activeMapIdentity;
+    MapView m_activeMapView {MapView::Unknown};
     MapSessionIdentity m_mapDataSubscriptionIdentity;
     MapSessionIdentity m_markersSubscriptionIdentity;
     MapSessionIdentity m_dossierSubscriptionIdentity;

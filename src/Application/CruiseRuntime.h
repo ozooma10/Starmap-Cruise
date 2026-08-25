@@ -43,6 +43,7 @@ struct MapActionEnvironment
     bool cruiseControlBound {false};
     bool cruiseEngageAvailable {false};
     bool vanillaActionEnabled {false};
+    bool planetView {false};
     bool remoteRoutingAvailable {false};
     NavigationInputDevice inputDevice {NavigationInputDevice::KeyboardMouse};
 };

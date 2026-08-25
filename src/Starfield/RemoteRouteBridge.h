@@ -42,7 +42,7 @@ public:
 
     bool Initialize(const StarfieldBodyResolutionSource& bodySource);
 
-    bool Begin(const BeginRemoteRoute& effect, const MapSessionIdentity& activeIdentity);
+    bool Begin(const BeginRemoteRoute& effect, const MapSessionIdentity& activeIdentity, MapView sourceView);
     void ObserveMapData(const MapSessionIdentity& identity, MapView view, FormID displayedSystemFormId);
     RemoteRouteResult Tick(const MapSessionIdentity& activeIdentity);
     RemoteRouteResult OnMapClosed(const MapSessionIdentity& identity);

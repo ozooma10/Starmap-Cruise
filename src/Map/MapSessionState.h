@@ -25,6 +25,7 @@ enum class MapView : std::uint8_t
     Unknown,
     Galaxy,
     System,
+    Planet,
     Other,
 };
 

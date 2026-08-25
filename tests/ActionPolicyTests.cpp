@@ -165,6 +165,17 @@ namespace
         Require(!action.destination, "vanilla-disabled action retained a destination");
     }
 
+    void TestPlanetViewDoesNotRequireSetCourseVisibility()
+    {
+        auto context = ReadyContext();
+        context.vanillaActionEnabled = false;
+        context.planetView = true;
+
+        const auto action = ::EvaluateAction(EligibleSelection(), context);
+        Require(action.IsVisible(), "planet-view action followed the hidden Set Course button");
+        Require(action.CanHandleInput(), "planet-view action rejected the Cruise binding");
+    }
+
     void TestRemoteTargetUsesOneAction()
     {
         auto selection = EligibleSelection();
@@ -284,6 +295,7 @@ namespace
         TestUnknownCruiseStateUsesTapOnly();
         TestCruiseCooldownUsesTapOnly();
         TestVanillaActionStateCanDisableInput();
+        TestPlanetViewDoesNotRequireSetCourseVisibility();
         TestRemoteTargetUsesOneAction();
         TestRemoteTargetRejectsActiveCruiseAndMissingBindings();
         TestRemoteStationReasonRemainsDisabled();

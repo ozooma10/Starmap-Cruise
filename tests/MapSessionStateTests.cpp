@@ -149,6 +149,28 @@ namespace
         Require(selection.IsEligible(), "repeated view update cleared valid evidence");
     }
 
+    void TestPlanetViewRetainsExactPlanetSelection()
+    {
+        ::MapSessionState state;
+        OpenSession(state);
+        PopulateExactPlanet(state);
+
+        Require(state.SetView(CurrentIdentity, ::MapView::Planet), "planet-view update was rejected");
+
+        auto snapshot = state.Snapshot();
+        Require(!snapshot.systemView && snapshot.planetView, "planet view retained the wrong view flags");
+        Require(::EvaluateSelection(snapshot).IsEligible(), "planet view lost the exact system-view planet selection");
+
+        Require(state.SetMarkers(CurrentIdentity, {}), "planet-view surface markers were rejected");
+        Require(state.SetDossier(CurrentIdentity, {}, std::nullopt), "planet-view surface dossier was rejected");
+        Require(::EvaluateSelection(state.Snapshot()).IsEligible(), "planet-view surface feeds replaced the selected planet");
+
+        Require(state.SetView(CurrentIdentity, ::MapView::Galaxy), "planet-to-galaxy update was rejected");
+        snapshot = state.Snapshot();
+        Require(!snapshot.planetView, "galaxy view remained a planet view");
+        Require(snapshot.highlightedMarkerCount == 0 && snapshot.dossier.id == 0 && !snapshot.resolvedBody, "leaving planet view retained target evidence");
+    }
+
     void TestDossierUpdateAtomicallyReplacesResolution()
     {
         ::MapSessionState state;
@@ -421,6 +443,7 @@ namespace
         TestStaleSessionUpdateIsIgnored();
         TestViewChangeClearsTargetEvidence();
         TestRepeatedViewDoesNotClearEvidence();
+        TestPlanetViewRetainsExactPlanetSelection();
         TestDossierUpdateAtomicallyReplacesResolution();
         TestAmbiguousMarkersClearStoredTarget();
         TestLateCurrentSystemIsCapturedOnce();

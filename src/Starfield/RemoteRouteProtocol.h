@@ -11,6 +11,7 @@ public:
     enum class Phase : std::uint8_t
     {
         Idle,
+        AwaitSystem,
         AwaitGalaxy,
         EstablishSelection,
         AwaitRoute,
@@ -28,6 +29,7 @@ public:
     enum class Command : std::uint8_t
     {
         None,
+        DispatchBack,
         InvokeSelector,
         DispatchSetCourse,
         InvokeExecute,
@@ -64,6 +66,7 @@ public:
     };
 
     void Begin(FormID destinationRoot, FormID preexistingEndpoint, std::int64_t nowMs);
+    void Begin(FormID destinationRoot, FormID preexistingEndpoint, MapView sourceView, std::int64_t nowMs);
     Decision Tick(const TickInput& input, std::int64_t nowMs);
     bool SelectorCompleted(bool invoked, bool exactReadback, std::int64_t nowMs);
     bool SetCourseCompleted(bool dispatched, bool ownershipConsumed, std::int64_t nowMs);

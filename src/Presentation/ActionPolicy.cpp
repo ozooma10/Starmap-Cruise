@@ -39,7 +39,7 @@ ActionDecision EvaluateAction(const SelectionDecision& selection, const ActionCo
             return HiddenAction(selection);
     }
 
-    if (!context.vanillaActionEnabled)
+    if (!context.vanillaActionEnabled && !context.planetView)
         return HiddenAction(selection);
 
     ActionDecision decision {

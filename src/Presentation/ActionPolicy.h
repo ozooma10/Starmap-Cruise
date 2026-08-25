@@ -27,6 +27,10 @@ struct ActionContext
     // Copied from the vanilla Starmap button state.
     bool vanillaActionEnabled {false};
 
+    // Planet view intentionally has no visible Set Course button. An exact
+    // planet/moon selection retained by MapSessionState remains actionable.
+    bool planetView {false};
+
     // Same-system Cruise remains available when remote routing is disabled.
     bool remoteRoutingAvailable {false};
 };

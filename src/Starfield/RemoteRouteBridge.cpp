@@ -122,19 +122,21 @@ public:
         return RE::BSEventNotifyControl::kContinue;
     }
 
-    bool Begin(const BeginRemoteRoute& effect, const MapSessionIdentity& activeIdentity)
+    bool Begin(const BeginRemoteRoute& effect, const MapSessionIdentity& activeIdentity, MapView sourceView)
     {
         if (!available || protocol.Active() || effect.operationId == 0 ||
             effect.source.session != activeIdentity.session ||
             effect.source.movieGeneration != activeIdentity.generation ||
-            !effect.destination.IsValid() || effect.destination.kind == DestinationKind::Station) {
+            !effect.destination.IsValid() || effect.destination.kind == DestinationKind::Station ||
+            (sourceView != MapView::System && sourceView != MapView::Planet)) {
             return false;
         }
 
         LiveMap live;
         std::string detail;
-        // A remote action begins in System view, so the active state is intentionally SystemState until Back reaches Galaxy view.
-        // Beginning the operation only needs the stable menu/movie and route; the stricter GalaxyState proof belongs to the later route stages.
+        // A remote action begins in System or Planet view. Beginning the
+        // operation only needs the stable menu/movie and route; the stricter
+        // GalaxyState proof belongs to the later route stages.
         if (!ResolveLiveMenu(activeIdentity, live, detail)) {
             REX::WARN("RemoteRouteBridge: begin failed: {}", detail);
             return false;
@@ -150,7 +152,7 @@ public:
         // A later nonzero map value is accepted only when it names the same destination system.
         observedFocusedRoot = effect.destination.system.starFormId;
         preexistingEndpoint = before.readable ? before.endpoint : 0;
-        protocol.Begin(effect.destination.system.starFormId, preexistingEndpoint, NowMilliseconds());
+        protocol.Begin(effect.destination.system.starFormId, preexistingEndpoint, sourceView, NowMilliseconds());
         if (!protocol.Active()) {
             Clear();
             return false;
@@ -193,8 +195,11 @@ public:
             .focusedRoot = observedMapIdentity == sourceIdentity ? observedFocusedRoot : 0,
         };
 
-        if (protocol.CurrentPhase() != RemoteRouteProtocol::Phase::AwaitExecuteClose &&
-            ResolveLiveGalaxyMap(activeIdentity, live, detail)) {
+        if (protocol.CurrentPhase() == RemoteRouteProtocol::Phase::AwaitSystem &&
+            ResolveLiveMenu(activeIdentity, live, detail)) {
+            input.mapReadable = true;
+        } else if (protocol.CurrentPhase() != RemoteRouteProtocol::Phase::AwaitExecuteClose &&
+                   ResolveLiveGalaxyMap(activeIdentity, live, detail)) {
             input.mapReadable = true;
             if (protocol.CurrentPhase() == RemoteRouteProtocol::Phase::EstablishSelection) {
                 input.selectedSystem = live.galaxyState->GetSelectedSystem();
@@ -220,6 +225,14 @@ public:
         const auto decision = protocol.Tick(input, nowMs);
         if (decision.failed) {
             return Fail(std::string {decision.reason});
+        }
+
+        if (decision.command == RemoteRouteProtocol::Command::DispatchBack) {
+            if (!CFS::ScaleformEvents::DispatchUiEvent(live.movieRoot, "StarMapMenu_OnCancel", nullptr)) {
+                return Fail("stock second Back dispatch failed");
+            }
+            REX::INFO("RemoteRouteBridge: operation={} dispatched second stock Back from Planet to Galaxy", operation.operationId);
+            return {};
         }
         if (previousPhase == RemoteRouteProtocol::Phase::AwaitGalaxy &&
             protocol.CurrentPhase() == RemoteRouteProtocol::Phase::EstablishSelection) {
@@ -462,9 +475,9 @@ bool RemoteRouteBridge::Initialize(const StarfieldBodyResolutionSource& bodySour
     return m_impl->Initialize(bodySource);
 }
 
-bool RemoteRouteBridge::Begin(const BeginRemoteRoute& effect, const MapSessionIdentity& activeIdentity)
+bool RemoteRouteBridge::Begin(const BeginRemoteRoute& effect, const MapSessionIdentity& activeIdentity, MapView sourceView)
 {
-    return m_impl->Begin(effect, activeIdentity);
+    return m_impl->Begin(effect, activeIdentity, sourceView);
 }
 
 void RemoteRouteBridge::ObserveMapData(const MapSessionIdentity& identity, MapView view, FormID displayedSystemFormId)

@@ -399,6 +399,16 @@ namespace
         RequireDecision(decision, ::SelectionAvailability::Hidden, ::SelectionReason::InactiveContext);
     }
 
+    void TestPlanetViewAcceptsRetainedPlanetSelection()
+    {
+        auto snapshot = ValidPlanet();
+        snapshot.systemView = false;
+        snapshot.planetView = true;
+
+        const auto decision = ::EvaluateSelection(snapshot);
+        Require(decision.IsEligible(), "planet view rejected a retained exact planet selection");
+    }
+
     void RunTests()
     {
         TestExactPlanetIsEligible();
@@ -424,6 +434,7 @@ namespace
         TestStationSystemFormsMustBeNonzero();
         TestRemotePlanMustBeValid();
         TestInvalidContextIsHidden();
+        TestPlanetViewAcceptsRetainedPlanetSelection();
     }
 }
 

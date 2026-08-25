@@ -46,6 +46,7 @@ namespace
     constexpr auto CruisePressTimeout = std::chrono::seconds(4);
     constexpr auto CourseLockTimeout = std::chrono::milliseconds(1500);
     constexpr auto RemoteWorldSettleTime = std::chrono::milliseconds(2500);
+    constexpr auto AstrogateCleanupSettleTime = std::chrono::seconds(4);
     constexpr auto RemoteCruiseExitTimeout = std::chrono::seconds(2);
 
     constexpr auto GlobalEventGetterPattern = REL::Pattern<"48 83 EC 28 65 48 8B 04 25 58 00 00 00 BA B8 00">();
@@ -183,6 +184,9 @@ namespace
         }
         if (raw == 1.0) {
             return MapView::System;
+        }
+        if (raw == 2.0) {
+            return MapView::Planet;
         }
         return MapView::Other;
     }
@@ -1040,6 +1044,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
         ResetMapActionInput();
         m_mapMovieBornTicks = observations.movieBornTicks;
         m_activeMapIdentity = {};
+        m_activeMapView = MapView::Unknown;
         m_mapDataSubscriptionIdentity = {};
         m_markersSubscriptionIdentity = {};
         m_dossierSubscriptionIdentity = {};
@@ -1057,6 +1062,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
             m_runtime.OnMapMovieCreated(observations.movieGeneration);
         }
         m_activeMapIdentity = {};
+        m_activeMapView = MapView::Unknown;
         m_mapDataSubscriptionIdentity = {};
         m_markersSubscriptionIdentity = {};
         m_dossierSubscriptionIdentity = {};
@@ -1112,6 +1118,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
 
             if (accepted) {
                 m_activeMapIdentity = observation.identity;
+                m_activeMapView = MapView::Unknown;
                 m_mapActionSurface->InvalidatePresentation();
             }
         } else {
@@ -1129,6 +1136,7 @@ void StarfieldCruiseAdapter::DrainMapObservations()
             }
             if (activeSession) {
                 m_activeMapIdentity = {};
+                m_activeMapView = MapView::Unknown;
                 m_mapActionInteractive.store(false, std::memory_order_release);
             }
         }
@@ -1148,7 +1156,10 @@ void StarfieldCruiseAdapter::DrainMapObservations()
             m_runtime.OnCurrentSystemFormObserved(mapData.identity, currentSystem->starFormId);
         }
 
-        m_runtime.OnMapViewChanged(mapData.identity, mapData.view);
+        if (m_runtime.OnMapViewChanged(mapData.identity, mapData.view) && m_activeMapView != mapData.view) {
+            m_activeMapView = mapData.view;
+            m_mapActionSurface->InvalidatePresentation();
+        }
     }
 
     if (observations.markers && observations.markers->identity == m_activeMapIdentity) {
@@ -1523,7 +1534,7 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
     } else if (astrogateTransition == ExternalTravelTransition::Ended) {
         m_lastRemoteUnsettled = Clock::now();
         m_lastTravelTicks = m_lastRemoteUnsettled.time_since_epoch().count();
-        REX::INFO("StarfieldCruiseAdapter: operation={} observed Astrogate travel end; waiting for destination proof", operationId);
+        REX::INFO("StarfieldCruiseAdapter: operation={} observed Astrogate travel end; waiting for destination proof and cleanup grace", operationId);
     }
 
     if (navigation.phase != NavigationPhase::PendingRemoteArrival) {
@@ -1552,7 +1563,8 @@ void StarfieldCruiseAdapter::EvaluateRemoteArrival()
     const bool completedReplacementJump = completedAstrogateTravel || completedFtlReplacementJump;
     const bool completedStandingTravel = nativeShipboardRoute && m_remoteLoadingObserved;
     const bool completedPlayerTravel = m_playerJumpState.Completed() || completedReplacementJump || completedStandingTravel;
-    if (m_activeMapIdentity.IsValid() || m_loadingMenuOpen || !completedPlayerTravel || !flying || m_lastRemoteUnsettled == Clock::time_point {} || now - m_lastRemoteUnsettled < RemoteWorldSettleTime) {
+    const auto requiredSettleTime = completedAstrogateTravel ? AstrogateCleanupSettleTime : RemoteWorldSettleTime;
+    if (m_activeMapIdentity.IsValid() || m_loadingMenuOpen || !completedPlayerTravel || !flying || m_lastRemoteUnsettled == Clock::time_point {} || now - m_lastRemoteUnsettled < requiredSettleTime) {
         return;
     }
 
@@ -2027,6 +2039,7 @@ MapActionEnvironment StarfieldCruiseAdapter::ReadMapActionEnvironment()
         .cruiseControlBound = controlBound,
         .cruiseEngageAvailable = cruise.engageAvailable,
         .vanillaActionEnabled = vanillaActionEnabled,
+        .planetView = m_activeMapView == MapView::Planet,
         .remoteRoutingAvailable = m_remoteRoutingAvailable &&
             (openedContext.playerPiloting || (openedContext.CanStartCruise() && m_shipboardCruise.Available())),
         .inputDevice = m_presentedInputWasGamepad ? NavigationInputDevice::Gamepad : NavigationInputDevice::KeyboardMouse,
@@ -2531,7 +2544,7 @@ bool StarfieldCruiseAdapter::Commands::BeginRemoteRoute(const ::BeginRemoteRoute
         m_owner.m_astrogateTravel.BeginOperation(effect.operationId, m_owner.IsAstrogateAutopilotActive());
     }
     REX::INFO("StarfieldCruiseAdapter: beginning remote route operation={} source={}", effect.operationId, context.playerPiloting ? "pilot-HUD" : "shipboard-native");
-    if (m_owner.m_remoteRoute.Begin(effect, m_owner.m_activeMapIdentity)) {
+    if (m_owner.m_remoteRoute.Begin(effect, m_owner.m_activeMapIdentity, m_owner.m_activeMapView)) {
         return true;
     }
     m_owner.m_astrogateTravel.Reset();

@@ -5,11 +5,13 @@
 ### Added
 
 - Better Astrogate support
+- Kept the Cruise-bound map action available after opening a selected planet or moon's planet view.
 
 ### Fixed
 
 - Cancelled a pending post-jump Cruise before activation when remote travel enters ship combat.
 - Fixed Astrogate handoff stalling until the starmap was reopened by accepting its correlated travel end after exact destination-system, settled-flight, and Cruise-readiness proof.
+- Added an Astrogate-specific cleanup grace before Cruise activation so its final reload cannot race the Autopilot course request.
 
 ## 1.1 - 2026-08-20
 

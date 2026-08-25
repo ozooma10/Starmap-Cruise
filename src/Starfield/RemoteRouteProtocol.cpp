@@ -9,14 +9,23 @@ namespace
 
 void RemoteRouteProtocol::Begin(FormID destinationRoot, FormID preexistingEndpoint, std::int64_t nowMs)
 {
+    Begin(destinationRoot, preexistingEndpoint, MapView::System, nowMs);
+}
+
+void RemoteRouteProtocol::Begin(FormID destinationRoot, FormID preexistingEndpoint, MapView sourceView, std::int64_t nowMs)
+{
     Reset();
     if (destinationRoot == 0) {
         Fail("destination system root is unavailable");
         return;
     }
+    if (sourceView != MapView::System && sourceView != MapView::Planet) {
+        Fail("remote route source view is unavailable");
+        return;
+    }
     m_destinationRoot = destinationRoot;
     m_preexistingEndpoint = preexistingEndpoint;
-    StartStage(Phase::AwaitGalaxy, nowMs);
+    StartStage(sourceView == MapView::Planet ? Phase::AwaitSystem : Phase::AwaitGalaxy, nowMs);
 }
 
 RemoteRouteProtocol::Decision RemoteRouteProtocol::Tick(const TickInput& input, std::int64_t nowMs)
@@ -43,6 +52,17 @@ RemoteRouteProtocol::Decision RemoteRouteProtocol::Tick(const TickInput& input, 
     if (!input.mapReadable) {
         if (m_stageElapsedMs > StageTimeoutMs) {
             return Fail("live Starmap state was unavailable before the stage deadline");
+        }
+        return {};
+    }
+
+    if (m_phase == Phase::AwaitSystem) {
+        if (input.view == MapView::System) {
+            StartStage(Phase::AwaitGalaxy, nowMs);
+            return {.command = Command::DispatchBack};
+        }
+        if (m_stageElapsedMs > StageTimeoutMs) {
+            return Fail("stock Back did not leave planet view");
         }
         return {};
     }
