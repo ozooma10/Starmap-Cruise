@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Localized all three map action labels for Starfield's nine supported text languages, selected automatically from the game setting with English fallback. Translations are built into the DLL and language changes take effect after restarting Starfield.
+
 ## 1.2 - 2026-08-25
 
 ### Added

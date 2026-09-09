@@ -4,6 +4,7 @@ set_project("Starmap Cruise")
 set_version("1.2.0")
 set_license("GPL-3.0")
 set_languages("c++23")
+set_encodings("utf-8")
 set_warnings("allextra", "error")
 
 add_rules("mode.debug", "mode.releasedbg")
@@ -37,6 +38,7 @@ target("CruiseFromStarmapTests")
         "src/Selection/SelectionPolicy.cpp",
         "src/Presentation/ActionPolicy.cpp",
         "src/Presentation/ActionPresenter.cpp",
+        "src/Presentation/Localization.cpp",
         "src/Map/MapSessionState.cpp",
         "src/Application/CruiseRuntime.cpp",
         "src/Starfield/MapObservationInbox.cpp",

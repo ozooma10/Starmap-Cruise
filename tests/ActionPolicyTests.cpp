@@ -8,6 +8,8 @@
 
 namespace
 {
+    using CFS::Localization::TextId;
+
     void Require(bool condition, std::string_view message)
     {
         if (!condition)
@@ -75,7 +77,7 @@ namespace
 
         Require(!action.enabled, "disabled selection enabled the action");
 
-        Require(action.label.empty(), "disabled selection retained a label");
+        Require(action.labelId == TextId::None, "disabled selection retained a label");
 
         Require(!action.destination, "disabled selection retained a destination");
     }
@@ -91,7 +93,7 @@ namespace
 
         Require(!action.CanHandleInput(), "unbound Cruise control accepted input");
 
-        Require(action.label.empty(), "unbound Cruise control retained a label");
+        Require(action.labelId == TextId::None, "unbound Cruise control retained a label");
 
         Require(!action.destination, "unbound Cruise control retained an actionable target");
     }
@@ -104,9 +106,9 @@ namespace
 
         Require(action.CanHandleInput(), "ready target did not accept input");
 
-        Require(action.label == "SET CRUISE TARGET", "ready target produced the wrong tap label");
+        Require(action.labelId == TextId::SetCruiseTarget, "ready target produced the wrong tap label");
 
-        Require(action.holdLabel == "HOLD TO CRUISE", "ready target produced the wrong hold label");
+        Require(action.holdLabelId == TextId::HoldToCruise, "ready target produced the wrong hold label");
 
         Require(action.destination->targetId == 0x10, "ready action retained the wrong destination");
     }
@@ -122,7 +124,7 @@ namespace
 
         Require(action.CanHandleInput(), "active-Cruise tap was not actionable");
 
-        Require(action.holdLabel.empty(), "active-Cruise tap exposed a hold label");
+        Require(action.holdLabelId == TextId::None, "active-Cruise tap exposed a hold label");
     }
 
     void TestUnknownCruiseStateUsesTapOnly()
@@ -134,7 +136,7 @@ namespace
 
         Require(action.control == ::ActionControl::TapOnly, "unknown Cruise state exposed a hold action");
         Require(action.CanHandleInput(), "unknown Cruise state prevented safe marking");
-        Require(action.holdLabel.empty(), "unknown Cruise state exposed a hold label");
+        Require(action.holdLabelId == TextId::None, "unknown Cruise state exposed a hold label");
     }
 
     void TestCruiseCooldownUsesTapOnly()
@@ -148,7 +150,7 @@ namespace
 
         Require(action.CanHandleInput(), "Cruise cooldown prevented marking");
 
-        Require(action.holdLabel.empty(), "Cruise cooldown exposed a hold label");
+        Require(action.holdLabelId == TextId::None, "Cruise cooldown exposed a hold label");
     }
 
     void TestVanillaActionStateCanDisableInput()
@@ -186,7 +188,7 @@ namespace
 
         Require(action.control == ::ActionControl::TapOnly, "remote action exposed a hold control");
         Require(action.CanHandleInput(), "ready remote action rejected input");
-        Require(action.label == "JUMP THEN CRUISE", "remote action produced the wrong label");
+        Require(action.labelId == TextId::JumpThenCruise, "remote action produced the wrong label");
         Require(action.requiresTravel, "remote action lost its travel flag");
     }
 
@@ -214,7 +216,7 @@ namespace
 
         Require(!action.IsVisible(), "remote station rejection remained visible");
         Require(!action.CanHandleInput(), "remote station rejection accepted input");
-        Require(action.label.empty(), "remote station rejection retained a label");
+        Require(action.labelId == TextId::None, "remote station rejection retained a label");
     }
 
     void TestEveryDisabledReasonHidesControl()
@@ -236,7 +238,7 @@ namespace
             const auto action = ::EvaluateAction(DisabledSelection(reason), ReadyContext());
             Require(!action.IsVisible(), "disabled reason showed a control");
             Require(!action.CanHandleInput(), "disabled reason accepted input");
-            Require(action.label.empty(), "disabled reason retained a label");
+            Require(action.labelId == TextId::None, "disabled reason retained a label");
         }
     }
 

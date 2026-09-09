@@ -1,10 +1,10 @@
 #pragma once
 
 #include "Map/MapSessionState.h"
+#include "Presentation/Localization.h"
 #include "Selection/SelectionPolicy.h"
 
 #include <optional>
-#include <string>
 
 enum class ActionControl : std::uint8_t
 {
@@ -42,8 +42,8 @@ struct ActionDecision
 
     SelectionReason selectionReason {SelectionReason::InactiveContext};
 
-    std::string label;
-    std::string holdLabel;
+    CFS::Localization::TextId labelId {CFS::Localization::TextId::None};
+    CFS::Localization::TextId holdLabelId {CFS::Localization::TextId::None};
 
     std::optional<Destination> destination;
     bool requiresTravel {false};

@@ -3,6 +3,7 @@
 #include "Application/CruiseRuntime.h"
 #include "Domain/ExternalTravelLifecycle.h"
 #include "Domain/PlayerJumpState.h"
+#include "Presentation/Localization.h"
 #include "Starfield/HudObservationInbox.h"
 #include "Starfield/MapActionInputState.h"
 #include "Starfield/MapObservationInbox.h"
@@ -155,6 +156,7 @@ private:
     TravelObservationInbox m_travelObservations;
     std::optional<SelectionTrace> m_lastSelectionTrace;
     std::unique_ptr<MapActionSurface> m_mapActionSurface;
+    CFS::Localization::Language m_language {CFS::Localization::Language::English};
 
     std::int64_t m_mapMovieBornTicks {0};
     MapSessionIdentity m_activeMapIdentity;

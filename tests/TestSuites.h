@@ -7,6 +7,7 @@ void RunActionPolicyTests();
 void RunMapSessionStateTests();
 void RunCruiseRuntimeTests();
 void RunActionPresenterTests();
+void RunLocalizationTests();
 void RunMapObservationInboxTests();
 void RunHudObservationInboxTests();
 void RunTravelObservationInboxTests();

@@ -46,13 +46,13 @@ ActionDecision EvaluateAction(const SelectionDecision& selection, const ActionCo
         .control = SelectControl(selection, context),
         .enabled = true,
         .selectionReason = selection.reason,
-        .label = selection.requiresTravel ? "JUMP THEN CRUISE" : "SET CRUISE TARGET",
+        .labelId = selection.requiresTravel ? CFS::Localization::TextId::JumpThenCruise : CFS::Localization::TextId::SetCruiseTarget,
         .destination = selection.destination,
         .requiresTravel = selection.requiresTravel,
     };
 
     if (decision.control == ActionControl::TapAndHold)
-        decision.holdLabel = "HOLD TO CRUISE";
+        decision.holdLabelId = CFS::Localization::TextId::HoldToCruise;
 
     return decision;
 }

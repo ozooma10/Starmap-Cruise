@@ -21,6 +21,7 @@ namespace
         {"MapSessionState", &RunMapSessionStateTests},
         {"CruiseRuntime", &RunCruiseRuntimeTests},
         {"ActionPresenter", &RunActionPresenterTests},
+        {"Localization", &RunLocalizationTests},
         {"MapObservationInbox", &RunMapObservationInboxTests},
         {"HudObservationInbox", &RunHudObservationInboxTests},
         {"TravelObservationInbox", &RunTravelObservationInboxTests},
