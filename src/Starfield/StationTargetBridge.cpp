@@ -17,7 +17,6 @@ namespace
     constexpr std::size_t StarMapMenuActiveStateOffset = 0x1240;
     constexpr std::size_t SystemStateDisplayedSystemOffset = 0xA10;
     constexpr std::size_t SystemStateSelectedBodyOffset = 0xA1C;
-    constexpr std::size_t MaximumStationCellReferences = 4096;
 
     using Reference = RE::NiPointer<RE::TESObjectREFR>;
     using Cell = RE::NiPointer<RE::TESObjectCELL>;
@@ -45,24 +44,10 @@ namespace
             return std::nullopt;
         }
 
-        std::size_t expected = 0;
-        {
-            RE::BSAutoReadLock lock {cell->lock};
-            expected = cell->references.size();
-        }
-
-        if (expected > MaximumStationCellReferences) {
-            return std::nullopt;
-        }
-
         std::vector<Reference> references;
-        references.reserve(expected);
         {
             RE::BSAutoReadLock lock {cell->lock};
-            if (cell->references.size() != expected) {
-                return std::nullopt;
-            }
-
+            references.reserve(cell->references.size());
             for (const auto& reference : cell->references) {
                 if (reference) {
                     references.push_back(reference);

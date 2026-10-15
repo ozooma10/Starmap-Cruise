@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- Fixed OSF UI compatibility by chaining each UI update call through its own previous target.
+- Removed native function fingerprints and event-source identity checks that could reject other mods' hooks. Planetary identity hooks now preserve an existing call target.
+- Removed duplicate runtime and route checks and the arbitrary station-cell reference limit. Runtime/layout, instruction decoding, and travel-state safety checks remain.
+
 ## 1.2 - 2026-08-25
 
 ### Added

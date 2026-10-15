@@ -7,7 +7,6 @@
 #include "Starfield/UiPostAdvanceHook.h"
 
 #include "RE/Starfield.h"
-#include "REL/Pattern.h"
 #include "REX/REX.h"
 #include "SFSE/InputMap.h"
 #include "SFSE/SFSE.h"
@@ -48,8 +47,6 @@ namespace
     constexpr auto RemoteWorldSettleTime = std::chrono::milliseconds(2500);
     constexpr auto AstrogateCleanupSettleTime = std::chrono::seconds(4);
     constexpr auto RemoteCruiseExitTimeout = std::chrono::seconds(2);
-
-    constexpr auto GlobalEventGetterPattern = REL::Pattern<"48 83 EC 28 65 48 8B 04 25 58 00 00 00 BA B8 00">();
 
     constexpr std::uint32_t PlanetType = 2;
     constexpr std::uint32_t MoonType = 3;
@@ -158,17 +155,6 @@ namespace
 
         const auto& files = data->compiledFileCollection;
         return ContainsPlugin(files.files, name) || ContainsPlugin(files.smallFiles, name) || ContainsPlugin(files.mediumFiles, name);
-    }
-
-    template <class Event> RE::BSTEventSource<Event>* ProveEventSource()
-    {
-        const auto& binding = Event::EVENT_SOURCE_BINDING;
-        if (!GlobalEventGetterPattern.match(binding.GetGetterID().address())) {
-            return nullptr;
-        }
-
-        auto* source = binding.Get();
-        return binding.Matches(source) ? source : nullptr;
     }
 
     MapView ReadMapView(RE::Scaleform::GFx::Value& data)
@@ -905,7 +891,7 @@ bool StarfieldCruiseAdapter::Initialize()
     InitializeAstrogateTravelObserver();
     m_remoteRoutingAvailable = planetaryIdentityReady && routeReady && travelReady;
     if (!m_remoteRoutingAvailable) {
-        REX::WARN("StarfieldCruiseAdapter: remote planet/moon routing disabled because one or more native guards failed; same-system Cruise remains enabled");
+        REX::WARN("StarfieldCruiseAdapter: remote planet/moon routing unavailable; same-system Cruise remains enabled");
     }
     if (!shipboardCruiseReady) {
         REX::WARN("StarfieldCruiseAdapter: native shipboard Cruise unavailable; cockpit HUD behavior remains enabled");
@@ -920,15 +906,15 @@ bool StarfieldCruiseAdapter::Initialize()
 
 bool StarfieldCruiseAdapter::InitializeTravelObservers()
 {
-    auto* gravSource = ProveEventSource<RE::Spaceship::GravJumpEvent>();
-    auto* loadSource = ProveEventSource<RE::TESLoadGameEvent>();
+    auto* gravSource = RE::Spaceship::GravJumpEvent::GetEventSource();
+    auto* loadSource = RE::TESLoadGameEvent::GetEventSource();
     if (!gravSource || !loadSource) {
-        REX::ERROR("StarfieldCruiseAdapter: guarded GravJump/TESLoadGame sources unavailable; remote routing disabled");
+        REX::ERROR("StarfieldCruiseAdapter: GravJump/TESLoadGame sources unavailable; remote routing disabled");
         return false;
     }
     gravSource->RegisterSink(m_gravJumpSink.get());
     loadSource->RegisterSink(m_loadGameSink.get());
-    REX::INFO("StarfieldCruiseAdapter: guarded player GravJump and TESLoadGame observers enabled");
+    REX::INFO("StarfieldCruiseAdapter: player GravJump and TESLoadGame observers enabled");
     return true;
 }
 

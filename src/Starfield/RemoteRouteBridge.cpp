@@ -6,7 +6,6 @@
 #include "Starfield/StarfieldBodyResolutionSource.h"
 
 #include "RE/Starfield.h"
-#include "REL/Pattern.h"
 #include "REX/REX.h"
 
 #include <Windows.h>
@@ -26,13 +25,6 @@ namespace
 
     constexpr const char* MapMenuName = "GalaxyStarMapMenu";
     constexpr std::size_t MaxRoutePoints = 64;
-
-    constexpr auto SelectGalaxySystemPattern = REL::Pattern<
-        "48 89 5C 24 18 48 89 74 24 20 55 48 8D 6C 24 A9">();
-    constexpr auto CloseGalaxyQuickSelectPattern = REL::Pattern<
-        "48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57">();
-    constexpr auto GlobalEventGetterPattern = REL::Pattern<
-        "48 83 EC 28 65 48 8B 04 25 58 00 00 00 BA B8 00">();
 
     bool IsForegroundProcess()
     {
@@ -88,31 +80,18 @@ public:
             return true;
         }
 
-        const auto& executeSourceBinding = RE::StarMapMenu_ExecuteRoute::EVENT_SOURCE_BINDING;
-        const auto selectAddress = RE::ID::StarMap::SelectGalaxySystem.address();
-        const auto closeAddress = RE::ID::StarMap::CloseGalaxyQuickSelect.address();
-        const auto getterAddress = executeSourceBinding.GetGetterID().address();
-        const auto menuVtable = RE::StarMap::StarMapMenu::PRIMARY_VTABLE.address();
-        const auto galaxyVtable = RE::StarMap::GalaxyState::PRIMARY_VTABLE.address();
-        if (!SelectGalaxySystemPattern.match(selectAddress) ||
-            !CloseGalaxyQuickSelectPattern.match(closeAddress) ||
-            !GlobalEventGetterPattern.match(getterAddress)) {
-            REX::ERROR("RemoteRouteBridge: 1.16.244 binding fingerprint failed; remote routing disabled");
+        auto* source = RE::StarMapMenu_ExecuteRoute::GetEventSource();
+        if (!source) {
+            REX::ERROR("RemoteRouteBridge: native Execute event source unavailable; remote routing disabled");
             return false;
         }
 
-        auto* source = executeSourceBinding.Get();
-        if (!executeSourceBinding.Matches(source)) {
-            REX::ERROR("RemoteRouteBridge: native Execute event source proof failed; remote routing disabled");
-            return false;
-        }
-
-        expectedMenuVtable = menuVtable;
-        expectedGalaxyVtable = galaxyVtable;
+        expectedMenuVtable = RE::StarMap::StarMapMenu::PRIMARY_VTABLE.address();
+        expectedGalaxyVtable = RE::StarMap::GalaxyState::PRIMARY_VTABLE.address();
         bodies = std::addressof(bodySource);
         source->RegisterSink(this);
         available = true;
-        REX::INFO("RemoteRouteBridge: guarded Back -> system Set Course -> Execute bindings enabled");
+        REX::INFO("RemoteRouteBridge: Back -> system Set Course -> Execute bindings enabled");
         return true;
     }
 
@@ -405,12 +384,7 @@ public:
     RouteSnapshot ReadRouteOnce(const RE::StarMap::StarMapMenu* menu) const
     {
         RouteSnapshot result;
-        std::uintptr_t menuVtable = 0;
-        if (!menu ||
-            !ReadScalar(reinterpret_cast<std::uintptr_t>(menu), menuVtable) ||
-            menuVtable != expectedMenuVtable) {
-            return result;
-        }
+        // Both callers have already resolved and checked this live menu.
         const auto snapshot = menu->GetRoute()->GetSnapshot(MaxRoutePoints);
         if (!snapshot) {
             return result;

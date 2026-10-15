@@ -2,7 +2,6 @@
 
 #include "RE/Starfield.h"
 #include "REL/ASM.h"
-#include "REL/Pattern.h"
 #include "REX/REX.h"
 #include "SFSE/SFSE.h"
 
@@ -16,19 +15,11 @@
 
 namespace
 {
-    constexpr REL::ID ResolveBodyNumericSystemInnerId {124766};
     constexpr REL::ID LookupSatelliteRowId {124799};
 
     constexpr std::size_t NumericOuterInnerCallOffset = 0x6F;
     constexpr std::size_t MaxAncestryDepth = 8;
     constexpr FormID MissingFormId = std::numeric_limits<FormID>::max();
-
-    constexpr auto AcquiringWrapperPattern = REL::Pattern<"48 89 5C 24 10 48 89 6C 24 18 48 89 74 24 20 57 41 56 41 57 48 83 EC 30">();
-    constexpr auto CurrentBodyPattern = REL::Pattern<"40 53 48 83 EC 40 48 8B D9 48 8B 0D 10 0B 76 04">();
-    constexpr auto NumericInnerPattern = REL::Pattern<"48 89 5C 24 10 48 89 74 24 18 57 48 83 EC 40 48">();
-    constexpr auto NumericInnerCallPattern = REL::Pattern<"E8 DC FE FF FF">();
-    constexpr auto SatelliteLookupPattern = REL::Pattern<"48 83 EC 48 44 0F B7 05 F4 86 EA 03 48 8B 09 49 C1 E0 20 48 81 C1 68 02">();
-    constexpr auto ResolveBodyBySystemOrdinalPattern = REL::Pattern<"48 89 5C 24 10 48 89 6C 24 18 56 57 41 55 41 56">();
 
     using ResolveNumericInnerFunction = FormID* (*)(FormID*, std::uintptr_t*, FormID);
     using LookupSatelliteFunction = const void* (*)(std::uintptr_t*, FormID);
@@ -183,47 +174,22 @@ bool StarfieldBodyResolutionSource::InitializeRemotePlanning()
         return true;
     }
 
-    const auto currentAddress = RE::ID::BGSPlanet::GetCurrentBodyFormID.address();
-    const auto systemAddress = RE::ID::BSGalaxy::GetSystemFormID.address();
     const auto numericAddress = RE::ID::BSGalaxy::GetNumericSystemID.address();
-    const auto innerAddress = ResolveBodyNumericSystemInnerId.address();
-    const auto reverseAddress = RE::ID::BSGalaxy::GetBodyFormID.address();
     const auto satelliteAddress = LookupSatelliteRowId.address();
     const auto callSite = numericAddress + NumericOuterInnerCallOffset;
 
-    const bool currentMatches = CurrentBodyPattern.match(currentAddress);
-    const bool systemMatches = AcquiringWrapperPattern.match(systemAddress);
-    const bool numericMatches = AcquiringWrapperPattern.match(numericAddress);
-    const bool innerMatches = NumericInnerPattern.match(innerAddress);
-    const bool reverseMatches = ResolveBodyBySystemOrdinalPattern.match(reverseAddress);
-    const bool satelliteMatches = SatelliteLookupPattern.match(satelliteAddress);
-    const bool callMatches = NumericInnerCallPattern.match(callSite);
-    const bool callTargetMatches = callMatches && REL::ASM::CALL5::TARGET(callSite) == innerAddress;
-
-    if (!currentMatches || !systemMatches || !numericMatches || !innerMatches || !reverseMatches || !satelliteMatches || !callMatches || !callTargetMatches) {
-        REX::ERROR(
-            "StarfieldBodyResolutionSource: 1.16.244 planetary identity fingerprint failed "
-            "(current={} system={} numeric={} inner={} reverse={} satellite={} call={} callTarget={}); "
-            "remote routing disabled",
-            currentMatches,
-            systemMatches,
-            numericMatches,
-            innerMatches,
-            reverseMatches,
-            satelliteMatches,
-            callMatches,
-            callTargetMatches
-        );
+    if (*reinterpret_cast<const std::uint8_t*>(callSite) != 0xE8) {
+        REX::ERROR("StarfieldBodyResolutionSource: expected a five-byte numeric-system call; remote routing disabled");
         return false;
     }
 
-    g_originalResolveNumericInner = reinterpret_cast<ResolveNumericInnerFunction>(innerAddress);
+    // Preserve an existing hook instead of requiring the vanilla call target.
+    g_originalResolveNumericInner = reinterpret_cast<ResolveNumericInnerFunction>(REL::ASM::CALL5::TARGET(callSite));
     g_lookupSatellite = reinterpret_cast<LookupSatelliteFunction>(satelliteAddress);
 
-    const auto replaced = REL::GetTrampoline().write_call<5>(callSite, &ResolveNumericInnerThunk);
-    g_originalResolveNumericInner = reinterpret_cast<ResolveNumericInnerFunction>(replaced);
+    REL::GetTrampoline().write_call<5>(callSite, &ResolveNumericInnerThunk);
     g_remotePlanningAvailable.store(true, std::memory_order_release);
-    REX::INFO("StarfieldBodyResolutionSource: guarded planet/moon identity bindings enabled (STDT=124608 numeric=124767 Satellite=124799 parent=124772)");
+    REX::INFO("StarfieldBodyResolutionSource: planet/moon identity bindings enabled");
     return true;
 }
 

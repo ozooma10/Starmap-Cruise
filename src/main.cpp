@@ -5,12 +5,10 @@
 namespace
 {
     constexpr REL::Version kSupportedRuntime{ 1, 16, 244, 0 };
-    std::atomic<bool> g_runtimeSupported{ false };
 
     void OnMessage(SFSE::MessagingInterface::Message* a_message)
     {
-        if (a_message->type != SFSE::MessagingInterface::kPostDataLoad ||
-            !g_runtimeSupported.load(std::memory_order_acquire))
+        if (a_message->type != SFSE::MessagingInterface::kPostDataLoad)
             return;
         if (!StarfieldCruiseAdapter::GetSingleton().Initialize()) {
             REX::ERROR("Cruise From Starmap initialization failed; plugin remains disabled");
@@ -30,7 +28,6 @@ SFSE_PLUGIN_LOAD(const SFSE::LoadInterface* a_sfse)
             runtime.string(), kSupportedRuntime.string());
         return false;
     }
-    g_runtimeSupported.store(true, std::memory_order_release);
     const auto messaging = SFSE::GetMessagingInterface();
     if (!messaging || !messaging->RegisterListener(OnMessage)) {
         REX::ERROR("SFSE MessagingInterface unavailable; plugin disabled");
