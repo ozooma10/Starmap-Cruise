@@ -544,7 +544,7 @@ public:
 
     void Present(const ActionDecision& decision)
     {
-        m_presenter.Present(decision, *this);
+        m_presenter.Present(decision, m_owner.m_language, *this);
         RefreshBindingGlyph(decision.control);
     }
 
@@ -586,10 +586,10 @@ public:
         }
         m_generation = generation;
 
-        if (presentation.control == ActionControl::TapOnly && !m_tapReady && !BuildButton(root, buttonBar, vanillaData, false)) {
+        if (presentation.control == ActionControl::TapOnly && !m_tapReady && !BuildButton(root, buttonBar, vanillaData, presentation, false)) {
             return false;
         }
-        if (presentation.control == ActionControl::TapAndHold && !m_comboReady && !BuildButton(root, buttonBar, vanillaData, true)) {
+        if (presentation.control == ActionControl::TapAndHold && !m_comboReady && !BuildButton(root, buttonBar, vanillaData, presentation, true)) {
             return false;
         }
 
@@ -648,7 +648,7 @@ private:
         return m_owner.IsCurrentMapMovie(root, identity);
     }
 
-    bool BuildButton(RE::Scaleform::GFx::ASMovieRootBase* root, Value& buttonBar, Value& vanillaData, bool combo)
+    bool BuildButton(RE::Scaleform::GFx::ASMovieRootBase* root, Value& buttonBar, Value& vanillaData, const MapActionPresentation& presentation, bool combo)
     {
         Value tapCallback;
         root->CreateFunction(&tapCallback, &m_tapHandler);
@@ -660,7 +660,7 @@ private:
 
         Value keyboardData;
         Value gamepadData;
-        if (!BuildData(root, vanillaData, tapCallback, holdCallback, CruiseUserEvent, combo, keyboardData) || !BuildData(root, vanillaData, tapCallback, holdCallback, GamepadCruiseUserEvent, combo, gamepadData)) {
+        if (!BuildData(root, vanillaData, tapCallback, holdCallback, CruiseUserEvent, presentation, combo, keyboardData) || !BuildData(root, vanillaData, tapCallback, holdCallback, GamepadCruiseUserEvent, presentation, combo, gamepadData)) {
             return false;
         }
 
@@ -693,7 +693,7 @@ private:
         return true;
     }
 
-    bool BuildData(RE::Scaleform::GFx::ASMovieRootBase* root, Value& vanillaData, Value& tapCallback, Value& holdCallback, const char* userEvent, bool combo, Value& data)
+    bool BuildData(RE::Scaleform::GFx::ASMovieRootBase* root, Value& vanillaData, Value& tapCallback, Value& holdCallback, const char* userEvent, const MapActionPresentation& presentation, bool combo, Value& data)
     {
         Value eventName;
         root->CreateString(&eventName, userEvent);
@@ -722,10 +722,10 @@ private:
         }
 
         Value label;
-        root->CreateString(&label, "SET CRUISE TARGET");
+        root->CreateString(&label, presentation.label.c_str());
         if (combo) {
             Value holdLabel;
-            root->CreateString(&holdLabel, "HOLD TO CRUISE");
+            root->CreateString(&holdLabel, presentation.holdLabel.c_str());
             Value args[3] {label, holdLabel, events};
             root->CreateObject(&data, "Shared.Components.ButtonControls.ButtonData.ReleaseHoldComboButtonData", args, 3);
         } else {
@@ -869,6 +869,13 @@ bool StarfieldCruiseAdapter::Initialize()
     }
 
     m_initializationAttempted = true;
+
+    // Initialize runs at kPostDataLoad, after the game has resolved its text language.
+    const auto settings = RE::INISettingCollection::GetSingleton();
+    const auto languageSetting = settings ? settings->GetSetting("sLanguage:General") : nullptr;
+    m_language = CFS::Localization::ParseLanguage(languageSetting ? languageSetting->GetValue(std::string_view {}) : std::string_view {});
+    REX::INFO("StarfieldCruiseAdapter: interface language={}", CFS::Localization::LanguageCode(m_language));
+
     if (!CFS::UiPostAdvanceHook::Install(&OnUiSafeFrame)) {
         REX::ERROR("StarfieldCruiseAdapter: Scaleform post-advance pump unavailable; plugin disabled");
         return false;

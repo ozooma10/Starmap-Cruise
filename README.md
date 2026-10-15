@@ -14,6 +14,12 @@ When roaming your ship, same-system planets, moons, and stations retain the same
 
 The hold option is shown only when Cruise can be engaged. During a cooldown, while Cruise state is unavailable, or while Cruise is already active, the safe tap action may be the only option. A remote route started while roaming uses vanilla's menu travel/loading flow; it does not add a walkable grav-jump duration.
 
+## Language support
+
+The map action labels automatically follow Starfield's text language: English, French, German, Spanish (Spain), Italian, Polish, Portuguese (Brazil), Japanese, or Simplified Chinese. An unavailable or unsupported language falls back to English. Restart Starfield after changing its text language.
+
+Translations are built into the DLL; no language files or additional settings are needed. Translation corrections require rebuilding the plugin. Diagnostic logs remain in English.
+
 ## Compatibility
 
 - Astrogate: When `Astrogate.esm` is loaded, observe Astrogate's `RI_AutopilotState` and correlate one complete activity cycle with the pending remote route. Cruise handoff requires settled flight and the selected destination system/body.

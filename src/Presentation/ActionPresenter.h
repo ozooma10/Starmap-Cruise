@@ -34,7 +34,7 @@ struct PresentationResult
 class ActionPresenter
 {
 public:
-    PresentationResult Present(const ActionDecision& decision, MapActionView& view);
+    PresentationResult Present(const ActionDecision& decision, CFS::Localization::Language language, MapActionView& view);
 
     // Call when the Scaleform movie or input-device presentation changes.
     void Invalidate();

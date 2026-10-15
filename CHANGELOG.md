@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Localized all three map action labels for Starfield's nine supported text languages, selected automatically from the game setting with English fallback. Translations are built into the DLL and language changes take effect after restarting Starfield.
+
 ### Fixed
 
 - Fixed OSF UI compatibility by chaining each UI update call through its own previous target.

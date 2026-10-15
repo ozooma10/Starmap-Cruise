@@ -4,20 +4,22 @@
 
 namespace
 {
-    MapActionPresentation BuildPresentation(const ActionDecision& decision)
+    MapActionPresentation BuildPresentation(const ActionDecision& decision, CFS::Localization::Language language)
     {
+        const bool visible = decision.IsVisible();
+        const bool showHold = visible && decision.enabled && decision.control == ActionControl::TapAndHold;
         return {
             .control = decision.control,
             .enabled = decision.enabled,
-            .label = decision.label,
-            .holdLabel = decision.holdLabel,
+            .label = std::string {visible ? CFS::Localization::Translate(decision.labelId, language) : std::string_view {}},
+            .holdLabel = std::string {showHold ? CFS::Localization::Translate(decision.holdLabelId, language) : std::string_view {}},
         };
     }
 }
 
-PresentationResult ActionPresenter::Present(const ActionDecision& decision, MapActionView& view)
+PresentationResult ActionPresenter::Present(const ActionDecision& decision, CFS::Localization::Language language, MapActionView& view)
 {
-    auto presentation = BuildPresentation(decision);
+    auto presentation = BuildPresentation(decision, language);
 
     if (m_presented && *m_presented == presentation) {
         return {
