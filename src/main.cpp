@@ -4,8 +4,6 @@
 
 namespace
 {
-    constexpr REL::Version kSupportedRuntime{ 1, 16, 244, 0 };
-
     void OnMessage(SFSE::MessagingInterface::Message* a_message)
     {
         if (a_message->type != SFSE::MessagingInterface::kPostDataLoad)
@@ -20,14 +18,9 @@ SFSE_PLUGIN_LOAD(const SFSE::LoadInterface* a_sfse)
 {
     SFSE::Init(a_sfse, { .trampoline = true, .trampolineSize = 512 });
     const auto runtime = a_sfse->RuntimeVersion();
-    REX::INFO("{} v{} loading; supported runtime {}, current runtime {}",
+    REX::INFO("{} v{} loading; current runtime {}",
         SFSE::GetPluginName(), SFSE::GetPluginVersion().string(),
-        kSupportedRuntime.string(), runtime.string());
-    if (runtime != kSupportedRuntime) {
-        REX::ERROR("Unsupported Starfield runtime {}; this build requires {}. Plugin disabled before installing hooks.",
-            runtime.string(), kSupportedRuntime.string());
-        return false;
-    }
+        runtime.string());
     const auto messaging = SFSE::GetMessagingInterface();
     if (!messaging || !messaging->RegisterListener(OnMessage)) {
         REX::ERROR("SFSE MessagingInterface unavailable; plugin disabled");

@@ -12,7 +12,6 @@ namespace
 {
     constexpr const char* MapMenuName = "GalaxyStarMapMenu";
     constexpr FormID IsStarstationKeywordId = 0x003402A3;
-    constexpr REL::ID StarMapMenuPrimaryVtable {446845};
     constexpr REL::ID SystemStatePrimaryVtable {447180};
     constexpr std::size_t StarMapMenuActiveStateOffset = 0x1240;
     constexpr std::size_t SystemStateDisplayedSystemOffset = 0xA10;
@@ -78,15 +77,6 @@ namespace
         }
 
         const auto menuAddress = reinterpret_cast<std::uintptr_t>(menu.get());
-        std::uintptr_t actualMenuVtable = 0;
-        std::memcpy(&actualMenuVtable,
-            reinterpret_cast<const void*>(menuAddress),
-            sizeof(actualMenuVtable));
-        static REL::Relocation<std::uintptr_t> expectedMenuVtable {StarMapMenuPrimaryVtable};
-        if (actualMenuVtable != expectedMenuVtable.address()) {
-            return std::nullopt;
-        }
-
         void* activeState = nullptr;
         std::memcpy(&activeState, reinterpret_cast<const void*>(menuAddress + StarMapMenuActiveStateOffset), sizeof(activeState));
         if (!activeState) {

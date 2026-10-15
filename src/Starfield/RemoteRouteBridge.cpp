@@ -86,7 +86,6 @@ public:
             return false;
         }
 
-        expectedMenuVtable = RE::StarMap::StarMapMenu::PRIMARY_VTABLE.address();
         expectedGalaxyVtable = RE::StarMap::GalaxyState::PRIMARY_VTABLE.address();
         bodies = std::addressof(bodySource);
         source->RegisterSink(this);
@@ -345,12 +344,6 @@ public:
         }
 
         live.menu = reinterpret_cast<RE::StarMap::StarMapMenu*>(menu.get());
-        std::uintptr_t menuVtable = 0;
-        if (!ReadScalar(reinterpret_cast<std::uintptr_t>(live.menu), menuVtable) ||
-            menuVtable != expectedMenuVtable) {
-            detail = "StarMapMenu primary vtable/layout guard failed";
-            return false;
-        }
         live.movieRoot = menu->uiMovie->asMovieRoot.get();
         const char* path = menu->GetRootPath();
         if (!live.movieRoot->GetVariable(&live.menuRoot, path && *path ? path : "root") ||
@@ -384,7 +377,7 @@ public:
     RouteSnapshot ReadRouteOnce(const RE::StarMap::StarMapMenu* menu) const
     {
         RouteSnapshot result;
-        // Both callers have already resolved and checked this live menu.
+        // Both callers have already resolved this live menu.
         const auto snapshot = menu->GetRoute()->GetSnapshot(MaxRoutePoints);
         if (!snapshot) {
             return result;
@@ -428,7 +421,6 @@ public:
 
     bool available {false};
     const StarfieldBodyResolutionSource* bodies {nullptr};
-    std::uintptr_t expectedMenuVtable {0};
     std::uintptr_t expectedGalaxyVtable {0};
     std::atomic<std::uint64_t> executeEvents {0};
 
