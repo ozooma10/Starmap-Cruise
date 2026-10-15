@@ -16,26 +16,27 @@ namespace CFS::Localization
         };
 
         // Keep whole phrases so each language can use its own word order.
-        // Cruise terminology follows the game's Interface/Translate_<code>.txt.
+        // Cruise/jump terms and hold wording follow $CRUISE, $JUMP and $SET COURSE HOLD
+        // in the game's Interface/Translate_<code>.txt. These are whole action labels.
         constexpr std::array Catalogs {
             Catalog {Language::English, "en",
                 "SET CRUISE TARGET", "HOLD TO CRUISE", "JUMP THEN CRUISE"},
             Catalog {Language::French, "fr",
-                "DÉFINIR LA CIBLE DE CROISIÈRE", "MAINTENIR POUR LA CROISIÈRE", "SAUT PUIS CROISIÈRE"},
+                "DÉFINIR LA CIBLE DE CROISIÈRE", "MAINTENIR POUR ACTIVER LA CROISIÈRE", "SAUT PUIS CROISIÈRE"},
             Catalog {Language::German, "de",
-                "ZIEL FÜR REISEMODUS SETZEN", "HALTEN FÜR REISEMODUS", "SPRUNG, DANN REISEMODUS"},
+                "ZIEL FÜR REISEMODUS FESTLEGEN", "FÜR REISEMODUS GEDRÜCKT HALTEN", "SPRUNG, DANN REISEMODUS"},
             Catalog {Language::Spanish, "es",
-                "FIJAR DESTINO DE CRUCERO", "MANTENER PARA CRUCERO", "SALTO Y LUEGO CRUCERO"},
+                "FIJAR DESTINO DE CRUCERO", "MANTÉN PULSADO PARA ACTIVAR EL CRUCERO", "SALTO Y LUEGO CRUCERO"},
             Catalog {Language::Italian, "it",
-                "IMPOSTA META DI CROCIERA", "TIENI PREMUTO PER LA CROCIERA", "SALTO, POI CROCIERA"},
+                "IMPOSTA META DI CROCIERA", "TIENI PREMUTO PER AVVIARE LA CROCIERA", "SALTO, POI CROCIERA"},
             Catalog {Language::Polish, "pl",
                 "USTAW CEL REJSU", "PRZYTRZYMAJ, ABY ROZPOCZĄĆ REJS", "SKOK, POTEM REJS"},
             Catalog {Language::PortugueseBrazil, "ptbr",
-                "DEFINIR DESTINO DE CRUZEIRO", "SEGURE PARA INICIAR CRUZEIRO", "DOBRA, DEPOIS CRUZEIRO"},
+                "DEFINIR DESTINO DE CRUZEIRO", "SEGURE PARA INICIAR O CRUZEIRO", "DOBRA, DEPOIS CRUZEIRO"},
             Catalog {Language::Japanese, "ja",
-                "クルーズ目標を設定", "長押しでクルーズ", "ジャンプ後にクルーズ"},
+                "クルーズの目的地を設定", "長押しでクルーズを開始", "ジャンプ後にクルーズ"},
             Catalog {Language::SimplifiedChinese, "zhhans",
-                "设置巡航目标", "长按开始巡航", "跃迁后巡航"},
+                "设置巡航目标", "按住以启动巡航", "跃迁后巡航"},
         };
 
         constexpr bool IsSpace(char value) noexcept

@@ -206,8 +206,8 @@ namespace
 
         const auto first = presenter.Present(decision, Language::German, view);
         Require(first.changed && first.applied, "first localized presentation was not applied");
-        Require(view.attempts.front().label == "ZIEL FÜR REISEMODUS SETZEN", "first tap label was not localized");
-        Require(view.attempts.front().holdLabel == "HALTEN FÜR REISEMODUS", "first hold label was not localized");
+        Require(view.attempts.front().label == "ZIEL FÜR REISEMODUS FESTLEGEN", "first tap label was not localized");
+        Require(view.attempts.front().holdLabel == "FÜR REISEMODUS GEDRÜCKT HALTEN", "first hold label was not localized");
 
         const auto repeated = presenter.Present(decision, Language::German, view);
         Require(!repeated.changed && repeated.applied, "localized presentation was not cached");
@@ -216,8 +216,8 @@ namespace
         view.applySucceeds = false;
         const auto failed = presenter.Present(decision, Language::Japanese, view);
         Require(failed.changed && !failed.applied, "failed language change was reported as applied");
-        Require(view.attempts.back().label == "クルーズ目標を設定", "language change lost the Japanese tap text");
-        Require(view.attempts.back().holdLabel == "長押しでクルーズ", "language change lost the Japanese hold text");
+        Require(view.attempts.back().label == "クルーズの目的地を設定", "language change lost the Japanese tap text");
+        Require(view.attempts.back().holdLabel == "長押しでクルーズを開始", "language change lost the Japanese hold text");
 
         view.applySucceeds = true;
         const auto oldLanguage = presenter.Present(decision, Language::German, view);
